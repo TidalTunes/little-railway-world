@@ -1,0 +1,302 @@
+{
+  "seed": "railway-showcase-16",
+  "bounds": {
+    "width": 320,
+    "depth": 250
+  },
+  "density": 1,
+  "minTurnRadius": 9,
+  "cities": [
+    {
+      "id": "mosswick",
+      "name": "Mosswick",
+      "x": -110,
+      "z": -75,
+      "level": 1,
+      "ownerId": "teal"
+    },
+    {
+      "id": "oakstead",
+      "name": "Oakstead",
+      "x": -40,
+      "z": -80,
+      "level": 2,
+      "ownerId": "gold"
+    },
+    {
+      "id": "copperton",
+      "name": "Copperton",
+      "x": 35,
+      "z": -72,
+      "level": 3,
+      "ownerId": "coral"
+    },
+    {
+      "id": "blueport",
+      "name": "Blueport",
+      "x": 110,
+      "z": -65,
+      "level": 4,
+      "ownerId": "blue"
+    },
+    {
+      "id": "saltmere",
+      "name": "Saltmere",
+      "x": 110,
+      "z": -15,
+      "level": 6,
+      "ownerId": "teal"
+    },
+    {
+      "id": "suncrest",
+      "name": "Suncrest",
+      "x": 35,
+      "z": -20,
+      "level": 10,
+      "ownerId": "gold"
+    },
+    {
+      "id": "redhaven",
+      "name": "Redhaven",
+      "x": -40,
+      "z": -28,
+      "level": 8,
+      "ownerId": "coral"
+    },
+    {
+      "id": "westfold",
+      "name": "Westfold",
+      "x": -110,
+      "z": -22,
+      "level": 5,
+      "ownerId": "blue"
+    },
+    {
+      "id": "pinecross",
+      "name": "Pinecross",
+      "x": -105,
+      "z": 30,
+      "level": 7,
+      "ownerId": "teal"
+    },
+    {
+      "id": "goldhaven",
+      "name": "Goldhaven",
+      "x": -35,
+      "z": 24,
+      "level": 9,
+      "ownerId": "gold"
+    },
+    {
+      "id": "rosebridge",
+      "name": "Rosebridge",
+      "x": 40,
+      "z": 35,
+      "level": 10,
+      "ownerId": "coral"
+    },
+    {
+      "id": "azure",
+      "name": "Azure",
+      "x": 112,
+      "z": 38,
+      "level": 6,
+      "ownerId": "blue"
+    },
+    {
+      "id": "reedham",
+      "name": "Reedham",
+      "x": 105,
+      "z": 88,
+      "level": 2,
+      "ownerId": "teal"
+    },
+    {
+      "id": "amberfield",
+      "name": "Amberfield",
+      "x": 36,
+      "z": 88,
+      "level": 4,
+      "ownerId": "gold"
+    },
+    {
+      "id": "terracotta",
+      "name": "Terracotta",
+      "x": -34,
+      "z": 84,
+      "level": 9,
+      "ownerId": "coral"
+    },
+    {
+      "id": "slatewick",
+      "name": "Slatewick",
+      "x": -105,
+      "z": 86,
+      "level": 3,
+      "ownerId": "blue"
+    }
+  ],
+  "river": {
+    "width": 6,
+    "points": [
+      [
+        -210,
+        2
+      ],
+      [
+        -110,
+        3
+      ],
+      [
+        -45,
+        0
+      ],
+      [
+        20,
+        6
+      ],
+      [
+        85,
+        1
+      ],
+      [
+        200,
+        -3
+      ]
+    ]
+  },
+  "mountains": [
+    {
+      "id": "copper-pass",
+      "x": -75,
+      "z": -77,
+      "radius": 12,
+      "height": 18
+    },
+    {
+      "id": "northern-crown",
+      "x": -69,
+      "z": -100,
+      "radius": 11,
+      "height": 16
+    },
+    {
+      "id": "northern-shoulder",
+      "x": -94,
+      "z": -102,
+      "radius": 9,
+      "height": 12
+    },
+    {
+      "id": "southern-pass",
+      "x": 0,
+      "z": 86,
+      "radius": 11,
+      "height": 17
+    },
+    {
+      "id": "eastern-range",
+      "x": 72,
+      "z": -44,
+      "radius": 11,
+      "height": 14
+    }
+  ],
+  "connections": [
+    {
+      "id": "mosswick-oakstead",
+      "from": "mosswick",
+      "to": "oakstead"
+    },
+    {
+      "id": "oakstead-copperton",
+      "from": "oakstead",
+      "to": "copperton"
+    },
+    {
+      "id": "copperton-blueport",
+      "from": "copperton",
+      "to": "blueport"
+    },
+    {
+      "id": "blueport-saltmere",
+      "from": "blueport",
+      "to": "saltmere"
+    },
+    {
+      "id": "saltmere-suncrest",
+      "from": "saltmere",
+      "to": "suncrest"
+    },
+    {
+      "id": "suncrest-redhaven",
+      "from": "suncrest",
+      "to": "redhaven"
+    },
+    {
+      "id": "redhaven-westfold",
+      "from": "redhaven",
+      "to": "westfold"
+    },
+    {
+      "id": "westfold-mosswick",
+      "from": "westfold",
+      "to": "mosswick"
+    },
+    {
+      "id": "pinecross-goldhaven",
+      "from": "pinecross",
+      "to": "goldhaven"
+    },
+    {
+      "id": "goldhaven-rosebridge",
+      "from": "goldhaven",
+      "to": "rosebridge"
+    },
+    {
+      "id": "rosebridge-azure",
+      "from": "rosebridge",
+      "to": "azure"
+    },
+    {
+      "id": "azure-reedham",
+      "from": "azure",
+      "to": "reedham"
+    },
+    {
+      "id": "reedham-amberfield",
+      "from": "reedham",
+      "to": "amberfield"
+    },
+    {
+      "id": "amberfield-terracotta",
+      "from": "amberfield",
+      "to": "terracotta"
+    },
+    {
+      "id": "terracotta-slatewick",
+      "from": "terracotta",
+      "to": "slatewick"
+    },
+    {
+      "id": "slatewick-pinecross",
+      "from": "slatewick",
+      "to": "pinecross"
+    },
+    {
+      "id": "westfold-pinecross",
+      "from": "westfold",
+      "to": "pinecross"
+    },
+    {
+      "id": "redhaven-goldhaven",
+      "from": "redhaven",
+      "to": "goldhaven"
+    },
+    {
+      "id": "suncrest-rosebridge",
+      "from": "suncrest",
+      "to": "rosebridge"
+    }
+  ]
+}
