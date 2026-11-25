@@ -1,3 +1,4 @@
+import {rangeMeshData,rangeSurfaceHeight,rangeSnowHeight,rangeFootprintDistance} from './mountain-ranges.js';
 /** Shared deterministic mountain surface. This module has no renderer dependency. */
 const cache = new WeakMap();
 const TAU = Math.PI * 2;
@@ -29,6 +30,7 @@ function signature(mountain) {
  * CSG. Positions are world coordinates and all footprints remain within radius.
  */
 export function mountainMeshData(mountain) {
+  if(mountain.range)return rangeMeshData(mountain,mountain.renderBounds);
   const key = signature(mountain);
   const previous = cache.get(mountain);
   if (previous?.key === key) return previous.data;
@@ -93,6 +95,7 @@ export function mountainMeshData(mountain) {
 
 /** Exact height of the rendered triangular surface, including every ridge. */
 export function mountainSurfaceHeight(mountain, x, z) {
+  if(mountain.range)return rangeSurfaceHeight(mountain,x,z);
   if (Math.hypot(x - mountain.x, z - mountain.z) > mountain.radius + 1e-7) return 0;
   mountainMeshData(mountain);
   for (const { p, q, r, minX, maxX, minZ, maxZ, denominator } of cache.get(mountain).lookup) {
@@ -107,7 +110,13 @@ export function mountainSurfaceHeight(mountain, x, z) {
 
 /** A repeatable scalloped snowline crosses faces instead of drawing a flat cap. */
 export function mountainSnowHeight(mountain, x, z) {
+  if(mountain.range)return rangeSnowHeight(mountain,x,z);
   const { phase } = mountainMeshData(mountain);
   const angle = Math.atan2(z - mountain.z, x - mountain.x);
   return mountain.height * (.64 + .055 * Math.sin(angle * 3 + phase) + .028 * Math.sin(angle * 7 - phase));
+}
+
+/** Negative inside the complete mountain footprint, positive outside. */
+export function mountainFootprintDistance(mountain,x,z){
+  return mountain.range?rangeFootprintDistance(mountain,x,z):Math.hypot(x-mountain.x,z-mountain.z)-mountain.radius;
 }

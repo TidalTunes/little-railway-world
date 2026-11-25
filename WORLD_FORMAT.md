@@ -4,9 +4,9 @@ The planner accepts a JSON-compatible authoring configuration and produces a det
 
 ## Load and inspect
 
-The browser opens the authored [sixteen-city showcase](public/worlds/showcase.json) by default, also available as `?layout=showcase`. Its two connected railway loops span city development levels 1–10. `?layout=classic` uses the earlier generated layout; `?seed=42&cities=12` selects that generator with twelve cities. Seeds can be numbers or strings, and the `cities` parameter accepts 3–20. `?layout=crossroads` loads the authored [seven-city crossing preset](public/worlds/crossroads.json). `?layout=stress&cities=256&trains=2048` opens the large regional network in the 2D overview. Stress city counts must be multiples of 8 from 8–4096; train requests accept 0–32768 in the stress factory. These are input limits, not performance guarantees at every size.
+The browser opens the fifty-city Europe preset by default, also available as `?layout=europe`. It uses a north-up overview, geographic source coordinates, and continuous mountain ranges. `src/europe-world.js` exports `createEuropeWorld({seed, trainCount})` and `projectEurope(longitude, latitude)`. The authored [sixteen-city showcase](public/worlds/showcase.json) remains available as `?layout=showcase`; its two connected railway loops span city development levels 1–10. `?layout=classic` uses the earlier generated layout; `?seed=42&cities=12` selects that generator with twelve cities. Seeds can be numbers or strings, and the `cities` parameter accepts 3–20. `?layout=crossroads` loads the authored [seven-city crossing preset](public/worlds/crossroads.json). `?layout=stress&cities=256&trains=2048` opens the large regional network in the 2D overview. Stress city counts must be multiples of 8 from 8–4096; train requests accept 0–32768 in the stress factory. These are input limits, not performance guarantees at every size.
 
-The pure `generateWorld()` function and `railway.loadWorld({})` still default to the classic eight-city generator. Loading the browser showcase is a separate startup choice. A seed override changes generated variation while retaining an authored preset's city coordinates and levels.
+The pure `generateWorld()` function and `railway.loadWorld({})` still default to the classic eight-city generator. Loading the browser preset is a separate startup choice. A seed override changes generated variation while retaining an authored preset's city coordinates and levels.
 
 With the canvas focused, **R** changes the seed while preserving the current authoring settings. **Space** pauses motion. The browser console exposes:
 
@@ -35,12 +35,13 @@ Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, ra
 | `bounds` | `{ width, depth }`. Default `{ width: 130, depth: 95 }`; minimum 35 × 30. |
 | `cityCount` | Generated city count, rounded and clamped to 3–20. Default 8. Ignored with explicit `cities`. |
 | `players` | Nonempty array of `{ id?, name?, color? }`. IDs are unique. Colors accept OKLCH `{ l, c, h }` or `#RRGGBB`; omitted players use the four default railway palettes. |
-| `cities` | At least two `{ id?, name?, x, z, ownerId?, level?, radius? }` objects. IDs are unique; omitted IDs become `city-1`, etc. Authored radius defaults to the development level's footprint. |
+| `cities` | At least two `{ id?, name?, x, z, ownerId?, level?, radius?, railHeading?, throatLength? }` objects. IDs are unique; omitted IDs become `city-1`, etc. Authored radius defaults to the development level's footprint. |
 | `connections` | Complete array of `{ id?, from, to, points?, ownerId?, color? }` connections between different city IDs. Operator defaults to the origin city's owner. |
 | `trainOwners` | Optional object mapping train IDs to player IDs. Overrides default ownership for those trains. |
 | `traffic` | Optional `{ trainCount?, circuits? }`. `trainCount` requests a fleet, subject to safe track capacity. Explicit circuits are `{ id?, segments: [{ lineId, direction: 1 or -1 }] }`; consecutive directed lines must join with matching positions and tangents. |
 | `minTurnRadius` | Positive finite minimum radius for railway bends. Default `8`. |
 | `throatLength` | Nonnegative requested length of each straight city approach. Default `4`; shortened for closely spaced cities. |
+| `rivers` | Optional array of `{ id?, name?, points, width?, smooth? }`. Overrides `river`; `[]` means no rivers. `smooth:false` preserves source polylines. |
 | `river` | `{ points, width? }`. Width defaults to `5.4`; points need at least two distinct positions. |
 | `mountains` | Array of `{ id?, x, z, radius, height }`. Positive radius and height bound an irregular faceted mountain. Use `[]` for none. |
 | `biomes` | Optional `{ sites?, ocean? }` configuration, described below. |
@@ -51,7 +52,7 @@ Connection `points` are intermediate waypoints in travel order; city centres are
 
 Without explicit connections, the planner joins cities in array order into a ring. Two cities receive one connection; eight cities also receive two cross-valley connections. Explicit graphs may be disconnected. Duplicate graph edges and unrelated coincident routes are rejected.
 
-Explicit city coordinates disable automatic mountains unless `mountains` is supplied. Generated mountain candidates that do not fit safely are omitted. Authored mountains must fit inside the island and remain clear of the river and its banks.
+Explicit city coordinates disable automatic mountains unless `mountains` is supplied. Generated mountain candidates that do not fit safely are omitted. Authored individual mountains must fit inside the island and remain clear of rivers and their banks. Geographic ranges instead use land-clipped polygonal footprints and can contain river valleys.
 
 River waypoints are rounded independently of railway alignments. Place the first and last river points beyond the island edge for a river that enters and leaves the island. The renderer clips water and banks to the outline.
 
@@ -71,11 +72,11 @@ const detail = generateWorldRegion(network, { x: 190, z: -750, size: 192 });
 
 `generateWorld(input)` still generates full detail by default for compatibility. Network mode retains the exact railway alignments, structures, shared sections, transitions, crossings, stations, biome polygons and city metadata, while leaving `placements` and `cityStreets` empty. `detailMode` records the selected mode, `density` retains the normalized scenery density, and `traffic` retains the requested fleet configuration. City development counts in a coarse network are zero until its independent detail packet is inspected. The network is structured-clone-safe; spatial acceleration structures stay in private weak caches and are not serialized.
 
-`generateWorldRegion(network, { x, z, size: 192 })` snaps query coordinates to a fixed grid cell using `Math.floor`, including negative coordinates. Its packet contains `key`, `bounds`, expanded `cullBounds`, `cities`, `stations`, `mountains`, full intersecting `lines`, `placements`, `cityStreets`, and `farmland`. Bounds use `{ minX, minZ, maxX, maxZ }`. Cities, stations and mountains belong to the cell containing their centres; their complete geometry may extend outside that cell. Ordinary scenery reserves its entire footprint and a spacing margin inside its cell. Neighboring city lots remain reserved even when their detailed buildings have not been generated.
+`generateWorldRegion(network, { x, z, size: 192 })` snaps query coordinates to a fixed grid cell using `Math.floor`, including negative coordinates. Its packet contains `key`, `bounds`, expanded `cullBounds`, `cities`, `stations`, `mountains`, full intersecting `lines`, `placements`, `cityStreets`, and `farmland`. Bounds use `{ minX, minZ, maxX, maxZ }`. Cities, stations and individual mountains belong to the cell containing their centres; their complete geometry may extend outside that cell. Continuous mountain ranges are sliced across every intersecting cell, with matching shared edges. Ordinary scenery reserves its entire footprint and a spacing margin inside its cell. Neighboring city lots remain reserved even when their detailed buildings have not been generated.
 
 Regional generation does not mutate the network or retain an unbounded detail cache. Re-requesting a cell reproduces its detail independently of exploration order. Per-cell scenery seeds and per-city building seeds are separate; neighboring packets have unique asset IDs. Regional detail is deterministic but is not promised to match the legacy full-world scenery pass object for object, because each mode uses different scenery partitioning.
 
-The browser generates networks and compiles regional geometry in a worker. The renderer clips railway drawing ranges and terrain to cell bounds, builds each centre-owned mountain and settlement once, transfers plain geometry buffers, and retains a bounded local GPU cache. The whole-world overview stays in 2D; detailed 3D content is loaded only around the camera. Global train simulation continues while a distant region has no detailed scenery.
+The browser generates networks and compiles regional geometry in a worker. The renderer clips railway drawing ranges and terrain to cell bounds, builds each centre-owned mountain and settlement once, slices continuous ranges, transfers plain geometry buffers, and retains a bounded local GPU cache. The worker also clips and triangulates the global 2D terrain into transferable buffers before the browser adds city and rail overlays. The whole-world overview stays in 2D; detailed 3D content is loaded only around the camera. Global train simulation continues while a distant region has no detailed scenery.
 
 The planner uses conservative bounding-volume trees for railway segments and dynamic spatial grids for object footprints. These discard impossible collision candidates before exact segment, rectangle and circle checks. They do not reduce clearance distances or relax the accepted geometry. Compiled network coordinates should be treated as immutable; authoring changes should generate a replacement network so cached indexes cannot become stale.
 
@@ -101,7 +102,7 @@ The far map uses one owner-colored city glyph at its centre. Its size increases 
 
 ## Track geometry and city connections
 
-Each city derives one `railAxis` from its incident connection directions. Tracks use one of two opposing ports on that axis, producing straight shared approaches through the station. Curves join the approaches and any intermediate waypoints using exact straight segments and circular arcs. Adjacent pieces have matching tangents, and every arc respects `minTurnRadius`.
+Each city derives one `railAxis` from its incident connection directions. Optional `railHeading` supplies a finite angle in radians from +x toward +z; optional city `throatLength` overrides the global approach length, still shortened for nearby cities. Tracks use one of two opposing ports on that axis, producing straight shared approaches through the station. Curves join the approaches and any intermediate waypoints using exact straight segments and circular arcs. Adjacent pieces have matching tangents, and every arc respects `minTurnRadius`.
 
 Waypoints constrain the route, but do not override its turning radius or island clearance. If no accepted alignment fits without a railway loop or an excessively long turn, generation throws an error. Arbitrary coordinates are therefore subject to geometric feasibility.
 
@@ -148,7 +149,7 @@ railway.loadWorld({
 
 Sites require finite coordinates inside the island, distinct positions, and unique IDs. Their types can be `farmland`, `forest`, `plains`, or `desert`. Multiple sites may share a type, and an explicit site list may omit types. Mountains still come from `mountains`.
 
-Omitting `biomes.ocean` requests an automatic bay. Setting it to `false` disables the bay. An explicit `{ points: [[x, z], ...] }` polygon authors the ocean area and must meet the coast. Both automatic and explicit bays protect complete city neighborhoods, mountain footprints, stations, and railway corridors, including a `0.9`-unit inland beach band. Unsafe explicit oceans are rejected; an automatic bay is omitted if no safe candidate fits. Ocean crossings do not generate bridges in this version; automatic bridges apply to the river.
+Omitting `biomes.ocean` requests an automatic bay. Setting it to `false` disables the bay. An explicit `{ points: [[x, z], ...] }` polygon authors the ocean area and must meet the coast. Both automatic and explicit bays protect complete city neighborhoods, mountain footprints, stations, and railway corridors, including a `0.9`-unit inland beach band. Unsafe explicit oceans are rejected; an automatic bay is omitted if no safe candidate fits. For these protected island presets, railways stay on dry land. Geographic presets instead supply `biomes.geography: {ocean, landInterior, oceanShore, lakes?, lakeShore?}` as MultiPolygons. This preserves the authored archipelago and clips scenery to it. Rail crossings of geographic water automatically receive bridges; route authoring must choose plausible crossings. Geographic masks should be prepared at consistent precision, with shores buffered offline.
 
 The generated `world.biomes` contains:
 
@@ -165,6 +166,10 @@ Farms fit farmland; dense groves fit forest, with sparser trees in plains. Cacti
 
 Agricultural districts use a shared orientation and grouped crop palette. Each generated `farm` placement can contain multiple neighboring `parcels`, with local `{ x, z, width, depth, variant }` coordinates inside its `width` and `depth`. Its circular `radius` reserves the complete field group, including dividing paths. `districtId` identifies the coherent agricultural group. The renderer also supports the original single-patch farm shape when parcels are omitted.
 
+## Continuous geographic ranges
+
+`compileMountainRange()` in `src/mountain-ranges.js` accepts a polygon, optional holes, and ridgelines: `{id, polygon: [[x,z],...], ridges: [{points:[[x,z,height],...], width}], cellSize, snowLine?, seed?}`. It returns a JSON-compatible mountain record accepted in `mountains`. The same global triangulated heightfield drives tunnel cover, the rendered rock, and snow. `rangeMeshData(mountain, bounds)` slices that existing surface into closed local volumes; adjacent regions retain matching facet heights. Range footprint checks use the polygon rather than its broad-phase circle.
+
 ## Mountains, bridges, and clearances
 
 `src/mountain-shape.js` produces a deterministic irregular heightfield with ridges, secondary peaks, and an offset summit, bounded by the authored radius and height. `mountainHeight` evaluates the same triangulated surface used for rendering. Snow follows the excavated rock faces, so it cannot cap a tunnel opening.
@@ -175,11 +180,11 @@ Structure `start` and `end` values are distances along a line. `entry` and `exit
 
 Scenery uses conservative discs that include roofs and canopies. Placement checks allowed biomes, the island edge, tracks, river banks, mountain footprints, stations, and previously accepted assets. Stations also use oriented rectangle checks against railway and water corridors. Crowded optional scenery and stations are skipped.
 
-Railway corridors require a `1.35`-unit island-edge margin. Shared city approaches are the supported exception to coincident route rejection; unrelated overlapping track sections remain invalid. Fixed railway elevation and one river are current format limits.
+Railway corridors require a `1.35`-unit island-edge margin. Shared city approaches are the supported exception to coincident route rejection; unrelated overlapping track sections remain invalid. Railway elevation is fixed; rivers and inland lakes may be supplied independently.
 
 ## Scene plan and traffic
 
-The compiled plan has `version: 2`. In addition to the geometry and network fields above, it contains `players`, `trainOwners`, `cities`, `cityStreets`, `mountains`, `river`, `bounds`, `outline`, `seed`, and `minTurnRadius`, plus:
+The compiled plan has `version: 2`. In addition to the geometry and network fields above, it contains `players`, `trainOwners`, `cities`, `cityStreets`, `mountains`, `river` (the first-river compatibility alias), optional `rivers`, `bounds`, `outline`, `seed`, and `minTurnRadius`, plus:
 
 - `stations`: positions, rotations, `ownerId`, served city and line IDs, distance along the line, and platform dimensions. The planner first tries the city centre beside its straight rail axis, then offset candidates if needed.
 - `placements`: asset `kind`, position, conservative `radius`, `scale`, `rotation`, `variant`, and `biome`. City buildings also include `cityId` and `ownerId`.

@@ -8,7 +8,8 @@ export function ambience(parent,world){
   const root=group(parent),random=seededRandom(`${world.seed}-life`),dummy=new THREE.Object3D();
   const ripples=new THREE.InstancedMesh(new THREE.BoxGeometry(1,.015,.055),M.foam,64);
   ripples.instanceMatrix.setUsage(THREE.DynamicDrawUsage);ripples.frustumCulled=false;root.add(ripples);
-  const phases=Array.from({length:64},()=>({s:random()*world.river.length,offset:(random()-.5)*Math.max(0,world.river.width-1.3),length:.3+random()*.7}));
+  const phases=Array.from({length:world.river.length>0?64:0},()=>({s:random()*world.river.length,offset:(random()-.5)*Math.max(0,world.river.width-1.3),length:.3+random()*.7}));
+  ripples.count=phases.length;
   const boat=group(root);
   ico(boat,0,.14,0,.44,.24,1.08,'roofDark');
   box(boat,0,.24,0,.68,.12,1.55,'trim');
@@ -19,7 +20,7 @@ export function ambience(parent,world){
   consolidate(boat);
   // Stay within the island even for authored rivers with long off-map endpoints.
   const navigable=[];
-  for(let s=0;s<=world.river.length;s+=.5){const p=sampleLine(world.river,s);if(inWorld(world,p.x,p.z,2.5))navigable.push(s);}
+  if(world.river.length>0)for(let s=0;s<=world.river.length;s+=.5){const p=sampleLine(world.river,s);if(inWorld(world,p.x,p.z,2.5))navigable.push(s);}
   const boatStart=navigable[0]??0,boatEnd=navigable.at(-1)??0;
 
   const oceanLife=group(root);
@@ -71,9 +72,12 @@ export function ambience(parent,world){
       dummy.scale.set(inWorld(world,x,z,.65)?phase.length*Math.min(1,world.river.width):0,1,Math.min(1,world.river.width/.15));dummy.updateMatrix();ripples.setMatrixAt(i,dummy.matrix);
     });ripples.instanceMatrix.needsUpdate=true;
     const fraction=.5-Math.cos(time*.025)*.46;
-    const p=sampleLine(world.river,boatStart+(boatEnd-boatStart)*fraction);
-    boat.position.set(p.x,world.river.y+.035,p.z);boat.rotation.y=p.angle+(Math.sin(time*.025)<0?Math.PI:0);
-    boat.visible=world.river.width>=1.6&&inWorld(world,p.x,p.z,2.2);
+    boat.visible=false;
+    if(world.river.length>0){
+      const p=sampleLine(world.river,boatStart+(boatEnd-boatStart)*fraction);
+      boat.position.set(p.x,world.river.y+.035,p.z);boat.rotation.y=p.angle+(Math.sin(time*.025)<0?Math.PI:0);
+      boat.visible=world.river.width>=1.6&&inWorld(world,p.x,p.z,2.2);
+    }
     if(sailboat){sailboat.position.y=world.river.y+.035+Math.sin(time*.8)*.025;sailboat.rotation.z=Math.sin(time*.7)*.025;}
     balloon.position.y=by+Math.sin(time*.35)*.3;balloon.rotation.y=Math.sin(time*.07)*.12;
     birds.forEach(({g,left,right},i)=>{

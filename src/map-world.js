@@ -1,10 +1,9 @@
 import * as THREE from 'three';
-import clipping from 'polygon-clipping';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { C } from './palette.js';
 import { sampleLine } from './world-model.js';
 import { playerColors } from './player-palette.js';
-import { mountainMeshData } from './mountain-shape.js';
+import {prepareMapTerrain} from './map-terrain.js';
 
 const BIOME_COLORS = {farmland:'farmland',forest:'forestFloor',plains:'grass',
   desert:'desert',ocean:'ocean',mountain:'mountainFloor'};
@@ -17,17 +16,6 @@ const PALETTE = {
   ink:C.window.clone().lerp(C.rail,.18), paper:C.trim.clone(),
 };
 
-function ringForRiver(points,width){
-  const left=[],right=[];
-  points.forEach((p,i)=>{
-    const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)];
-    const length=Math.hypot(b.x-a.x,b.z-a.z)||1;
-    const nx=(b.z-a.z)/length*width/2,nz=-(b.x-a.x)/length*width/2;
-    left.push([p.x+nx,p.z+nz]);right.push([p.x-nx,p.z-nz]);
-  });
-  const ring=left.concat(right.reverse());return [...ring,ring[0]];
-}
-
 function shapeGeometry(rings){
   const shape=new THREE.Shape(rings[0].map(([x,z])=>new THREE.Vector2(x,-z)));
   rings.slice(1).forEach(ring=>shape.holes.push(new THREE.Path(ring.map(([x,z])=>new THREE.Vector2(x,-z)))));
@@ -39,26 +27,6 @@ function pillGeometry(width,length){
   s.moveTo(-r,-end);s.lineTo(-r,end);s.absarc(0,end,r,Math.PI,0,true);
   s.lineTo(r,-end);s.absarc(0,-end,r,0,-Math.PI,true);s.closePath();
   const geometry=new THREE.ShapeGeometry(s,2);geometry.rotateX(-Math.PI/2);return geometry;
-}
-
-function mountainContours(mountain,fraction){
-  const {vertices,surfaceTriangles}=mountainMeshData(mountain),height=mountain.height*fraction;
-  const polygons=[];
-  for(const triangle of surfaceTriangles){
-    const points=triangle.map(index=>vertices[index]),ring=[];
-    for(let i=0;i<3;i++){
-      const a=points[i],b=points[(i+1)%3];
-      if(a.y>=height)ring.push([a.x,a.z]);
-      if((a.y>=height)!==(b.y>=height)){
-        const t=(height-a.y)/(b.y-a.y);ring.push([a.x+(b.x-a.x)*t,a.z+(b.z-a.z)*t]);
-      }
-    }
-    if(ring.length>=3){
-      const snapped=ring.map(([x,z])=>[Math.round(x*1e6)/1e6,Math.round(z*1e6)/1e6]);
-      polygons.push([[...snapped,snapped[0]]]);
-    }
-  }
-  return polygons.length?clipping.union(...polygons):[];
 }
 
 // One symbol per settlement: a house, a civic hall, or a stepped tower.
@@ -144,22 +112,21 @@ export function buildMapWorld(parent,world){
     geometry.setAttribute('routeOffset',new THREE.Float32BufferAttribute(offsets,3));add(geometry,color);
   };
 
-  const island=[[world.outline]],riverRing=ringForRiver(world.river.points,world.river.width);
-  const bankRing=ringForRiver(world.river.points,world.river.width+1.6);
-  const river=clipping.intersection(island,[[riverRing]]),ocean=world.biomes?.ocean??[];
-  const water=ocean.length?clipping.union(river,ocean):river;
-  const riverBank=clipping.difference(clipping.intersection(island,[[bankRing]]),water);
-  const shores=world.biomes?.oceanShore?.length?clipping.union(riverBank,world.biomes.oceanShore):riverBank;
-  const land=clipping.difference(island,water,shores);
-  polygons(land,0,'grass');polygons(shores,.003,'sand');
-  for(const biome of world.biomes?.regions??[]){
-    if(biome.type!=='ocean')polygons(clipping.intersection(biome.polygons,land),.004,BIOME_COLORS[biome.type]??'grass');
-  }
-  polygons(river,.006,'waterLight');polygons(ocean,.007,'ocean');
-  for(const mountain of world.mountains){
-    [.12,.51].forEach((fraction,i)=>polygons(
-      clipping.intersection(mountainContours(mountain,fraction),land),.020+i*.003,`contour${i}`));
-    if(mountain.height>8)polygons(clipping.intersection(mountainContours(mountain,.84),land),.033,'snow');
+  const terrain=world.mapTerrain??prepareMapTerrain(world);
+  if(terrain.meshes){
+    for(const {color,position}of terrain.meshes){
+      const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(position,3));
+      batches.set(color,[geometry]);
+    }
+  }else{
+    const {land,shores,river,ocean,biomes,mountains}=terrain;
+    polygons(land,0,'grass');polygons(shores,.003,'sand');
+    for(const biome of biomes)polygons(biome.polygons,.004,BIOME_COLORS[biome.type]??'grass');
+    polygons(river,.006,'waterLight');polygons(ocean,.007,'ocean');
+    for(const contours of mountains){
+      [contours.low,contours.high].forEach((contour,i)=>polygons(contour,.020+i*.003,`contour${i}`));
+      polygons(contours.snow,.033,'snow');
+    }
   }
 
   for(const line of world.lines){

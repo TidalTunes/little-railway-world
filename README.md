@@ -1,12 +1,14 @@
 # Little Railway World
 
-[Open the world](https://tidaltunes.github.io/little-railway-world/) · [256 cities / 2,048 trains](https://tidaltunes.github.io/little-railway-world/?layout=stress&cities=256&trains=2048) · [Classic layout](https://tidaltunes.github.io/little-railway-world/?layout=classic) · [Explore Crossroads](https://tidaltunes.github.io/little-railway-world/?layout=crossroads)
+[Explore Europe](https://tidaltunes.github.io/little-railway-world/) · [256 cities / 2,048 trains](https://tidaltunes.github.io/little-railway-world/?layout=stress&cities=256&trains=2048) · [Classic layout](https://tidaltunes.github.io/little-railway-world/?layout=classic) · [Explore Crossroads](https://tidaltunes.github.io/little-railway-world/?layout=crossroads)
 
 A text-free isometric railway simulation built with Three.js. Compact towns, simple low-poly silhouettes, and colorful trains stay readable from a wide view. Broad farmland, forest, plains, desert, ocean, and mountain regions give the miniature a sense of geography. Crop rows, cacti, station passengers, boats, birds, and a balloon reward a closer look.
 
 Zoom between three views: a flat network map from far away, the isometric miniature at the middle distance, and an overhead close view. The map keeps broad terrain, railways, moving trains, and one city symbol per settlement. Click or tap a train to move closer and follow its journey. Both representations show the same running simulation.
 
-The default showcase has sixteen cities, nineteen railway links, and development levels from 1 to 10. Villages grow into districts with apartments, civic buildings, plazas, and towers, arranged beside connected streets. Cities and trains use their owner's color family. A train keeps its ownership as it travels between cities.
+The default Europe map contains fifty major European cities, selected from the UN World Urbanization Prospects 2025 harmonized urban-centre ranking within the mapped extent. It stretches from Iceland to western Russia and from Scandinavia to northern Africa. Real coastlines, rivers, and lakes come from Natural Earth; broad biome regions and continuous mountain ranges are stylized to fit the miniature. City development reflects relative population; the four ownership colors are arbitrary. Rail corridors follow the geography schematically, with bridges at water crossings and excavated mountain tunnels. The [city source notes](data/europe-cities-sources.md) explain the ranking and exclusions.
+
+The earlier sixteen-city showcase remains available at `?layout=showcase`, with nineteen railway links and development levels from 1 to 10. Villages grow into districts with apartments, civic buildings, plazas, and towers, arranged beside connected streets. Cities and trains use their owner's color family. A train keeps its ownership as it travels between cities.
 
 The continental stress preset opens as a map with 256 cities, 287 links, and 2,048 moving trains. `?layout=stress&cities=512&trains=4096` doubles it. City counts are multiples of eight. Zoom in or press F to follow a train: local detailed scenery is generated in a worker, prefetched around the camera, and retained in a bounded GPU cache. The complete fleet keeps moving in every view.
 
@@ -58,6 +60,9 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 
 | Module | Responsibility |
 | --- | --- |
+| `src/europe-world.js` / `src/europe-ranges.js` | Geographic Europe preset, source city coordinates, railway corridors, and continuous mountain ranges. |
+| `src/hydrology.js` | Multiple river widths, lake masks, banks, and shared water geometry. |
+| `src/mountain-ranges.js` | Polygonal ridge terrain, exact surface sampling, and matching regional slices. |
 | `src/world-model.js` | Deterministic layout, shared city approaches, transitions, infrastructure, stations, scenery reservations, and validation. |
 | `src/development.js` / `src/player-palette.js` | Player color normalization, city development rules, and shared owner palettes. |
 | `src/alignments.js` | Exact straight and circular-arc tracks with continuous tangents and a minimum turning radius. |

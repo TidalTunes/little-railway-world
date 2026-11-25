@@ -63,7 +63,8 @@ function fitWorld(){
   const radius=Math.hypot(width,depth),height=Math.max(0,...model.mountains.map(m=>m.height));
   view.setScale(Math.max(1,radius/410));
   controls.target.set((Math.max(...xs)+Math.min(...xs))/2,1.3,(Math.max(...zs)+Math.min(...zs))/2);
-  navigation.position.copy(controls.target).addScaledVector(cameraDirection,radius*1.5+height);
+  const direction=model.camera?.northUp?new THREE.Vector3(0,125,180).normalize():cameraDirection;
+  navigation.position.copy(controls.target).addScaledVector(direction,radius*1.5+height);
   navigation.zoom=1;navigation.far=Math.max(500,radius*5+height*3);controls.update();
   ground.position.x=controls.target.x;ground.position.z=controls.target.z;ground.scale.setScalar(Math.max(1,radius/500));
   const inverse=navigation.quaternion.clone().invert();
@@ -218,11 +219,16 @@ window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),generateWorld,validateWorld,createStressWorld,
 });
-const parameters=new URLSearchParams(location.search),layout=parameters.get('layout')??(parameters.has('cities')?'classic':'showcase');
+const parameters=new URLSearchParams(location.search),layout=parameters.get('layout')??(parameters.has('cities')?'classic':'europe');
 try{
   let input;
   if(layout==='stress')input=createStressWorld({cities:parameters.has('cities')?Number(parameters.get('cities')):256,
     trains:parameters.has('trains')?Number(parameters.get('trains')):2048,seed:parameters.get('seed')??'continental-railway'});
+  else if(layout==='europe'){
+    const {createEuropeWorld}=await import('./europe-world.js');
+    input=createEuropeWorld({...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
+      ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})});
+  }
   else if(['crossroads','showcase'].includes(layout)){
     const response=await fetch(new URL(`./worlds/${layout}.json`,location.href));
     if(!response.ok)throw new Error('Could not load the authored world');input=await response.json();

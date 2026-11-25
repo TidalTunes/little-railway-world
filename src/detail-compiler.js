@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import clipping from 'polygon-clipping';
+import clipping from './polygon-ops.js';
 import { buildWorld } from './world.js';
 import { buildTerrain } from './geography.js';
 import { consolidate } from './geometry.js';

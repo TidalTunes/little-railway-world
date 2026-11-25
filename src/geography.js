@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import clipping from 'polygon-clipping';
+import clipping from './polygon-ops.js';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { M } from './palette.js';
 import { biomeDistance } from './biomes.js';
+import {hydrologyFor,riverBankDistance} from './hydrology.js';
 import { box, beam, mesh, group, v, solidRibbon } from './geometry.js';
 import { sampleLine, distanceToLine, CLEARANCES } from './world-model.js';
 import { mountainMeshData, mountainSnowHeight } from './mountain-shape.js';
@@ -10,16 +11,6 @@ import { mountainMeshData, mountainSnowHeight } from './mountain-shape.js';
 const TUNNEL_RADIUS = 1.08;
 const TUNNEL_SPRING = 1.80;
 const BASE = -3.4;
-
-function ribbonRing(points, width) {
-  const left=[], right=[];
-  points.forEach((p,i)=>{
-    const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)];
-    const n=v(b.z-a.z,0,a.x-b.x).normalize().multiplyScalar(width/2);
-    left.push([p.x+n.x,p.z+n.z]);right.push([p.x-n.x,p.z-n.z]);
-  });
-  const ring=left.concat(right.reverse());return [...ring,ring[0]];
-}
 
 function polygonShape(rings) {
   const shape=new THREE.Shape(rings[0].map(([x,z])=>new THREE.Vector2(x,-z)));
@@ -34,15 +25,6 @@ function surface(parent,multi,y,material,depth=0) {
     geometry.rotateX(-Math.PI/2);
     mesh(parent,geometry,material,0,y-depth,0);
   }
-}
-
-function distanceToRiver(points,x,z){
-  let best=Infinity;
-  for(let i=1;i<points.length;i++){
-    const a=points[i-1],b=points[i],dx=b.x-a.x,dz=b.z-a.z;
-    const t=THREE.MathUtils.clamp(((x-a.x)*dx+(z-a.z)*dz)/(dx*dx+dz*dz||1),0,1);
-    best=Math.min(best,Math.hypot(x-a.x-t*dx,z-a.z-t*dz));
-  }return best;
 }
 
 function clippedEdge(a,b,bounds){
@@ -60,11 +42,9 @@ function clippedEdge(a,b,bounds){
 export function buildTerrain(parent,world){
   const island=[world.outline],islandMulti=[island];
   const waterY=world.river.points[0]?.y??-1.2;
-  const waterRing=ribbonRing(world.river.points,world.river.width);
-  const bankRing=ribbonRing(world.river.points,world.river.width+1.6);
-  const riverWater=clipping.intersection(island,[waterRing]);
-  const riverBanks=clipping.intersection(island,clipping.difference([bankRing],[waterRing]));
+  const {water:riverWater,banks:riverBanks}=hydrologyFor(world);
   const ocean=world.biomes?.ocean??[],oceanShore=world.biomes?.oceanShore??[];
+  const hasWaterBiome=(world.terrainSource??world).biomes?.regions.some(region=>region.type==='ocean');
   const water=ocean.length?clipping.union(riverWater,ocean):riverWater;
   const bankUnion=oceanShore.length?clipping.union(riverBanks,oceanShore):riverBanks;
   const banks=clipping.difference(bankUnion,water);
@@ -84,8 +64,8 @@ export function buildTerrain(parent,world){
     const pos=geometry.attributes.position;
     for(let i=0;i<pos.count;i++){
       const x=pos.getX(i),z=pos.getZ(i);
-      const riverSlope=(distanceToRiver(world.river.points,x,z)-world.river.width/2)/.8;
-      const oceanSlope=ocean.length?-biomeDistance(world.terrainSource??world,'ocean',x,z)/(world.biomes.shoreWidth??.9):Infinity;
+      const riverSlope=riverBankDistance(world,x,z)/.8;
+      const oceanSlope=hasWaterBiome?-biomeDistance(world.terrainSource??world,'ocean',x,z)/(world.biomes.shoreWidth??.9):Infinity;
       pos.setY(i,waterY+THREE.MathUtils.clamp(Math.min(riverSlope,oceanSlope),0,1)*(-waterY)+.015);
     }
     geometry.computeVertexNormals();mesh(parent,geometry,'sand');
@@ -105,7 +85,7 @@ export function buildTerrain(parent,world){
     const count=Math.ceil(Math.hypot(b[0]-a[0],b[1]-a[1])/.45);
     for(let j=0;j<count;j++){
       const t=(j+.5)/count,x=THREE.MathUtils.lerp(a[0],b[0],t),z=THREE.MathUtils.lerp(a[1],b[1],t);
-      if(distanceToRiver(world.river.points,x,z)>world.river.width/2-.15)continue;
+      if(riverBankDistance(world,x,z)>-.15)continue;
       // River spillways stop where the river has already joined the ocean.
       if(ocean.length&&biomeDistance(world.terrainSource??world,'ocean',x,z)>-.3)continue;
       const out=v(b[1]-a[1],0,a[0]-b[0]).normalize().multiplyScalar(.06);
@@ -163,11 +143,27 @@ export function createMountainGeometry(mountain,lines){
   const geometry=new THREE.BufferGeometry();
   geometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices.flatMap(p=>[p.x,p.y,p.z]),3));
   geometry.setIndex(triangles.flat());geometry.computeVertexNormals();
+  if(!triangles.length)return geometry;
+  function intersectsSlice(line,start,end){
+    const bounds=mountain.renderBounds;if(!bounds||!line.points||!line.distances)return true;
+    // Includes the wider cutting lip plus the maximum sampled-arc chord error.
+    // Retain full loft sampling for intersecting cuts so adjacent cells use
+    // precisely the same excavation surface, including on curved railway arcs.
+    const margin=2;
+    for(let i=1;i<line.points.length;i++){
+      if(line.distances[i]<start||line.distances[i-1]>end)continue;
+      const a=line.points[i-1],b=line.points[i];
+      if(Math.max(a.x,b.x)+margin>=bounds.minX&&Math.min(a.x,b.x)-margin<=bounds.maxX
+        &&Math.max(a.z,b.z)+margin>=bounds.minZ&&Math.min(a.z,b.z)-margin<=bounds.maxZ)return true;
+    }
+    return false;
+  }
   let result=new Brush(geometry,M.rock);result.updateMatrixWorld(true);
   const evaluator=new Evaluator();evaluator.attributes=['position','normal'];evaluator.useGroups=false;
   for(const line of lines)for(const tunnel of (line.cuts??line.tunnels).filter(t=>t.mountainId===mountain.id)){
     const start=Math.max(0,(tunnel.cutStart??tunnel.start)-2);
     const end=Math.min(line.length,(tunnel.cutEnd??tunnel.end)+2);
+    if(!intersectsSlice(line,start,end))continue;
     const covered=(line.tunnels??[]).some(span=>span.mountainId===mountain.id
       &&span.start<tunnel.end&&span.end>tunnel.start);
     const cutter=new Brush(covered?tunnelCutter(line,start,end):openCuttingCutter(line,start,end,mountain.height),M.rock);cutter.updateMatrixWorld(true);
@@ -237,7 +233,13 @@ export function buildMountains(parent,world){
     geo.dispose();
   }
   for(const line of world.lines)for(const t of line.tunnels){
-    tunnelPortal(parent,line,t.start,false);tunnelPortal(parent,line,t.end,true);
+    const own=distance=>{
+      if(!world.terrainChunk)return true;
+      const p=sampleLine(line,distance),b=world.bounds;
+      return p.x>=b.minX&&p.x<b.maxX&&p.z>=b.minZ&&p.z<b.maxZ;
+    };
+    if(own(t.start))tunnelPortal(parent,line,t.start,false);
+    if(own(t.end))tunnelPortal(parent,line,t.end,true);
   }
   return result;
 }

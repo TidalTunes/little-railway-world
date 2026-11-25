@@ -5,10 +5,12 @@
 brand
 
 ## Users and purpose
-A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with a sixteen-city showcase, reusable world generation, player ownership colors, and city development levels 1–10. Three camera distances offer a flat network map, an isometric world, and an overhead close view with train following. There is no gameplay, editor UI, or visible text.
+A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with a geographic Europe map of fifty major cities, reusable world generation, player ownership colors, and city development levels 1–10. Three camera distances offer a flat network map, an isometric world, and an overhead close view with train following. There is no gameplay, editor UI, or visible text.
 
 ## Direction from the brief
 Low-poly trains, isometric trees, miniature cities connected by working railway routes, and small details that make the landscape feel alive. Publish iterations to the existing GitHub Pages site. Support authored city and route layouts subject to geometric feasibility, automatic river bridges and mountain tunnels, and strict asset clearance. Let users zoom out to understand the network and select a train to follow it closely.
+
+The default map spans Iceland, western Russia, Turkey, and northern Africa. Real coastlines, rivers, and major lakes anchor the geography. Continuous faceted mountain ranges replace isolated peaks in this preset. The fifty city locations and populations come from one consistent UN urban-centre dataset; ownership is arbitrary art direction. The earlier sixteen-city and stress presets remain available.
 
 ## Art decisions
 A sunlit, handmade model railway viewed from above: colored meadows, a blue river, compact towns, mountain forest, farms, and simple stone bridges. Keep the scene legible when zoomed out to many cities and trains. The emotional goals are curiosity, calm, and delight. The trains are the focal moving objects.

@@ -1,11 +1,34 @@
-import { polylineTree } from './spatial-index.js';
-import clipping from 'polygon-clipping';
+import { polylineTree, BoundsTree, pointBox, pointsBox } from './spatial-index.js';
+import clipping from './polygon-ops.js';
 
 export const BIOME_TYPES = Object.freeze(['farmland', 'forest', 'plains', 'desert', 'ocean', 'mountain']);
 export const OCEAN_SHORE_WIDTH = .9;
 const LAND_TYPES = BIOME_TYPES.slice(0, 4);
 const EPS = 1e-7;
 const footprintCache = new WeakMap();
+const polygonIndexes = new WeakMap();
+const ringIndexes = new WeakMap();
+function ringIndex(ring){
+  if(!ringIndexes.has(ring)){
+    const edges=ring.map((b,i)=>{const a=ring[(i+ring.length-1)%ring.length];
+      return{a,b,box:pointsBox([{x:a[0],z:a[1]},{x:b[0],z:b[1]}])};});
+    ringIndexes.set(ring,new BoundsTree(edges,edge=>edge.box));
+  }
+  return ringIndexes.get(ring);
+}
+
+function polygonIndex(polygons){
+  if(!polygonIndexes.has(polygons)){
+    const edges=[],items=polygons.map(polygon=>{
+      for(const ring of polygon)for(let i=1;i<ring.length;i++){
+        const a=ring[i-1],b=ring[i];edges.push({a,b,box:pointsBox([{x:a[0],z:a[1]},{x:b[0],z:b[1]}])});
+      }
+      return{polygon,box:pointsBox(polygon[0].map(([x,z])=>({x,z})))};
+    });
+    polygonIndexes.set(polygons,{polygons:new BoundsTree(items,item=>item.box),edges:new BoundsTree(edges,item=>item.box)});
+  }
+  return polygonIndexes.get(polygons);
+}
 
 function randomFor(seed) {
   let state = 2166136261;
@@ -58,8 +81,9 @@ function segmentDistance(x, z, a, b) {
 
 function inRing(ring, x, z) {
   let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i], b = ring[j];
+  const edges=ring.length>32?ringIndex(ring).query({minX:x-EPS,maxX:Infinity,minZ:z-EPS,maxZ:z+EPS})
+    :ring.map((a,i)=>({a,b:ring[(i+ring.length-1)%ring.length]}));
+  for (const {a,b} of edges) {
     if (segmentDistance(x, z, a, b) < EPS) return true;
     if ((a[1] > z) !== (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
   }
@@ -67,14 +91,12 @@ function inRing(ring, x, z) {
 }
 
 function inPolygons(polygons, x, z) {
-  return polygons.some(polygon => inRing(polygon[0], x, z) && !polygon.slice(1).some(hole => inRing(hole, x, z)));
+  return polygonIndex(polygons).polygons.query(pointBox(x,z,EPS)).some(({polygon}) =>
+    inRing(polygon[0], x, z) && !polygon.slice(1).some(hole => inRing(hole, x, z)));
 }
 
 function signedDistance(polygons, x, z) {
-  let distance = Infinity;
-  for (const polygon of polygons) for (const ring of polygon) {
-    for (let i = 1; i < ring.length; i++) distance = Math.min(distance, segmentDistance(x, z, ring[i - 1], ring[i]));
-  }
+  const distance=polygonIndex(polygons).edges.nearest(x,z,edge=>segmentDistance(x,z,edge.a,edge.b));
   return inPolygons(polygons, x, z) ? distance : -distance;
 }
 
@@ -227,12 +249,16 @@ export function createBiomes(world, config = {}) {
   assert(Array.isArray(world.outline) && world.outline.length >= 3, 'a valid world outline is required');
   const random = randomFor(world.seed), island = [[closeRing(world.outline)]];
   const sites = sitesFor(world, config, random);
-  const ocean = config.ocean === false ? [] : config.ocean === undefined
+  // Geographic presets supply a complete archipelago and an offline-buffered
+  // shoreline. Cities and scenery clip against this coast, never reshape it.
+  const geography=config.geography;
+  const ocean = geography ? clipping.intersection(island,geography.ocean) : config.ocean === false ? [] : config.ocean === undefined
     ? coastalBay(world, island, random) : explicitOcean(world, island, config.ocean);
-  const oceanAndShore = ocean.length ? clipping.intersection(island, buffer(ocean, OCEAN_SHORE_WIDTH)) : [];
-  const oceanShore = ocean.length ? clipping.difference(oceanAndShore, ocean) : [];
-  const land = oceanAndShore.length ? clipping.difference(island, oceanAndShore) : island;
-  const footprints = (world.mountains || []).map(mountain => [[circle(mountain.x, mountain.z, mountain.radius, 48)]]);
+  const oceanAndShore = !geography&&ocean.length ? clipping.intersection(island, buffer(ocean, OCEAN_SHORE_WIDTH)) : [];
+  const oceanShore = geography ? clipping.intersection(island,geography.oceanShore) : ocean.length ? clipping.difference(oceanAndShore, ocean) : [];
+  const land = geography ? clipping.intersection(island,geography.landInterior) : oceanAndShore.length ? clipping.difference(island, oceanAndShore) : island;
+  const footprints = (world.mountains || []).map(mountain => [[closeRing(mountain.range?.polygon??circle(mountain.x, mountain.z, mountain.radius, 48)),
+    ...(mountain.range?.holes??[]).map(closeRing)]]);
   const mountains = footprints.length ? clipping.intersection(land, clipping.union(...footprints)) : [];
   const dryRegions = mountains.length ? clipping.difference(land, mountains) : land;
   const xs = world.outline.map(point => point[0]), zs = world.outline.map(point => point[1]);
@@ -252,8 +278,11 @@ export function createBiomes(world, config = {}) {
   }
   if (mountains.length) regions.push({id: 'biome-mountain', type: 'mountain', polygons: mountains});
   if (ocean.length) regions.push({id: 'biome-ocean', type: 'ocean', polygons: ocean});
+  // Lakes share the water biome while retaining separate source geometry.
+  if(geography?.lakes?.length)regions.push({id:'biome-lakes',type:'ocean',polygons:geography.lakes});
   return {regions: regions.map(region => ({...region, polygons: stablePolygons(region.polygons)})),
     land: stablePolygons(land), ocean: stablePolygons(ocean), oceanShore: stablePolygons(oceanShore),
+    lakeShore:stablePolygons(geography?.lakeShore??[]),
     shoreWidth: OCEAN_SHORE_WIDTH, sites};
 }
 
@@ -267,7 +296,7 @@ function polygonsFor(world, types) {
   if (!cached) { cached = new Map(); footprintCache.set(model, cached); }
   const key = selected.join('|');
   if (!cached.has(key)) {
-    const polygons = selected.flatMap(type => type === 'shore' ? [model.oceanShore] :
+    const polygons = selected.flatMap(type => type === 'shore' ? [model.oceanShore,model.lakeShore] :
       model.regions.filter(region => region.type === type).map(region => region.polygons)).filter(value => value?.length);
     cached.set(key, polygons.length ? clipping.union(...polygons) : []);
   }
@@ -278,7 +307,7 @@ function polygonsFor(world, types) {
 export function biomeAt(world, x, z) {
   const model = biomeModel(world);
   for (const region of model.regions) if (inPolygons(region.polygons, x, z)) return region.type;
-  return inPolygons(model.oceanShore, x, z) ? 'shore' : null;
+  return inPolygons(model.oceanShore, x, z)||inPolygons(model.lakeShore??[],x,z) ? 'shore' : null;
 }
 
 /** Positive inside the selected biome, negative outside; zero at its boundary. */

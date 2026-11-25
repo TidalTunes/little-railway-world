@@ -13,7 +13,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const point=new THREE.Vector3(),box=new THREE.Box3(),targetPoint=new THREE.Vector3();
   let frame=0,disposed=false;
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
-  const features=[...world.cities,...world.mountains,...world.stations];
+  const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
   const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,bytes:0,errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0};
   const materialFor=description=>{
     const key=JSON.stringify(description);let entry=materials.get(key);
