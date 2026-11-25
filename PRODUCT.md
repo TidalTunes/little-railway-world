@@ -15,7 +15,7 @@ A sunlit, handmade model railway viewed from above: colored meadows, a blue rive
 
 At the farthest distance, the same geography becomes a sparse network map: broad terrain and water regions, restrained mountain contours, railways, live trains, and one city glyph per settlement. Its size and silhouette convey development, while its color identifies the owner. Individual scenery is reserved for closer views. The close camera looks down on the miniature and follows a selected train without a separate simulation or visible control panel.
 
-Cities develop from small settlements into districts with streets, apartments, civic buildings, plazas, and towers. Player color families carry consistently through their architecture and trains. Ownership and level are editable authoring data; this iteration has no progression or management actions.
+Cities develop from compact settlements along winding lanes into dense neighborhoods with apartments, civic buildings, plazas, and towers. Farmland forms coherent groups of neighboring cultivated plots. Player color families carry consistently through their architecture and trains. Ownership and level are editable authoring data; this iteration has no progression or management actions.
 
 ## Design principles
 

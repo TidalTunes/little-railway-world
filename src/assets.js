@@ -267,18 +267,29 @@ export function tower(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
   return g;
 }
 
-export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1 } = {}) {
+export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1,
+  width = 3, depth = 4, parcels } = {}) {
+  if(!Number.isFinite(width)||!Number.isFinite(depth)||width<=0||depth<=0)throw new TypeError('Farm dimensions must be positive and finite');
+  const fields=parcels??[{x:0,z:0,width,depth,variant}];
+  if(!Array.isArray(fields)||fields.some(p=>![p.x,p.z,p.width,p.depth].every(Number.isFinite)
+    ||p.width<=0||p.depth<=0||Math.abs(p.x)+p.width/2>width/2+1e-7
+    ||Math.abs(p.z)+p.depth/2>depth/2+1e-7))throw new TypeError('Farm parcels must stay inside their district');
   const g = asset(parent, 'farmPatch', { x, y, z, rotation, scale });
-  const type = variantOf(variant, 3);
-  box(g, 0, .025, 0, 3, .05, 4, 'field');
-  const crop = ['wheat', 'leaf', 'lavender'][type];
-  for (let i = 0; i < 5; i++) {
-    box(g, -1.16 + i * .58, .15, type === 0 ? -.25 : 0, .32, .22, type === 0 ? 3.04 : 3.70, crop);
-  }
-  // A pair of baled cylinders is enough to give the field a scale and a story.
-  if (type === 0) {
-    for (const xx of [-.70, .55]) {
-      cylinder(g, xx, .23, 1.65, .18, .18, .40, 'gold', 8).rotation.z = Math.PI / 2;
+  g.userData.footprint={width,depth,height:.42,radius:Math.hypot(width,depth)/2};
+  box(g,0,.025,0,width,.05,depth,parcels?'sand':'field');
+  for(const field of fields){
+    const type=variantOf(field.variant??variant,3),f=group(g,field.x,0,field.z);
+    const w=field.width,d=field.depth,margin=Math.min(.12,w*.08,d*.08);
+    box(f,0,.062,0,w,.075,d,'field');
+    const base=['wheat','leafLight','lavender'][type],crop=['gold','leaf','lavender'][type];
+    const headland=type===0&&w>2.8&&d>3.2?.48:0;
+    box(f,0,.112,-headland/2,w-margin*2,.06,d-margin*2-headland,base);
+    const count=Math.max(1,Math.floor((w-margin*2)/.56)),pitch=(w-margin*2)/count;
+    for(let i=0;i<count;i++)box(f,-w/2+margin+pitch*(i+.5),.19,-headland/2,
+      Math.min(.20,pitch*.36),.12,d-margin*2-headland,crop);
+    if(headland){
+      for(const side of [-1,1])cylinder(f,side*Math.min(w*.25,.85),.25,d/2-.24,
+        .15,.15,.40,'gold',8).rotation.z=Math.PI/2;
     }
   }
   return g;

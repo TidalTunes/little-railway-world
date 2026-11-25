@@ -49,6 +49,6 @@ export function cityDevelopment(level) {
   if(level>=6)features.push('civic');
   if(level>=8)features.push('tower');
   return {radius:[9,10.5,12,13.5,16,19,22,25,28,31][level-1],buildingBudget:[3,5,7,10,13,17,21,26,31,37][level-1],
-    streetWidth:level>=7?.95:level>=4?.8:.65,streetSpacing:level>=4?7.6:6.4,features};
+    streetWidth:level>=7?.72:level>=4?.62:.52,streetSpacing:level>=4?7.8:5.4,features};
 }
 export const CITY_ASSET_RADII=Object.freeze({house:1.56,landmark:2,apartment:2.05,civic:2.8,plaza:2.6,tower:2.1});

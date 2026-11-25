@@ -44,7 +44,7 @@ Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, ra
 | `mountains` | Array of `{ id?, x, z, radius, height }`. Positive radius and height bound an irregular faceted mountain. Use `[]` for none. |
 | `biomes` | Optional `{ sites?, ocean? }` configuration, described below. |
 | `outline` | Simple island polygon as `[[x, z], ...]`. Omit for the default twelve-sided tile. |
-| `density` | Scattered scenery multiplier, clamped to 0–3; default 1. City buildings and a small baseline of farms are retained independently. |
+| `density` | Scenery and cultivated-area multiplier, clamped to 0–3; default 1. City buildings are retained independently; zero omits farms and other scenery. |
 
 Connection `points` are intermediate waypoints in travel order; city centres are added automatically at both ends. The alias `waypoints` is also accepted. Points can be `[x, z]` pairs or `{ x, z }` objects. Legacy route colors are `coral`, `teal`, `gold`, and `blue`; owner palettes determine the current train colors.
 
@@ -62,7 +62,7 @@ Each city has an `ownerId` referencing a player and an integer `level` from 1 th
 
 Development controls the neighborhood footprint, building budget, street width and spacing, and available building types. Houses appear at every level; landmarks enter at level 2, apartments and plazas at level 4, civic buildings at level 6, and towers at level 8. Higher levels use larger footprints and denser districts. Geometry and placement variation use the city ID and seed, independently of the player's selected color. Actual building counts depend on safe available space.
 
-The city planner builds a connected street graph on a clear side of the railway, then places buildings facing its edges. Streets stay on dry terrain and clear tracks, river banks, shorelines, mountains, other city footprints, and station platforms. Buildings and decorative scenery reserve full clearance around streets. Constrained plots are skipped; a city can have fewer buildings or no streets when its authored footprint cannot accommodate them.
+The city planner grows a connected network of winding lanes and irregular branches on a clear side of the railway, then clusters buildings facing its edges. Streets stay on dry terrain and clear tracks, river banks, shorelines, mountains, other city footprints, and station platforms. Buildings and decorative scenery reserve full clearance around every segment of each street polyline. Constrained plots are skipped; a city can have fewer buildings or no streets when its authored footprint cannot accommodate them.
 
 `city.development` records the resolved `radius`, `buildingBudget`, `streetWidth`, `streetSpacing`, `features`, and `variantSeed`, plus generated `placedBuildings`, `streetCount`, `connectionCount`, and, where development was placed, `placedFeatures`. `world.cityStreets` contains `{ id, cityId, ownerId, points, width }`; each street's points use `{ x, z }` coordinates.
 
@@ -134,6 +134,8 @@ Polygon values use the `polygon-clipping` MultiPolygon shape: an array of polygo
 
 Farms fit farmland; dense groves fit forest, with sparser trees in plains. Cacti fit desert, sheep fit plains, and scattered rocks fit plains or desert. Every accepted placement includes its `biome`.
 
+Agricultural districts use a shared orientation and grouped crop palette. Each generated `farm` placement can contain multiple neighboring `parcels`, with local `{ x, z, width, depth, variant }` coordinates inside its `width` and `depth`. Its circular `radius` reserves the complete field group, including dividing paths. `districtId` identifies the coherent agricultural group. The renderer also supports the original single-patch farm shape when parcels are omitted.
+
 ## Mountains, bridges, and clearances
 
 `src/mountain-shape.js` produces a deterministic irregular heightfield with ridges, secondary peaks, and an offset summit, bounded by the authored radius and height. `mountainHeight` evaluates the same triangulated surface used for rendering. Snow follows the excavated rock faces, so it cannot cap a tunnel opening.
@@ -152,6 +154,7 @@ The compiled plan has `version: 2`. In addition to the geometry and network fiel
 
 - `stations`: positions, rotations, `ownerId`, served city and line IDs, distance along the line, and platform dimensions. The planner first tries the city centre beside its straight rail axis, then offset candidates if needed.
 - `placements`: asset `kind`, position, conservative `radius`, `scale`, `rotation`, `variant`, and `biome`. City buildings also include `cityId` and `ownerId`.
+- `farmland`: generated agricultural `districts`, total reserved field `area`, and `targetArea`. Each district records its ID, position, dimensions, radius, orientation, and parcel count. Available safe land can limit the achieved area.
 - `junctions`: interior crossings as `{ id, x, y, z, lines: [{ lineId, distance }] }`. Recognized shared sections and mutual city endpoints are excluded.
 
 `createNetworkTraffic(world)` in `src/network-traffic.js` returns `mode`, `trains`, `paths`, `reservations`, `update(dt)`, and `sampleTrain(train, offset)`. Time is in seconds; an update of zero leaves traffic unchanged. The renderer samples every carriage separately by its offset along the network path.

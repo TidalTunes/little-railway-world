@@ -2,6 +2,7 @@ import { createBiomes, biomeAt, biomeDistance, fitsBiome } from './biomes.js';
 import { createAlignment, combineAlignments, straightSegment, sampleAlignment, sampleAlignmentPoints } from './alignments.js';
 import { mountainSurfaceHeight } from './mountain-shape.js';
 import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
+import { placeFarmland } from './farmland.js';
 /**
  * Deterministic, renderer-independent railway world planner.
  *
@@ -280,7 +281,7 @@ function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   if((world.cityStreets??[]).some(street=>distanceToLine(street,item.x,item.z)<r+street.width/2+CLEARANCES.street))return false;
   return true;
 }
-/** Streets form one connected dry-land graph, with buildings facing its edges. */
+/** Settlements grow along winding lanes, then fill their frontages compactly. */
 function placeCityDevelopment(world) {
   const dry=['farmland','forest','plains','desert'];
   for(const city of world.cities){
@@ -297,49 +298,104 @@ function placeCityDevelopment(world) {
       if(world.stations.some(s=>distanceToRectangle(s,p.x,p.z)<r))return false;
       return true;
     };
-    const edgeIsClear=(a,b)=>{
-      const n=Math.ceil(distance(a,b)/.6);
-      for(let i=0;i<=n;i++)if(!streetPointIsClear({x:lerp(a.x,b.x,i/n),z:lerp(a.z,b.z,i/n)}))return false;
+    const edgeIsClear=points=>{
+      for(let k=1;k<points.length;k++){
+        const a=points[k-1],b=points[k],n=Math.max(1,Math.ceil(distance(a,b)/.6));
+        for(let i=0;i<=n;i++)if(!streetPointIsClear({x:lerp(a.x,b.x,i/n),z:lerp(a.z,b.z,i/n)}))return false;
+      }
       return true;
     };
-    const planSide=side=>{
-      const nodes=new Map(),edges=[],queue=[];
-      // A station-back street is separated from the rail corridor. No road
-      // crosses the tracks, even where several rail branches meet at a city.
-      for(const [i,j] of [[0,0],[-1,0],[1,0],[0,1]]){
-        const p=local(i*spacing,5.1+j*spacing,side);
-        if(streetPointIsClear(p)){nodes.set(`${i},${j}`,{i,j,p});queue.push({i,j,p});break;}
-      }
-      for(let cursor=0;cursor<queue.length;cursor++){
-        const node=queue[cursor];
-        for(const [di,dj] of [[-1,0],[1,0],[0,1],[0,-1]]){
-          const i=node.i+di,j=node.j+dj,key=`${i},${j}`;
-          if(j<0||Math.abs(i)>5||j>5)continue;
-          const p=local(i*spacing,5.1+j*spacing,side);
-          if(!edgeIsClear(node.p,p))continue;
-          if(!nodes.has(key)){nodes.set(key,{i,j,p});queue.push({i,j,p});}
-          if(node.i<i||node.j<j)edges.push({points:[node.p,p],width});
-        }
-      }
-      return {side,edges};
-    };
-    const plans=[planSide(1),planSide(-1)];
     const station=world.stations.find(s=>s.cityId===city.id);
     const stationSide=station?Math.sign((station.x-city.x)*normal.x+(station.z-city.z)*normal.z):rng()<.5?1:-1;
-    plans.sort((a,b)=>b.edges.length-a.edges.length||(a.side===stationSide?-1:1));
-    const plan=plans[0];
-    // Very small authored footprints can have only a short pedestrian lane.
-    if(!plan.edges.length){
-      for(const side of [stationSide,-stationSide]){
-        const a=local(-1.5,5.1,side),b=local(1.5,5.1,side);
-        if(edgeIsClear(a,b)){plan.edges.push({points:[a,b],width});break;}
+    const planSide=side=>{
+      // Nodes grow outwards from a station-back lane. Their spacing prevents
+      // overbuilding roads; no lattice or right-angle pattern underlies them.
+      const random=cityRandom(world.seed,`${city.id}:lanes:${side}`),nodes=[],edges=[];
+      const originV=side===stationSide?5.1:3.7;
+      const center=local((random()-.5)*city.radius*.12,Math.max(originV+.6,city.radius*.46),side);
+      for(const u of [0,-2.5,2.5,-5,5]){
+        const p=local(u,originV,side);
+        if(streetPointIsClear(p)){nodes.push(p);break;}
+      }
+      if(!nodes.length)return{side,edges,center};
+      const bend=(a,b,amount)=>{
+        const length=distance(a,b),nx=-(b.z-a.z)/length,nz=(b.x-a.x)/length,n=Math.max(3,Math.ceil(length/1.1));
+        return Array.from({length:n+1},(_,i)=>{
+          if(i===0)return a;if(i===n)return b;
+          const t=i/n,offset=Math.sin(Math.PI*t)*amount;
+          return{x:lerp(a.x,b.x,t)+nx*offset,z:lerp(a.z,b.z,t)+nz*offset};
+        });
+      };
+      const joinsExisting=points=>edges.some(edge=>{
+        const shared=[points[0],points.at(-1)].filter(p=>p===edge.points[0]||p===edge.points.at(-1));
+        return points.some(p=>!shared.some(q=>distance(p,q)<2.1)&&distanceToLine(edge,p.x,p.z)<width+1.15);
+      });
+      const target=Math.max(2,Math.ceil(spec.buildingBudget*(city.level>=4&&city.level<=7?.38:.46)));
+      for(let attempt=0;attempt<(city.radius<14?280:900)&&nodes.length<target;attempt++){
+        const angle=random()*Math.PI*2,r=Math.sqrt(random()),u=Math.cos(angle)*city.radius*.77*r;
+        const v=Math.max(originV+.6,city.radius*.46)+Math.sin(angle)*Math.max(2,city.radius*.34)*r;
+        const p=local(u,v,side);
+        if(distance(p,city)>city.radius-1.7)continue;
+        const near=nodes.map(node=>({node,distance:distance(node,p)})).sort((a,b)=>a.distance-b.distance);
+        if(near[0].distance<spacing*.72||near[0].distance>spacing*1.65||!streetPointIsClear(p))continue;
+        const a=near[0].node;
+        // Leave room at junctions for a block of buildings between branches.
+        if(edges.some(edge=>{
+          const other=edge.points[0]===a?edge.points[1]:edge.points.at(-1)===a?edge.points.at(-2):null;
+          return other&&((other.x-a.x)*(p.x-a.x)+(other.z-a.z)*(p.z-a.z))/(distance(other,a)*distance(p,a))>.73;
+        }))continue;
+        const points=bend(a,p,(random()-.5)*Math.min(1.8,near[0].distance*.2));
+        if(!edgeIsClear(points)||joinsExisting(points))continue;
+        nodes.push(p);edges.push({points,width});
+      }
+      // A few short links make higher-level neighborhoods walkable loops,
+      // rather than expanding the settlement into a dense web of streets.
+      if(city.level>=4){
+        const pairs=[];
+        for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+          const a=nodes[i],b=nodes[j],d=distance(a,b);
+          if(d>spacing*1.5||edges.some(e=>e.points[0]===a&&e.points.at(-1)===b||e.points[0]===b&&e.points.at(-1)===a))continue;
+          pairs.push({a,b,d});
+        }
+        pairs.sort((a,b)=>a.d-b.d);
+        let links=0;
+        for(const {a,b,d} of pairs){
+          if(links>=Math.floor(city.level/3))break;
+          const points=bend(a,b,(random()-.5)*Math.min(1.2,d*.14));
+          if(edgeIsClear(points)&&!joinsExisting(points)){edges.push({points,width});links++;}
+        }
+      }
+      if(!edges.length){
+        for(const direction of [-1,1]){
+          const b=local(direction*2.8,originV+random()*.6,side),points=bend(nodes[0],b,.2*direction);
+          if(edgeIsClear(points)){edges.push({points,width});break;}
+        }
+      }
+      return{side,edges,center};
+    };
+    const plans=[planSide(1),planSide(-1)];
+    // Choose usable frontage, not road length: a long lane trapped between a
+    // station and the city edge is less useful than a compact inhabited side.
+    for(const plan of plans){
+      const radius=CITY_ASSET_RADII.house*.9,offset=radius+width/2+CLEARANCES.street+.1;
+      plan.capacity=0;
+      for(const street of plan.edges)for(let i=1;i<street.points.length;i++){
+        const a=street.points[i-1],b=street.points[i],len=distance(a,b);
+        for(const side of [-1,1]){
+          const item={x:(a.x+b.x)/2-(b.z-a.z)/len*offset*side,z:(a.z+b.z)/2+(b.x-a.x)/len*offset*side,radius};
+          if(distance(item,city)+radius<=city.radius&&canPlace(world,item,{cityId:city.id})
+            &&plan.edges.every(edge=>distanceToLine(edge,item.x,item.z)>=radius+width/2+CLEARANCES.street))plan.capacity+=len;
+        }
       }
     }
-    const streets=plan.edges.map((e,i)=>({id:`street-${city.id}-${i+1}`,cityId:city.id,ownerId:city.ownerId,...e}));
+    plans.sort((a,b)=>b.capacity-a.capacity||(a.side===stationSide?-1:1));
+    const plan=plans[0],streets=plan.edges.map((e,i)=>({id:`street-${city.id}-${i+1}`,cityId:city.id,ownerId:city.ownerId,...e}));
     world.cityStreets.push(...streets);
     spec.streetCount=streets.length;
     spec.connectionCount=world.lines.filter(l=>l.from===city.id||l.to===city.id).length;
     if(!streets.length)continue;
+    const frontages=streets.flatMap(street=>street.points.slice(1).map((b,i)=>({a:street.points[i],b,length:distance(street.points[i],b)})));
+    const totalFrontage=frontages.reduce((sum,edge)=>sum+edge.length,0);
     const priority=spec.features.filter(k=>k!=='house').reverse();
     const kindFor=i=>{
       if(i<priority.length)return priority[i];
@@ -349,27 +405,35 @@ function placeCityDevelopment(world) {
       return 'house';
     };
     let placed=0;
+    const cityBuildings=[];
     const tryPlaceBuilding=kind=>{
-      const radius=CITY_ASSET_RADII[kind];
-      for(let attempt=0;attempt<130;attempt++){
-        const street=streets[Math.floor(rng()*streets.length)],[a,b]=street.points;
-        const length=distance(a,b),ux=(b.x-a.x)/length,uz=(b.z-a.z)/length;
-        const t=rng(),side=rng()<.5?-1:1,offset=radius+width/2+CLEARANCES.street+.12;
+      // Narrow houses and mixed building sizes leave snug, irregular blocks
+      // without reducing the collision envelope of the visible geometry.
+      const scale=kind==='house'?.86+rng()*.1:.9+rng()*.09,radius=CITY_ASSET_RADII[kind]*scale;
+      let best=null;
+      for(let attempt=0;attempt<180;attempt++){
+        let along=rng()*totalFrontage;
+        const edge=frontages.find(edge=>(along-=edge.length)<=0)??frontages.at(-1),{a,b,length}=edge;
+        const ux=(b.x-a.x)/length,uz=(b.z-a.z)/length,t=rng(),side=rng()<.5?-1:1;
+        const offset=radius+width/2+CLEARANCES.street+.04+rng()*.14;
         const item={id:`city-${city.id}-building-${placed+1}`,kind,cityId:city.id,ownerId:city.ownerId,
-          x:lerp(a.x,b.x,t)-uz*offset*side,z:lerp(a.z,b.z,t)+ux*offset*side,y:0,radius,scale:1,
+          x:lerp(a.x,b.x,t)-uz*offset*side,z:lerp(a.z,b.z,t)+ux*offset*side,y:0,radius,scale,
           variant:Math.floor(rng()*8),rotation:-Math.atan2(uz,ux)+(side>0?Math.PI:0)};
         if(distance(item,city)+radius>city.radius)continue;
+        if(cityBuildings.some(p=>distance(item,p)<radius+p.radius+CLEARANCES.objects))continue;
+        if(streets.some(street=>distanceToLine(street,item.x,item.z)<radius+width/2+CLEARANCES.street))continue;
         if(!canPlace(world,item,{cityId:city.id}))continue;
-        world.placements.push({...item,biome:biomeAt(world,item.x,item.z)});placed++;return true;
+        const neighbor=cityBuildings.length?Math.min(...cityBuildings.map(p=>distance(item,p)-radius-p.radius)):0;
+        const score=neighbor*1.8+distance(item,plan.center)*.3;
+        if(!best||score<best.score)best={item,score};
       }
-      return false;
+      if(!best)return false;
+      world.placements.push({...best.item,biome:biomeAt(world,best.item.x,best.item.z)});cityBuildings.push(best.item);placed++;return true;
     };
     for(let lot=0;lot<spec.buildingBudget;lot++)tryPlaceBuilding(kindFor(lot));
-    // Small street-front houses fill the spaces left between larger civic and
-    // residential buildings; their silhouettes retain the same strict margins.
     for(let missed=0;placed<spec.buildingBudget&&missed<3;)if(!tryPlaceBuilding('house'))missed++;else missed=0;
     spec.placedBuildings=placed;
-    spec.placedFeatures=[...new Set(world.placements.filter(p=>p.cityId===city.id).map(p=>p.kind))];
+    spec.placedFeatures=[...new Set(cityBuildings.map(p=>p.kind))];
   }
 }
 
@@ -377,12 +441,7 @@ function placeScenery(world,random,density) {
   const add=item=>world.placements.push({id:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,biome:biomeAt(world,item.x,item.z),...item});
   const scale=Math.sqrt(world.bounds.width*world.bounds.depth/(130*95));
   const candidate=()=>({x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94});
-  const farmCount=Math.max(2,Math.round(12*density*scale));
-  for(let attempt=0,accepted=0;attempt<1800&&accepted<farmCount;attempt++){
-    const size=1.3+random()*.3;
-    const item={kind:'farm',...candidate(),radius:2.5*size,scale:size,variant:Math.floor(random()*3),rotation:Math.floor(random()*4)*Math.PI/2};
-    if(fitsBiome(world,'farmland',item.x,item.z,item.radius)&&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
-  }
+  world.farmland=placeFarmland(world,{density,canPlace:item=>canPlace(world,item,{keepOutsideCities:true}),add});
   // The forest is a connected biome, with small open glades between groves.
   const groves=[];
   for(let i=0;i<500&&groves.length<16;i++){const p=candidate();if(biomeAt(world,p.x,p.z)==='forest')groves.push(p);}

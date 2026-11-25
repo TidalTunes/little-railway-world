@@ -20,7 +20,9 @@ Ownership has one hue family per player, shared by city buildings, station detai
 
 Small, consistent silhouettes: two-tier pines, faceted broadleaf crowns, pitched houses, a few taller civic landmarks, compact station platforms, cacti, and double-ended railcars. Mountains use irregular ridges and secondary peaks, with snow following their excavated faces. Details remain inside each asset's declared footprint. Passengers, benches, crop rows, hay bales, sheep, and roof trim reward a closer look without overwhelming the wide view.
 
-City development adds apartments, plazas, civic buildings, and towers as levels rise. Buildings face a connected street graph, with seeded variation in their arrangement and forms. The map compresses that development into a single house, civic-hall, or stepped-tower silhouette, increasing its size at every level. A pale halo separates each owner-colored city mark from the railway beneath it.
+City development adds apartments, plazas, civic buildings, and towers as levels rise. Compact groups of buildings follow gently winding lanes and irregular branches, with seeded variation in their arrangement and forms. Small villages gather around a short lane; larger towns develop interconnected neighborhoods rather than repeated rectangular blocks. The map compresses that development into a single house, civic-hall, or stepped-tower silhouette, increasing its size at every level. A pale halo separates each owner-colored city mark from the railway beneath it.
+
+Farmland reads as cultivated countryside: neighboring crop parcels share an orientation, with narrow dividing paths and related crop colors. Larger field groups fill the available agricultural land, while their complete footprints stay clear of towns, railways, and water. Crop rows and occasional bales remain visible close up.
 
 ## Construction rules
 

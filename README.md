@@ -73,7 +73,7 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 
 Scenery reserves complete roof and canopy footprints. Farms fit inside farmland, dense groves stay in forests, and cacti occupy desert. Shorelines exclude dry assets. Stations reserve their rotated platforms, and shared railway sections have one render owner so coincident rails are drawn once. Bridges span both banks across the full width of their curved decks.
 
-City streets form connected graphs on dry ground beside the railway. Buildings face those streets and reserve clearance around them. Development sets a building budget and available asset types; constrained plots are skipped. Ownership and development are authoring data, with no economy or progression controls.
+City streets grow into connected winding lanes and irregular branches on dry ground beside the railway. Buildings cluster closely along those streets and reserve clearance around them. Farmland groups neighboring crop parcels into larger, consistently oriented fields with narrow dividing paths. Development sets a building budget and available asset types; constrained plots are skipped. Ownership and development are authoring data, with no economy or progression controls.
 
 Mountains have faceted ridges, secondary peaks, and snow following the actual rock surface. Rail corridors are subtracted from the geometry. A tunnel portal appears only where the complete arch has rock behind it; shallow crossings without a backed tunnel become full-height open cuttings. Crowded decorative assets are skipped.
 

@@ -122,7 +122,7 @@ test('city streets form connected graphs and every asset preserves their full wi
       const a=key(street.points[0]),b=key(street.points.at(-1));
       if(!graph.has(a))graph.set(a,[]);if(!graph.has(b))graph.set(b,[]);
       graph.get(a).push(b);graph.get(b).push(a);
-      for(const item of world.placements)assert.ok(pointSegmentDistance(item.x,item.z,...street.points)
+      for(const item of world.placements)for(let i=1;i<street.points.length;i++)assert.ok(pointSegmentDistance(item.x,item.z,street.points[i-1],street.points[i])
         >=item.radius+street.width/2+CLEARANCES.street-1e-6,`${item.id} clears ${street.id}`);
     }
     const visited=new Set(),queue=[graph.keys().next().value];
