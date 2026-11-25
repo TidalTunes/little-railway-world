@@ -5,13 +5,13 @@
 brand
 
 ## Users and purpose
-A browser-based art prototype for an isometric train game. The first draft is a beautiful, self-running simulation for visual feedback. No gameplay and no visible text or interface.
+A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with simpler, readable art and a reusable world-generation system. No gameplay and no visible text or interface.
 
 ## Direction from the brief
-Low-poly trains, isometric trees, miniature cities connected by working railway routes, and small details that make the landscape feel alive. Publish the first draft to a new GitHub Pages site.
+Low-poly trains, isometric trees, miniature cities connected by working railway routes, and small details that make the landscape feel alive. Publish iterations to the existing GitHub Pages site. Support arbitrary authored city and route layouts, automatic bridges and tunnels, and strict asset clearance.
 
-## Art decisions for this draft
-A sunlit, handmade model railway viewed from above: richly colored meadows, a blue river, small towns, mountain forest, farms, and stone bridges. The emotional goals are curiosity, calm, and delight. The trains are the focal moving objects.
+## Art decisions
+A sunlit, handmade model railway viewed from above: colored meadows, a blue river, compact towns, mountain forest, farms, and simple stone bridges. Keep the scene legible when zoomed out to many cities and trains. The emotional goals are curiosity, calm, and delight. The trains are the focal moving objects.
 
 ## Design principles
 - The whole viewport is the world.

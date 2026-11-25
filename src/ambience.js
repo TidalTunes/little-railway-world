@@ -1,90 +1,59 @@
 import * as THREE from 'three';
 import { box,cylinder,ico,beam,v,group,mesh,consolidate } from './geometry.js';
-import { M,C,range,rng } from './palette.js';
-import { river, inIsland } from './landscape.js';
-import { chimneys, windmills } from './buildings.js';
+import { M } from './palette.js';
+import { seededRandom,sampleLine,inWorld,surfaceHeight } from './world-model.js';
 
-export function ambience(scene,trains){
-  const ripples=[];
-  for(let i=0;i<85;i++){
-    const t=rng(),p=river.getPointAt(t),d=river.getTangentAt(t),n=v(-d.z,0,d.x).multiplyScalar(range(-2.5,2.5));p.add(n);
-    const m=box(scene,p.x,.115,p.z,range(.18,.85),.012,.045,'foam',-Math.atan2(d.z,d.x));
-    m.castShadow=false;m.receiveShadow=false;
-    ripples.push({mesh:m,t,offset:n,phase:range(0,6.28)});
-  }
-  const boat=group(scene);
-  const hull=new THREE.CylinderGeometry(.53,.32,1.95,5,1);hull.rotateX(Math.PI/2);
-  const hullMesh=mesh(boat,hull,'roofDark',0,.33,0);hullMesh.scale.y=.65;
-  box(boat,0,.44,0,.8,.12,1.8,'trim');
-  box(boat,0,.77,-.2,.63,.55,.63,'white');
-  box(boat,0,.86,.13,.48,.25,.025,'window');
-  box(boat,0,1.10,-.2,.8,.12,.85,'roofBlue');
-  cylinder(boat,0,1.32,-.46,.08,.08,.4,'red');
-  const wake=group(boat);
-  for(const s of [-1,1])beam(wake,v(s*.2,.19,-1),v(s*.95,.19,-3),.045,'foam');
+export function ambience(parent,world){
+  const root=group(parent),random=seededRandom(`${world.seed}-life`),dummy=new THREE.Object3D();
+  const ripples=new THREE.InstancedMesh(new THREE.BoxGeometry(1,.015,.055),M.foam,64);
+  ripples.instanceMatrix.setUsage(THREE.DynamicDrawUsage);ripples.frustumCulled=false;root.add(ripples);
+  const phases=Array.from({length:64},()=>({s:random()*world.river.length,offset:(random()-.5)*Math.max(0,world.river.width-1.3),length:.3+random()*.7}));
+  const boat=group(root);
+  ico(boat,0,.14,0,.44,.24,1.08,'roofDark');
+  box(boat,0,.24,0,.68,.12,1.55,'trim');
+  box(boat,0,.47,-.20,.49,.39,.60,'white');
+  box(boat,0,.51,.108,.36,.23,.025,'window');
+  box(boat,0,.70,-.20,.63,.08,.76,'roofBlue');
+  for(const side of [-1,1])beam(boat,v(side*.22,.045,-.9),v(side*.60,.045,-2.0),.045,'foam');
   consolidate(boat);
+  // Stay within the island even for authored rivers with long off-map endpoints.
+  const navigable=[];
+  for(let s=0;s<=world.river.length;s+=.5){const p=sampleLine(world.river,s);if(inWorld(world,p.x,p.z,2.5))navigable.push(s);}
+  const boatStart=navigable[0]??0,boatEnd=navigable.at(-1)??0;
 
-  const sailboat=group(scene,29,.1,9.6,-1.5);
-  const sailHull=ico(sailboat,0,.19,0,.55,.25,1.5,'white',0);
-  cylinder(sailboat,0,1.7,0,.035,.04,3,'timber',6);
-  const sailGeo=new THREE.BufferGeometry().setFromPoints([v(.08,3.05,0),v(.08,.75,0),v(.08,.75,1.2)]);sailGeo.computeVertexNormals();
-  const sailMat=M.white.clone();sailMat.side=THREE.DoubleSide;mesh(sailboat,sailGeo,sailMat);
-  const jib=new THREE.BufferGeometry().setFromPoints([v(.06,2.6,0),v(.06,.7,0),v(.06,.7,-.95)]);jib.computeVertexNormals();
-  const jibMat=M.gold.clone();jibMat.side=THREE.DoubleSide;mesh(sailboat,jib,jibMat);
-  consolidate(sailboat);
-
-  const smoke=[];
-  const smokeOrigins=[...trains.map(train=>({train})),...chimneys.slice(0,7).map(position=>({position}))];
-  smokeOrigins.forEach((origin,j)=>{
-    const count=origin.train?9:4;
-    for(let i=0;i<count;i++){
-      const mat=new THREE.MeshStandardMaterial({color:C.white,flatShading:true,transparent:true,opacity:.5,depthWrite:false,roughness:1});
-      const puff=ico(scene,0,0,0,.2,.2,.2,mat,0);puff.castShadow=false;puff.receiveShadow=false;
-      smoke.push({puff,origin,phase:i/count,cycle:origin.train?4.0:5.8,seed:j*.7});
-    }
-  });
-
-  const balloon=group(scene,-30,18,11);
-  const profile=[[.0,-2.3],[.65,-1.9],[1.65,-.8],[2.05,.5],[1.8,1.8],[.95,2.6],[0,2.85]].map(([x,y])=>new THREE.Vector2(x,y));
+  const bx=-world.bounds.width*.33,bz=world.bounds.depth*.20,by=surfaceHeight(world,bx,bz)+14;
+  const balloon=group(root,bx,by,bz);
+  const profile=[[0,-2.0],[.55,-1.65],[1.4,-.65],[1.75,.5],[1.5,1.6],[.8,2.25],[0,2.5]].map(([x,y])=>new THREE.Vector2(x,y));
   for(let i=0;i<10;i++)mesh(balloon,new THREE.LatheGeometry(profile,1,i/10*Math.PI*2,Math.PI*2/10),i%2?'trim':'redLight');
-  box(balloon,0,-3.3,0,.85,.65,.74,'timber');
-  box(balloon,0,-2.98,0,.95,.13,.85,'gold');
-  for(const x of [-.36,.36])for(const z of [-.28,.28])beam(balloon,v(x,-3,z),v(x*.95,-1.9,z*.95),.035,'timber');
+  box(balloon,0,-2.9,0,.72,.55,.64,'timber');
+  box(balloon,0,-2.62,0,.80,.10,.72,'gold');
+  for(const x of [-.30,.30])for(const z of [-.25,.25])beam(balloon,v(x,-2.65,z),v(x,-1.65,z),.035,'timber');
   consolidate(balloon);
-
   const birds=[];
-  for(let i=0;i<7;i++){
-    const g=group(scene);const left=group(g),right=group(g);
-    beam(left,v(0,0,0),v(-.35,.09,.1),.065,'white');beam(left,v(-.35,.09,.1),v(-.61,.01,.22),.05,'white');
-    beam(right,v(0,0,0),v(.35,.09,.1),.065,'white');beam(right,v(.35,.09,.1),v(.61,.01,.22),.05,'white');
-    ico(g,0,0,0,.07,.07,.23,'white');
-    birds.push({g,left,right,phase:i*.7});
+  for(let i=0;i<5;i++){
+    const g=group(root),left=group(g),right=group(g);
+    beam(left,v(0,0,0),v(-.48,.10,.17),.065,'white');
+    beam(right,v(0,0,0),v(.48,.10,.17),.065,'white');
+    ico(g,0,0,0,.07,.07,.19,'white');consolidate(left);consolidate(right);birds.push({g,left,right});
   }
-
-  return {update(time){
-    ripples.forEach(({mesh,t,offset,phase})=>{
-      const p=river.getPointAt((t+time*.0017)%1).add(offset);
-      mesh.visible=inIsland(p.x,p.z,.4);
-      mesh.position.set(p.x,.115,p.z);mesh.scale.x=.6+Math.sin(time*.9+phase)*.3;
-    });
-    const t=.5+Math.sin(time*.011)*.29,p=river.getPointAt(t),d=river.getTangentAt(t);
-    boat.position.copy(p).add(v(0,Math.sin(time*1.7)*.035,0));boat.rotation.y=Math.atan2(d.x,d.z);
-    sailboat.rotation.z=Math.sin(time*.8)*.035;
-    smoke.forEach(({puff,origin,phase,cycle,seed})=>{
-      const age=(time/cycle+phase)%1;
-      const p=origin.train?origin.train.parts[0].localToWorld(v(0,1.95,.78)):origin.position;
-      puff.position.copy(p).add(v(age*2.7,age*3.7,age*.8));
-      const size=(origin.train?.15:.09)+age*.53;
-      puff.scale.set(size,size*.89,size);puff.material.opacity=(1-age)*.49;
-      puff.rotation.set(age+seed,age*2,seed);
-    });
-    windmills.forEach(w=>w.rotation.z=time*.23);
-    balloon.position.y=18+Math.sin(time*.35)*.35;balloon.rotation.y=Math.sin(time*.07)*.15;
-    birds.forEach(({g,left,right,phase},i)=>{
-      const angle=time*.045+phase*.07;
-      g.position.set(4+Math.cos(angle)*10+i*.8,15+Math.sin(time*.6+phase)*.25+i*.2,4+Math.sin(angle)*6-i*.9);
-      g.rotation.y=-angle;
-      left.rotation.z=Math.sin(time*4.5+phase)*.32;right.rotation.z=-left.rotation.z;
+  const flightY=Math.max(10,...world.mountains.map(m=>m.height+3));
+  return {root,update(time){
+    phases.forEach((phase,i)=>{
+      const p=sampleLine(world.river,(phase.s+time*.18)%world.river.length);
+      const nx=p.tangent.z,nz=-p.tangent.x;
+      const x=p.x+nx*phase.offset,z=p.z+nz*phase.offset;
+      dummy.position.set(x,world.river.y+.05,z);dummy.rotation.set(0,p.angle+Math.PI/2,0);
+      dummy.scale.set(inWorld(world,x,z,.65)?phase.length*Math.min(1,world.river.width):0,1,Math.min(1,world.river.width/.15));dummy.updateMatrix();ripples.setMatrixAt(i,dummy.matrix);
+    });ripples.instanceMatrix.needsUpdate=true;
+    const fraction=.5-Math.cos(time*.025)*.46;
+    const p=sampleLine(world.river,boatStart+(boatEnd-boatStart)*fraction);
+    boat.position.set(p.x,world.river.y+.035,p.z);boat.rotation.y=p.angle+(Math.sin(time*.025)<0?Math.PI:0);
+    boat.visible=world.river.width>=1.6&&inWorld(world,p.x,p.z,2.2);
+    balloon.position.y=by+Math.sin(time*.35)*.3;balloon.rotation.y=Math.sin(time*.07)*.12;
+    birds.forEach(({g,left,right},i)=>{
+      const angle=time*.045+i*.09;
+      g.position.set(Math.cos(angle)*13+i*.65,flightY+i*.25,Math.sin(angle)*7-i*.75);
+      g.rotation.y=-angle;left.rotation.z=Math.sin(time*4.5+i*.7)*.35;right.rotation.z=-left.rotation.z;
     });
   }};
 }

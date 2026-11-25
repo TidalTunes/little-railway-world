@@ -1,36 +1,47 @@
 # Little Railway World
 
-[Open the live world](https://tidaltunes.github.io/little-railway-world/)
+[Open the world](https://tidaltunes.github.io/little-railway-world/) · [Explore Crossroads](https://tidaltunes.github.io/little-railway-world/?layout=crossroads)
 
-A text-free, self-running isometric miniature built with Three.js. Two steam trains connect three towns through a landscape of low-poly forests, fields, mountains, a river, and an arched viaduct. All geometry is authored in code; no external assets or services load at runtime.
+A text-free isometric railway simulation built with Three.js. Compact towns, clean low-poly silhouettes, and colorful double-ended trains stay readable from a wide view. Forests, farms, station passengers, boats, birds, and a balloon keep the miniature alive.
 
-## Run
+The default world has eight cities and ten railway links. The same deterministic planner accepts different city counts or completely authored city, river, mountain, and route coordinates. Try `?seed=68&cities=12`, or the `?layout=crossroads` preset for curved routes, a different river, and an at-grade crossing.
+
+## Run and verify
 
 ```sh
 npm ci
 npm run dev
+npm test
+npm run build
 ```
 
-## Build and publish
+Tests check asset footprints, dozens of generated worlds, rotated river crossings, full-width bridge clearance, actual excavated mountain geometry, tunnel portals, and train reservations. The production site has no external asset or service requests.
+
+## Publish
 
 ```sh
-npm run build
 npm run deploy
 ```
 
-The deploy script publishes `dist/` to the repository's `gh-pages` branch, preserving its history. GitHub Pages serves that branch's root. Source stays on `main`.
+The deploy script publishes `dist/` to this repository's `gh-pages` branch, preserving its history. GitHub Pages serves that branch's root. Source stays on `main`.
 
-## Camera
+## Inspect the world
 
-Drag to orbit, scroll or pinch to zoom, and right-drag or two-finger drag to pan. Double-click or press Home to restore the view. Arrow keys orbit, + / − zoom, and Space pauses or resumes the simulation. Reduced-motion preferences start the world paused.
+Drag to orbit, scroll or pinch to zoom, and right-drag or two-finger drag to pan. Double-click or press Home to restore the view. Arrow keys orbit, + / − zoom, Space pauses, and R generates another seed. Reduced-motion preferences start the scene paused. Animation suspends while the tab is hidden.
 
-## Art source
+## Author worlds
 
-- `src/world.js`: composition, neighborhoods, farms, and decorative details.
-- `src/landscape.js`: island, river, waterfall, mountains, trees, and fields.
-- `src/buildings.js`: houses, stations, civic buildings, and small props.
-- `src/railway.js`: continuous railway, bridges, locomotives, and carriages.
-- `src/ambience.js`: water, boats, smoke, birds, balloon, and windmill motion.
-- `src/palette.js`: deterministic randomness and the OKLCH art palette.
+See [WORLD_FORMAT.md](WORLD_FORMAT.md) for the JSON format and `window.railway` authoring API. There is no editor UI yet. World descriptions are independent of rendering, so a future editor can use the same planner and validation.
 
-Static meshes are merged by material to keep the detailed landscape inexpensive to render. The orthographic camera adapts to the viewport, device pixel ratio is capped, and animation suspends while the browser tab is hidden.
+- `src/world-model.js`: deterministic layouts, terrain intersections, stations, scenery reservations, and validation.
+- `src/geography.js`: excavated rivers, solid terrain, bridges, and actual CSG tunnel openings.
+- `src/assets.js`: reusable low-poly assets with declared silhouette bounds.
+- `src/world.js`: composition from the generated plan.
+- `src/railway.js`: physical track layers and carriage rendering.
+- `src/traffic.js`: deterministic shuttles, station dwell, and crossing reservations.
+- `src/ambience.js`: instanced water ripples, boats, birds, and balloon motion.
+- `src/palette.js`: OKLCH material palette.
+
+Scenery uses full canopy and roof footprints, not just trunks or walls. Stations reserve their full rotated platforms. Bridges span both banks including the deck corners. Rail corridors are physically subtracted from every intersected mountain; a masonry portal appears only when rock backs the complete arch. Shallow intersections become open cuttings. Crowded decorative assets are skipped instead of forced into occupied space.
+
+Static geometry is merged by material, ripples are instanced, and device pixel ratio is capped. The camera fits both portrait and landscape viewports.

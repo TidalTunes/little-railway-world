@@ -1,19 +1,22 @@
 # Little Railway World — art direction
 
 ## Physical scene
-A visitor looks down into a sunlit model railway on a quiet afternoon. The browser is a window into this miniature; the whole viewport is the artwork.
+A sunlit miniature railway. The viewport is entirely the world: no typography, labels, HUD, or gameplay controls.
 
 ## Composition
-An irregular, layered island sits against a pale blue studio backdrop. A mountain ridge anchors the far side. Three small settlements, distinct agricultural areas, and clusters of woodland create alternating dense and quiet spaces. A meandering river and continuous railway guide the eye. An arched viaduct is the principal foreground landmark.
+An irregular layered terrain tile carries a river, compact towns, small forests, and angular mountains. The default eight-city map reads clearly from a wide view. Explicit world descriptions can change the arrangement, route topology, terrain crossings, and city count. Quiet open ground makes the moving trains easy to follow.
 
 ## Color
-A full palette has deliberate material roles: green meadow and deep pine, cyan river, terracotta roofs, pale plaster, and cherry-red trains. The primary railway color begins from the impeccable hue seed at 355 degrees, adjusted toward crimson. Color definitions live in `src/palette.js` as OKLCH values, converted to linear sRGB for physically lit rendering. CSS uses OKLCH directly.
+Green meadow, deep pine, cyan water, terracotta roofs, pale plaster, and colorful trains. Every material has a deliberate role. Definitions in `src/palette.js` use OKLCH converted to linear sRGB; the page background uses OKLCH directly.
 
-## Form and light
-Flat-shaded geometry, angular tree crowns, pitched roofs, chamfer-like rocky edges, readable train silhouettes, and small contrasting details. Directional afternoon sunlight with cool fill and contact shadows gives a tangible scale-model quality. No textures or typography are required.
+## Form and scale
+Small, consistent silhouettes: two-tier pines, faceted broadleaf crowns, simple pitched houses, a few taller civic landmarks, compact station platforms, and double-ended railcars. Details remain within each asset's declared footprint. Platform passengers, benches, crop rows, hay bales, sheep, and roof trim reward a closer look without overwhelming the wide view.
+
+## Construction rules
+The world planner reserves full roofs, canopies, station rectangles, and track corridors. Water is cut out of the ground, bridge decks span the whole bank crossing, and tunnels are actual excavations. Mountain approaches become cuttings when there is insufficient roof cover. Ballast, sleepers, rails, and wheels meet at explicit elevations. These rules apply to every layout.
 
 ## Motion
-Two trains maintain distance on the same continuous route. Carriages sample their own position and tangent so the train bends around curves. Smoke rises, boats drift, birds circle, windmill sails turn, and a balloon bobs. Reduced motion freezes ambient movement; Space provides manual pause.
+Each route has a shuttle that dwells and reverses at its terminal stops. Individual carriages follow the route. Double-ended trains change velocity without turning around or jumping to another track. Crossing reservations keep whole trains apart. A small boat, water ripples, birds, and balloon provide quieter background movement. Space pauses motion; reduced-motion preferences start paused.
 
-## Interface
-No visible text, labels, menus, HUD, score, or gameplay. Camera gestures and keyboard controls support inspection without an interface overlay. The canvas has a screen-reader description and a visible focus outline only during keyboard use.
+## Inspection
+Orthographic camera gestures and keyboard shortcuts allow inspection. R generates the next seed. A JSON authoring API supports future editing, with no editor UI in this iteration. The canvas has a screen-reader description and a focus outline only during keyboard use.

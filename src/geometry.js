@@ -66,10 +66,11 @@ export function ribbon(parent, points, width, mat, yOffset=0) {
 export function consolidate(root) {
   root.updateMatrixWorld(true);
   const inverse=root.matrixWorld.clone().invert();
-  const batches=new Map();
+  const batches=new Map(),originals=new Set();
   root.traverse(node=>{
     if(!node.isMesh) return;
     const material=node.material;
+    if(node.geometry!==unitBox)originals.add(node.geometry);
     if(!batches.has(material))batches.set(material,[]);
     const geometry=node.geometry.index?node.geometry.toNonIndexed():node.geometry.clone();
     geometry.deleteAttribute('uv');geometry.deleteAttribute('color');geometry.deleteAttribute('tangent');
@@ -82,5 +83,6 @@ export function consolidate(root) {
     mesh(root,merged,mat);
     geometries.forEach(g=>g.dispose());
   }
+  originals.forEach(geometry=>geometry.dispose());
   return root;
 }
