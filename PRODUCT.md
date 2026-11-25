@@ -5,7 +5,7 @@
 brand
 
 ## Users and purpose
-A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with readable art, a reusable world-generation system, and three camera distances: a flat map, an isometric world, and an overhead close view with train following. There is no gameplay, editor UI, or visible text.
+A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with a sixteen-city showcase, reusable world generation, player ownership colors, and city development levels 1–10. Three camera distances offer a flat network map, an isometric world, and an overhead close view with train following. There is no gameplay, editor UI, or visible text.
 
 ## Direction from the brief
 Low-poly trains, isometric trees, miniature cities connected by working railway routes, and small details that make the landscape feel alive. Publish iterations to the existing GitHub Pages site. Support authored city and route layouts subject to geometric feasibility, automatic river bridges and mountain tunnels, and strict asset clearance. Let users zoom out to understand the network and select a train to follow it closely.
@@ -13,13 +13,16 @@ Low-poly trains, isometric trees, miniature cities connected by working railway 
 ## Art decisions
 A sunlit, handmade model railway viewed from above: colored meadows, a blue river, compact towns, mountain forest, farms, and simple stone bridges. Keep the scene legible when zoomed out to many cities and trains. The emotional goals are curiosity, calm, and delight. The trains are the focal moving objects.
 
-At the farthest distance, the same geography becomes a flat illustration with mountain contours and simplified town, tree, railway, and train symbols. The close camera looks down on the miniature and follows a selected train without a separate simulation or visible control panel.
+At the farthest distance, the same geography becomes a sparse network map: broad terrain and water regions, restrained mountain contours, railways, live trains, and one city glyph per settlement. Its size and silhouette convey development, while its color identifies the owner. Individual scenery is reserved for closer views. The close camera looks down on the miniature and follows a selected train without a separate simulation or visible control panel.
+
+Cities develop from small settlements into districts with streets, apartments, civic buildings, plazas, and towers. Player color families carry consistently through their architecture and trains. Ownership and level are editable authoring data; this iteration has no progression or management actions.
 
 ## Design principles
 
 - The whole viewport is the world.
 - A believable miniature, with carefully made silhouettes and details.
 - Motion reveals the geography and connects places.
+- The far map prioritizes cities, ownership, and connections over decorative detail.
 - No HUD, labels, marketing content, scores, or game mechanics.
 - Let the user inspect the art with discreet camera gestures.
 

@@ -8,6 +8,10 @@ import {
   tree,
   cactus,
   landmark,
+  apartment,
+  civic,
+  plaza,
+  tower,
   farmPatch,
   sheep,
   person,
@@ -15,8 +19,11 @@ import {
 } from '../src/assets.js';
 import { generateWorld } from '../src/world-model.js';
 import { buildMountains } from '../src/geography.js';
+import { createPlayerPalette } from '../src/player-palette.js';
+import { buildWorld } from '../src/world.js';
+import { M } from '../src/palette.js';
 
-const builders = {house, station, tree, cactus, landmark, farmPatch, sheep, person, trainCar: buildTrainCar};
+const builders = {house, station, tree, cactus, landmark, apartment, civic, plaza, tower, farmPatch, sheep, person, trainCar: buildTrainCar};
 const epsilon = 1e-5;
 
 function checkBounds(name, variant, rotation, scale) {
@@ -72,7 +79,7 @@ function checkBounds(name, variant, rotation, scale) {
 
 for (const name of Object.keys(builders)) {
   test(`${name} variants stay inside their declared footprint and height`, () => {
-    const scales = ['house', 'tree', 'cactus'].includes(name) ? [.7, 1, 1.3] : [1];
+    const scales = ['house', 'tree', 'cactus', 'landmark', 'apartment', 'civic', 'plaza', 'tower'].includes(name) ? [.7, 1, 1.3] : [1];
     for (let variant = -1; variant < 7; variant++) {
       for (const rotation of [0, .47, Math.PI / 2]) {
         for (const scale of scales) checkBounds(name, variant, rotation, scale);
@@ -84,6 +91,54 @@ for (const name of Object.keys(builders)) {
 test('train cars fit the shared tunnel and track envelope', () => {
   assert.ok(ASSET_BOUNDS.trainCar.width <= 1.2, 'train width leaves a tunnel side gap');
   assert.ok(ASSET_BOUNDS.trainCar.height <= 1.7, 'train roof leaves tunnel headroom');
+});
+
+test('owned city assets and trains show the same owner palette on walls and roofs', () => {
+  const palette=createPlayerPalette({id:'owner',color:{l:.64,c:.14,h:245}});
+  for(const name of ['house','station','landmark','apartment','civic','plaza','tower','trainCar']){
+    for(let variant=0;variant<6;variant++){
+      const asset=builders[name](new THREE.Group(),{variant,palette,cab:true});
+      const materials=new Set();asset.traverse(mesh=>{if(mesh.isMesh)materials.add(mesh.material);});
+      assert.ok(materials.has(palette.light)||materials.has(palette.body),`${name} has owner-colored walls or body`);
+      assert.ok(materials.has(palette.trim),`${name} shares the owner trim family`);
+      if(name!=='plaza')assert.ok(materials.has(palette.roof),`${name} retains owner color in its overhead roof silhouette`);
+    }
+  }
+  Object.values(palette).forEach(material=>material.dispose());
+});
+
+test('owner train roofs remain colored across their complete overhead silhouette', () => {
+  const palette=createPlayerPalette({id:'roof-owner',color:{l:.64,c:.14,h:310}});
+  const car=buildTrainCar(new THREE.Group(),{palette,cab:true}),colors=new Set(Object.values(palette));
+  car.updateMatrixWorld(true);
+  for(const x of [-.4,0,.4])for(const z of [-.8,0,.8]){
+    const hit=new THREE.Raycaster(new THREE.Vector3(x,3,z),new THREE.Vector3(0,-1,0)).intersectObject(car,true)[0];
+    assert.ok(hit&&colors.has(hit.object.material),'owner color is visible from overhead, not hidden below a neutral roof');
+  }
+  Object.values(palette).forEach(material=>material.dispose());
+});
+
+test('city development keeps material ownership after batching and streets at ground level', () => {
+  const parent=new THREE.Group();
+  const world={outline:[[-40,-20],[40,-20],[40,20],[-40,20]],
+    river:{points:[{x:-30,y:-1.2,z:-30},{x:-30,y:-1.2,z:30}],width:4,y:-1.2},
+    cities:[{id:'city-a',ownerId:'a'},{id:'city-b',ownerId:'b'}],
+    players:[{id:'a',color:{h:25}},{id:'b',color:{h:245}}],mountains:[],lines:[],stations:[],
+    placements:[{kind:'apartment',x:-8,z:5,cityId:'city-a',variant:0},
+      {kind:'tower',x:8,z:5,cityId:'city-b',variant:2}],
+    cityStreets:[{cityId:'city-a',ownerId:'a',points:[{x:-5,z:0},{x:5,z:0}],width:1.2}]};
+  const root=buildWorld(parent,world);
+  assert.equal(root.userData.ownedMaterials.length,12,'one six-material palette is owned per player');
+  for(const id of ['a','b'])assert.ok(root.children.some(mesh=>mesh.material.name===`player-${id}-roof`),
+    'batched roof geometry retains the owner palette');
+  const materials=new Set(root.userData.ownedMaterials);
+  for(const mesh of root.children)if(mesh.material.name.startsWith('player-'))assert.ok(materials.has(mesh.material),
+    'main disposal can find every newly allocated owner material');
+  root.updateMatrixWorld(true);
+  const hit=new THREE.Raycaster(new THREE.Vector3(0,2,0),new THREE.Vector3(0,-1,0)).intersectObject(root,true)[0];
+  assert.equal(hit.object.material,M.sand);
+  assert.ok(Math.abs(hit.point.y-.026)<1e-6,'streets rest just above the terrain surface');
+  root.children.forEach(mesh=>mesh.geometry.dispose());materials.forEach(material=>material.dispose());
 });
 
 test('rendered tunnels and shallow rock cuts leave the complete train envelope open', () => {

@@ -9,6 +9,14 @@ const STEP = .05;
 const modulo = (x, length) => ((x % length) + length) % length;
 const key = (lineId, direction) => `${lineId}:${direction}`;
 
+function trainOwner(world,id,homeCityId,line){
+  const ownerId=world.trainOwners?.[id]??line?.ownerId
+    ??world.cities.find(city=>city.id===homeCityId)?.ownerId??world.players?.[0]?.id??null;
+  if(ownerId!==null&&world.players&&!world.players.some(player=>player.id===ownerId))
+    throw new TypeError(`Invalid world: train ${id} references an unknown player`);
+  return ownerId;
+}
+
 /** Arc length stays continuous through every city and around the closing seam. */
 export function sampleNetworkPath(path, distance) {
   const s = path.closed ? modulo(distance, path.length) : Math.max(0, Math.min(path.length, distance));
@@ -180,6 +188,7 @@ export function createNetworkTraffic(world) {
     for (const train of fallback.trains) {
       const line = lines.get(train.lineId);
       train.color = line.color; train.path = makePath([{ line, direction: 1 }], 0, false);
+      train.homeCityId=line.from;train.ownerId=trainOwner(world,train.id,line.from,line);
     }
     return { trains: fallback.trains, update: fallback.update, mode: 'shuttles', paths: [],
       get reservations() { return fallback.reservations; },
@@ -189,10 +198,14 @@ export function createNetworkTraffic(world) {
   for (const path of paths) {
     const cities = new Set(path.segments.flatMap(segment => [segment.line.from, segment.line.to]));
     const count = Math.max(1, Math.min(cities.size, Math.floor(path.length / 18)));
-    for (let i = 0; i < count; i++) trains.push({ id: `${path.id}-train-${i + 1}`, path,
-      color: ['coral', 'teal', 'gold', 'blue'][i % 4], distance: i / count * path.length,
-      count: 3, spacing: SPACING, halfLength: HALF_LENGTH, direction: 1,
-      speed: 2.6, active: false, waiting: false });
+    const homes=[...cities];
+    for (let i = 0; i < count; i++){
+      const id=`${path.id}-train-${i + 1}`,homeCityId=homes[i%homes.length];
+      trains.push({id,path,homeCityId,ownerId:trainOwner(world,id,homeCityId),
+        color:['coral','teal','gold','blue'][i%4],distance:i/count*path.length,
+        count:3,spacing:SPACING,halfLength:HALF_LENGTH,direction:1,
+        speed:2.6,active:false,waiting:false});
+    }
   }
   const blocks = conflictBlocks(paths), byId = new Map(trains.map(train => [train.id, train]));
   const hasCollision = (train, distance) => {

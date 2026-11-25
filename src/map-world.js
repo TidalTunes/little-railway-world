@@ -3,7 +3,7 @@ import clipping from 'polygon-clipping';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { C } from './palette.js';
 import { sampleLine } from './world-model.js';
-import { biomeDistance } from './biomes.js';
+import { playerColors } from './player-palette.js';
 import { mountainMeshData } from './mountain-shape.js';
 
 const BIOME_COLORS = {farmland:'farmland',forest:'forestFloor',plains:'grass',
@@ -13,8 +13,7 @@ const PALETTE = {
   grass:C.grass.clone().lerp(C.trim,.10), farmland:C.farmland.clone().lerp(C.trim,.08),
   forestFloor:C.forestFloor.clone().lerp(C.grass,.27), desert:C.desert.clone(),
   mountainFloor:C.mountainFloor.clone().lerp(C.grass,.25),
-  contour0:C.rock.clone().lerp(C.grass,.10), contour1:C.rockLight.clone().lerp(C.rock,.5),
-  contour2:C.rockLight.clone(), contour3:C.rockLight.clone().lerp(C.snow,.42),
+  contour0:C.rock.clone().lerp(C.grass,.18), contour1:C.rockLight.clone().lerp(C.rock,.35),
   ink:C.window.clone().lerp(C.rail,.18), paper:C.trim.clone(),
 };
 
@@ -62,16 +61,47 @@ function mountainContours(mountain,fraction){
   return polygons.length?clipping.union(...polygons):[];
 }
 
+// One symbol per settlement: a house, a civic hall, or a stepped tower.
+// Overall size changes at every level; silhouette changes only at clear tiers.
+function cityGlyph(city,player,material,sizeScale=1){
+  const level=THREE.MathUtils.clamp(Math.round(Number(city.level)||1),1,10),radius=(1.75+level*.12)*sizeScale;
+  const silhouette=level<=3
+    ?[[-.61,.48],[.61,.48],[.61,-.10],[0,-.68],[-.61,-.10]]
+    :level<=6
+      ?[[-.75,.48],[.75,.48],[.75,-.07],[.43,-.07],[.43,-.34],[0,-.68],[-.43,-.34],[-.43,-.07],[-.75,-.07]]
+      :[[-.73,.48],[.73,.48],[.73,-.07],[.39,-.07],[.39,-.40],[.18,-.40],[.18,-.74],[-.18,-.74],[-.18,-.40],[-.39,-.40],[-.39,-.07],[-.73,-.07]];
+  const colors=player?playerColors(player):{body:C.roof,trim:C.trim};
+  const tinted=(points,color,y)=>{
+    const indexed=shapeGeometry([points]),geometry=indexed.toNonIndexed();indexed.dispose();
+    geometry.translate(0,y,0);
+    const values=new Float32Array(geometry.attributes.position.count*3);
+    for(let i=0;i<values.length;i+=3){values[i]=color.r;values[i+1]=color.g;values[i+2]=color.b;}
+    geometry.setAttribute('color',new THREE.BufferAttribute(values,3));return geometry;
+  };
+  const halo=tinted(Array.from({length:20},(_,i)=>[Math.cos(i*Math.PI/10)*radius,Math.sin(i*Math.PI/10)*radius]),colors.trim,.094);
+  const body=tinted(silhouette.map(([x,z])=>[x*radius,z*radius]),colors.body,.097);
+  const geometry=mergeGeometries([halo,body],false);halo.dispose();body.dispose();
+  const glyph=new THREE.Mesh(geometry,material);glyph.name=`map-city-${city.id}`;
+  glyph.position.set(city.x,0,city.z);glyph.userData={cityId:city.id,ownerId:city.ownerId??null,level};
+  return glyph;
+}
+
 /** A flat, unlit drawing of the existing world, with no independent simulation. */
 export function buildMapWorld(parent,world){
   const root=new THREE.Group();root.name='map-world';parent.add(root);
   const staticRoot=new THREE.Group();staticRoot.name='map-static';root.add(staticRoot);
+  const cityRoot=new THREE.Group();cityRoot.name='map-cities';root.add(cityRoot);
   const trainRoot=new THREE.Group();trainRoot.name='map-trains';root.add(trainRoot);
+  const players=new Map((world.players??[]).map(player=>[player.id,player]));
+  const ownerColors=new Map([...players].map(([id,player])=>[`player:${id}:body`,playerColors(player).body]));
+  const trainColor=train=>players.has(train.state?.ownerId)?`player:${train.state.ownerId}:body`
+    :LIVERY[train.state?.color]??train.state?.color??'redLight';
+  const symbolScale=THREE.MathUtils.clamp(Math.sqrt((world.bounds?.width??130)*(world.bounds?.depth??95)/(130*95)),1,2.6);
   const materials=new Map(),batches=new Map(),ownedGeometries=new Set();
   let disposed=false;
   const material=name=>{
     if(!materials.has(name))materials.set(name,new THREE.MeshBasicMaterial({
-      name:`map-${name}`,color:PALETTE[name]??C[name]??C.trim,side:THREE.DoubleSide,toneMapped:false,
+      name:`map-${name}`,color:ownerColors.get(name)??PALETTE[name]??C[name]??C.trim,side:THREE.DoubleSide,toneMapped:false,
     }));
     return materials.get(name);
   };
@@ -83,13 +113,6 @@ export function buildMapWorld(parent,world){
     if(!batches.has(color))batches.set(color,[]);batches.get(color).push(plain);
   };
   const polygons=(multi,y,color)=>multi.forEach(rings=>add(shapeGeometry(rings),color,y));
-  const polygon=(points,y,color,x=0,z=0,rotation=0)=>add(shapeGeometry([points]),color,y,x,z,rotation);
-  const rectangle=(x,z,width,depth,y,color,rotation=0)=>polygon([
-    [-width/2,-depth/2],[width/2,-depth/2],[width/2,depth/2],[-width/2,depth/2],
-  ],y,color,x,z,rotation);
-  const circle=(x,z,radius,y,color,sides=12)=>polygon(Array.from({length:sides},(_,i)=>[
-    Math.cos(i/sides*Math.PI*2)*radius,Math.sin(i/sides*Math.PI*2)*radius,
-  ]),y,color,x,z);
   const strip=(points,width,y,color)=>{
     const vertices=[];
     for(let i=0;i<points.length-1;i++){
@@ -117,60 +140,9 @@ export function buildMapWorld(parent,world){
   }
   polygons(river,.006,'waterLight');polygons(ocean,.007,'ocean');
   for(const mountain of world.mountains){
-    [.10,.31,.53,.74].forEach((fraction,i)=>polygons(
+    [.12,.51].forEach((fraction,i)=>polygons(
       clipping.intersection(mountainContours(mountain,fraction),land),.020+i*.003,`contour${i}`));
     if(mountain.height>8)polygons(clipping.intersection(mountainContours(mountain,.84),land),.033,'snow');
-  }
-
-  for(const p of world.placements??[]){
-    const scale=p.scale??1,rotation=p.rotation??0;
-    if(p.kind==='house'){
-      rectangle(p.x,p.z,1.70*scale,1.85*scale,.044,'paper',rotation);
-      rectangle(p.x,p.z,1.38*scale,1.53*scale,.046,['roof','roofLight','roofBlue'][Math.abs(p.variant??0)%3],rotation);
-      rectangle(p.x,p.z,.12*scale,1.53*scale,.048,'paper',rotation);
-    }else if(p.kind==='landmark'){
-      circle(p.x,p.z,1.65*scale,.042,'sand');
-      rectangle(p.x,p.z,1.9*scale,2.2*scale,.044,'paper',rotation);
-      rectangle(p.x,p.z,1.45*scale,1.75*scale,.046,'roofBlue',rotation);
-      circle(p.x,p.z,.30*scale,.048,'gold',8);
-    }else if(p.kind==='farm'){
-      rectangle(p.x,p.z,3*scale,4*scale,.039,'field',rotation);
-      rectangle(p.x,p.z,2.76*scale,3.76*scale,.040,'wheat',rotation);
-      for(const offset of [-.9,0,.9]){
-        const x=p.x+Math.cos(rotation)*offset*scale,z=p.z-Math.sin(rotation)*offset*scale;
-        rectangle(x,z,.14*scale,3.5*scale,.042,'farmland',rotation);
-      }
-    }else if(p.kind==='tree'){
-      const radius=.80*scale;
-      if(p.variant==='pine'){
-        polygon([[-radius,radius*.68],[0,-radius],[radius,radius*.68]],.044,'pineLight',p.x,p.z);
-        polygon([[0,-radius],[radius,radius*.68],[0,radius*.68]],.046,'pine',p.x,p.z);
-      }else{
-        circle(p.x,p.z,radius,.044,p.variant==='gold'?'leafGold':'leaf',8);
-        circle(p.x-radius*.16,p.z-radius*.2,radius*.55,.046,p.variant==='gold'?'wheat':'leafLight',8);
-      }
-    }else if(p.kind==='cactus'){
-      rectangle(p.x,p.z,.24*scale,1.22*scale,.044,'cactus',rotation);
-      for(const side of [-1,1]){
-        const offset=.27*side*scale,x=p.x+Math.cos(rotation)*offset,z=p.z-Math.sin(rotation)*offset;
-        rectangle(x,z,.5*scale,.20*scale,.044,'cactus',rotation);
-        const tip=.47*side*scale;
-        rectangle(p.x+Math.cos(rotation)*tip-Math.sin(rotation)*.15*scale,
-          p.z-Math.sin(rotation)*tip-Math.cos(rotation)*.15*scale,.16*scale,.45*scale,.044,'cactus',rotation);
-      }
-    }else if(p.kind==='rock')circle(p.x,p.z,.43*scale,.041,p.biome==='desert'?'desertRock':'rockLight',5);
-    else if(p.kind==='sheep')circle(p.x,p.z,.23*scale,.045,'paper',8);
-  }
-
-  // Sparse wave strokes read as water without adding animated map noise.
-  if(ocean.length){
-    const xs=world.outline.map(p=>p[0]),zs=world.outline.map(p=>p[1]);
-    for(let z=Math.min(...zs)+3,row=0;z<Math.max(...zs);z+=5,row++){
-      for(let x=Math.min(...xs)+3+(row%2)*2.5;x<Math.max(...xs);x+=7){
-        if(biomeDistance(world,'ocean',x,z)<1.8)continue;
-        strip([[-1,-.12],[-.5,.12],[0,-.12],[.5,.12],[1,-.12]].map(([dx,dz])=>({x:x+dx,z:z+dz})),.12,.012,'oceanLight');
-      }
-    }
   }
 
   for(const line of world.lines){
@@ -180,11 +152,6 @@ export function buildMapWorld(parent,world){
       strip(points,.96,.075,'paper');strip(points,.42,.078,'ink');
     }
   }
-  for(const station of world.stations??[]){
-    circle(station.x,station.z,.95,.085,'paper',20);
-    circle(station.x,station.z,.59,.088,'ink',20);
-    circle(station.x,station.z,.28,.091,'paper',16);
-  }
 
   for(const [color,geometries] of batches){
     const geometry=mergeGeometries(geometries,false);ownedGeometries.add(geometry);
@@ -193,9 +160,18 @@ export function buildMapWorld(parent,world){
   }
   batches.clear();
 
-  const outline=pillGeometry(1.22,2.45),body=pillGeometry(.92,2.13);
-  const window=shapeGeometry([[[-.31,-.72],[.31,-.72],[.31,-.40],[-.31,-.40]]]);
-  for(const geometry of [outline,body,window])ownedGeometries.add(geometry);
+  const cityMaterial=new THREE.MeshBasicMaterial({name:'map-city',vertexColors:true,side:THREE.DoubleSide,toneMapped:false});
+  materials.set('city-glyph',cityMaterial);
+  for(const city of world.cities??[]){
+    const glyph=cityGlyph(city,players.get(city.ownerId),cityMaterial,symbolScale);
+    ownedGeometries.add(glyph.geometry);cityRoot.add(glyph);
+  }
+
+  // Large worlds need wider color marks, while longitudinal size and every
+  // carriage centre remain unchanged so adjacent cars keep their real spacing.
+  const trainWidthScale=Math.min(symbolScale,1.8);
+  const outline=pillGeometry(1.22*trainWidthScale,2.45),body=pillGeometry(.92*trainWidthScale,2.13);
+  for(const geometry of [outline,body])ownedGeometries.add(geometry);
   const position=new THREE.Vector3(),forward=new THREE.Vector3(),quaternion=new THREE.Quaternion();
   const rotation=new THREE.Quaternion(),scale=new THREE.Vector3(),matrix=new THREE.Matrix4();
   let signature='',instances=[];
@@ -205,18 +181,18 @@ export function buildMapWorld(parent,world){
   };
   function update(trains=[]){
     if(disposed)return;
-    const next=trains.map((train,i)=>`${train.state?.id??i}:${train.state?.color??'coral'}:${train.parts.length}`).join('|');
+    const next=trains.map((train,i)=>`${train.state?.id??i}:${trainColor(train)}:${train.parts.length}`).join('|');
     if(next!==signature){
       trainRoot.children.forEach(mesh=>mesh.dispose());trainRoot.clear();instances=[];signature=next;
       const cars=trains.flatMap(train=>train.parts.map(part=>({train,part}))),count=cars.length;
       if(count){
         const outlines=addInstances(outline,'paper',count,'map-train-outlines');
-        const windows=addInstances(window,'ink',count,'map-train-windows'),colors=new Map();
-        for(const {train} of cars){const color=LIVERY[train.state?.color]??train.state?.color??'redLight';colors.set(color,(colors.get(color)??0)+1);}
+        const colors=new Map();
+        for(const {train} of cars){const color=trainColor(train);colors.set(color,(colors.get(color)??0)+1);}
         const bodies=new Map([...colors].map(([color,count])=>[color,{mesh:addInstances(body,color,count,`map-train-${color}`),next:0}]));
         cars.forEach(({train},i)=>{
-          const body=bodies.get(LIVERY[train.state?.color]??train.state?.color??'redLight');
-          instances.push([{mesh:outlines,index:i,y:.120},{mesh:body.mesh,index:body.next++,y:.123},{mesh:windows,index:i,y:.126}]);
+          const body=bodies.get(trainColor(train));
+          instances.push([{mesh:outlines,index:i,y:.120},{mesh:body.mesh,index:body.next++,y:.123}]);
         });
       }
     }

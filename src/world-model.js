@@ -1,6 +1,7 @@
 import { createBiomes, biomeAt, biomeDistance, fitsBiome } from './biomes.js';
 import { createAlignment, combineAlignments, straightSegment, sampleAlignment, sampleAlignmentPoints } from './alignments.js';
 import { mountainSurfaceHeight } from './mountain-shape.js';
+import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
 /**
  * Deterministic, renderer-independent railway world planner.
  *
@@ -19,7 +20,7 @@ export const WORLD_DEFAULTS = Object.freeze({
 });
 export const CLEARANCES = Object.freeze({
   trackHalfWidth: 1.05, routeEdge: 1.35, cuttingHalfWidth: 1.08, track: 1.45, riverBank: .8, mountain: .35,
-  objects: .32, worldEdge: .75, city: 1.25, stationOffset: 3,
+  objects: .32, street: .28, worldEdge: .75, city: 1.25, stationOffset: 3,
   stationLength: 6.4, stationWidth: 2.4, stationEndDistance: 7,
   tunnelRoofHeight: 3.9, tunnelArchRadius: 1.4, tunnelArchSpring: 1.8, tunnelRockCover: .1, bridgeBank: 2.2, maximumGrade: .12,
 });
@@ -178,7 +179,7 @@ function assert(condition, message) { if (!condition) throw new TypeError(`Inval
 function normalizeCities(input, bounds, random) {
   if (input.cities) {
     assert(Array.isArray(input.cities)&&input.cities.length>=2,'at least two cities are required');
-    const cities=input.cities.map((city,i)=>({...city,id:String(city.id??`city-${i+1}`),...point(city,0),radius:city.radius??WORLD_DEFAULTS.cityRadius,stationIds:[]}));
+    const cities=input.cities.map((city,i)=>({...city,id:String(city.id??`city-${i+1}`),...point(city,0),radius:city.radius??cityDevelopment(city.level??3).radius,stationIds:[]}));
     assert(cities.every(c=>finitePoint(c)&&Number.isFinite(c.radius)&&c.radius>0),'cities require finite x/z and positive radii');
     assert(new Set(cities.map(c=>c.id)).size===cities.length,'city IDs must be unique');
     return cities;
@@ -235,7 +236,7 @@ function placeStations(world) {
         const d=from?endDistance:line.length-endDistance,p=sampleLine(line,d);
         for(const side of [-1,1]){
           const nx=-p.tangent.z,nz=p.tangent.x;
-          const station={id:`station-${city.id}`,kind:'station',cityId:city.id,lineId:line.id,distance:d,
+          const station={id:`station-${city.id}`,kind:'station',cityId:city.id,ownerId:city.ownerId,lineId:line.id,distance:d,
             x:p.x+nx*CLEARANCES.stationOffset*side,y:0,z:p.z+nz*CLEARANCES.stationOffset*side,
             rotation:-Math.atan2(p.tangent.z,p.tangent.x)+(side>0?Math.PI:0),side,
             radius:Math.hypot(CLEARANCES.stationLength/2,CLEARANCES.stationWidth/2),
@@ -276,21 +277,104 @@ function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   if(cityId&&world.cities.some(c=>c.id!==cityId&&distance(item,c)<c.radius+r*.5))return false;
   if(world.stations.some(s=>distance(item,s)<r+s.radius+CLEARANCES.objects))return false;
   if(world.placements.some(p=>distance(item,p)<r+p.radius+CLEARANCES.objects))return false;
+  if((world.cityStreets??[]).some(street=>distanceToLine(street,item.x,item.z)<r+street.width/2+CLEARANCES.street))return false;
   return true;
 }
+/** Streets form one connected dry-land graph, with buildings facing its edges. */
+function placeCityDevelopment(world) {
+  const dry=['farmland','forest','plains','desert'];
+  for(const city of world.cities){
+    const spec=city.development,rng=cityRandom(world.seed,city.id),axis=city.railAxis??{x:1,z:0};
+    const normal={x:-axis.z,z:axis.x},width=spec.streetWidth,spacing=spec.streetSpacing;
+    const local=(u,v,side)=>({x:city.x+axis.x*u+normal.x*v*side,z:city.z+axis.z*u+normal.z*v*side});
+    const streetPointIsClear=p=>{
+      const r=width/2+.12;
+      if(distance(p,city)>city.radius-r||!inWorld(world,p.x,p.z,r+CLEARANCES.worldEdge))return false;
+      if(!fitsBiome(world,dry,p.x,p.z,r)||distanceToRoutes(world,p.x,p.z)<CLEARANCES.track+r)return false;
+      if(distanceToRiver(world,p.x,p.z)<world.river.width/2+CLEARANCES.riverBank+r)return false;
+      if(world.mountains.some(m=>distance(p,m)<m.radius+r+CLEARANCES.mountain))return false;
+      if(world.cities.some(c=>c.id!==city.id&&distance(p,c)<c.radius+r*.5))return false;
+      if(world.stations.some(s=>distanceToRectangle(s,p.x,p.z)<r))return false;
+      return true;
+    };
+    const edgeIsClear=(a,b)=>{
+      const n=Math.ceil(distance(a,b)/.6);
+      for(let i=0;i<=n;i++)if(!streetPointIsClear({x:lerp(a.x,b.x,i/n),z:lerp(a.z,b.z,i/n)}))return false;
+      return true;
+    };
+    const planSide=side=>{
+      const nodes=new Map(),edges=[],queue=[];
+      // A station-back street is separated from the rail corridor. No road
+      // crosses the tracks, even where several rail branches meet at a city.
+      for(const [i,j] of [[0,0],[-1,0],[1,0],[0,1]]){
+        const p=local(i*spacing,5.1+j*spacing,side);
+        if(streetPointIsClear(p)){nodes.set(`${i},${j}`,{i,j,p});queue.push({i,j,p});break;}
+      }
+      for(let cursor=0;cursor<queue.length;cursor++){
+        const node=queue[cursor];
+        for(const [di,dj] of [[-1,0],[1,0],[0,1],[0,-1]]){
+          const i=node.i+di,j=node.j+dj,key=`${i},${j}`;
+          if(j<0||Math.abs(i)>5||j>5)continue;
+          const p=local(i*spacing,5.1+j*spacing,side);
+          if(!edgeIsClear(node.p,p))continue;
+          if(!nodes.has(key)){nodes.set(key,{i,j,p});queue.push({i,j,p});}
+          if(node.i<i||node.j<j)edges.push({points:[node.p,p],width});
+        }
+      }
+      return {side,edges};
+    };
+    const plans=[planSide(1),planSide(-1)];
+    const station=world.stations.find(s=>s.cityId===city.id);
+    const stationSide=station?Math.sign((station.x-city.x)*normal.x+(station.z-city.z)*normal.z):rng()<.5?1:-1;
+    plans.sort((a,b)=>b.edges.length-a.edges.length||(a.side===stationSide?-1:1));
+    const plan=plans[0];
+    // Very small authored footprints can have only a short pedestrian lane.
+    if(!plan.edges.length){
+      for(const side of [stationSide,-stationSide]){
+        const a=local(-1.5,5.1,side),b=local(1.5,5.1,side);
+        if(edgeIsClear(a,b)){plan.edges.push({points:[a,b],width});break;}
+      }
+    }
+    const streets=plan.edges.map((e,i)=>({id:`street-${city.id}-${i+1}`,cityId:city.id,ownerId:city.ownerId,...e}));
+    world.cityStreets.push(...streets);
+    spec.streetCount=streets.length;
+    spec.connectionCount=world.lines.filter(l=>l.from===city.id||l.to===city.id).length;
+    if(!streets.length)continue;
+    const priority=spec.features.filter(k=>k!=='house').reverse();
+    const kindFor=i=>{
+      if(i<priority.length)return priority[i];
+      const value=rng();
+      if(city.level>=8&&value<.26)return 'tower';
+      if(city.level>=4&&value<(city.level>=8?.76:.6))return 'apartment';
+      return 'house';
+    };
+    let placed=0;
+    const tryPlaceBuilding=kind=>{
+      const radius=CITY_ASSET_RADII[kind];
+      for(let attempt=0;attempt<130;attempt++){
+        const street=streets[Math.floor(rng()*streets.length)],[a,b]=street.points;
+        const length=distance(a,b),ux=(b.x-a.x)/length,uz=(b.z-a.z)/length;
+        const t=rng(),side=rng()<.5?-1:1,offset=radius+width/2+CLEARANCES.street+.12;
+        const item={id:`city-${city.id}-building-${placed+1}`,kind,cityId:city.id,ownerId:city.ownerId,
+          x:lerp(a.x,b.x,t)-uz*offset*side,z:lerp(a.z,b.z,t)+ux*offset*side,y:0,radius,scale:1,
+          variant:Math.floor(rng()*8),rotation:-Math.atan2(uz,ux)+(side>0?Math.PI:0)};
+        if(distance(item,city)+radius>city.radius)continue;
+        if(!canPlace(world,item,{cityId:city.id}))continue;
+        world.placements.push({...item,biome:biomeAt(world,item.x,item.z)});placed++;return true;
+      }
+      return false;
+    };
+    for(let lot=0;lot<spec.buildingBudget;lot++)tryPlaceBuilding(kindFor(lot));
+    // Small street-front houses fill the spaces left between larger civic and
+    // residential buildings; their silhouettes retain the same strict margins.
+    for(let missed=0;placed<spec.buildingBudget&&missed<3;)if(!tryPlaceBuilding('house'))missed++;else missed=0;
+    spec.placedBuildings=placed;
+    spec.placedFeatures=[...new Set(world.placements.filter(p=>p.cityId===city.id).map(p=>p.kind))];
+  }
+}
+
 function placeScenery(world,random,density) {
   const add=item=>world.placements.push({id:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,biome:biomeAt(world,item.x,item.z),...item});
-  for(let ci=0;ci<world.cities.length;ci++){
-    const city=world.cities[ci];
-    // Candidates are independent of previous accepted candidates: stable and repeatable.
-    for(let attempt=0,accepted=0;attempt<200&&accepted<7;attempt++){
-      const a=random()*Math.PI*2,r=Math.sqrt(random())*Math.max(2,city.radius-1.8);
-      const kind=accepted===0?'landmark':'house',radius=kind==='landmark'?2:1.56;
-      const item={kind,cityId:city.id,x:city.x+Math.cos(a)*r,z:city.z+Math.sin(a)*r,radius,scale:1,
-        variant:kind==='landmark'?ci%3:Math.floor(random()*6),rotation:Math.round(a/(Math.PI/2))*Math.PI/2};
-      if(canPlace(world,item,{cityId:city.id})){add(item);accepted++;}
-    }
-  }
   const scale=Math.sqrt(world.bounds.width*world.bounds.depth/(130*95));
   const candidate=()=>({x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94});
   const farmCount=Math.max(2,Math.round(12*density*scale));
@@ -461,10 +545,24 @@ export function generateWorld(input = {}) {
   const seed=input.seed??WORLD_DEFAULTS.seed,random=seededRandom(seed);
   const bounds={width:Number(input.bounds?.width??WORLD_DEFAULTS.width),depth:Number(input.bounds?.depth??WORLD_DEFAULTS.depth)};
   assert(Number.isFinite(bounds.width)&&Number.isFinite(bounds.depth)&&bounds.width>=35&&bounds.depth>=30,'bounds must be finite and at least 35 × 30');
+  const players=normalizePlayers(input.players);
   const cities=normalizeCities(input,bounds,random);
+  const playerIds=new Set(players.map(p=>p.id));
+  for(const [cityIndex,city] of cities.entries()){
+    const rng=cityRandom(seed,city.id);
+    city.level=city.level??(input.cities?1+Math.floor(rng()*10):3);
+    const specification=cityDevelopment(city.level);
+    city.ownerId=String(city.ownerId??players[Math.floor(cityRandom(seed,`${city.id}:owner`)()*players.length)].id);
+    assert(playerIds.has(city.ownerId),`city ${city.id} references unknown owner ${city.ownerId}`);
+    if(input.cities&&input.cities[cityIndex].radius==null)city.radius=specification.radius;
+    city.development={...specification,radius:city.radius,variantSeed:`${seed}:city:${city.id}`,placedBuildings:0,streetCount:0,connectionCount:0};
+  }
+  const trainOwners={...(input.trainOwners??{})};
+  assert(input.trainOwners===undefined||(input.trainOwners&&typeof input.trainOwners==='object'&&!Array.isArray(input.trainOwners)),'trainOwners must be an object keyed by train ID');
+  assert(Object.values(trainOwners).every(id=>playerIds.has(id)),'trainOwners references an unknown player');
   const outline=input.outline?input.outline.map(p=>[Number(p[0]),Number(p[1])]):makeOutline(bounds.width,bounds.depth);
   assert(outline.length>=3&&outline.every(p=>p.every(Number.isFinite)),'outline requires at least three finite points');
-  const world={version:1,seed,bounds,outline,cities,lines:[],stations:[],placements:[],junctions:[]};
+  const world={version:2,seed,bounds,outline,players,trainOwners,cities,lines:[],stations:[],placements:[],cityStreets:[],junctions:[]};
   assert(cities.every(c=>inWorld(world,c.x,c.z,.5)),'cities must be inside the world outline');
   const riverNodes=input.river?.points??[[-.64,.015],[-.42,-.025],[-.20,.035],[.02,.00],[.22,.075],[.43,.055],[.64,.015]]
     .map(([x,z])=>[x*bounds.width,z*bounds.depth]);
@@ -513,7 +611,9 @@ export function generateWorld(input = {}) {
     const middle=createAlignment(start,end,{radius:minTurnRadius,waypoints,y:WORLD_DEFAULTS.railY,
       isAllowed:p=>inWorld(world,p.x,p.z,CLEARANCES.routeEdge)});
     const alignment=combineAlignments([straightSegment(from,start),middle,straightSegment(end,to)],minTurnRadius);
-    const line={id:connection.id,from:from.id,to:to.id,color:connection.color??colors[i%colors.length],closed:false,
+    const ownerId=String(connection.ownerId??from.ownerId);
+    assert(playerIds.has(ownerId),`line ${connection.id} references unknown owner ${ownerId}`);
+    const line={id:connection.id,from:from.id,to:to.id,ownerId,color:connection.color??colors[i%colors.length],closed:false,
       fromPort:connection.fromPort,toPort:connection.toPort,alignment,
       ...sampleAlignmentPoints(alignment,WORLD_DEFAULTS.sampleSpacing),bridges:[],tunnels:[],cuts:[],stationIds:[]};
     assert(line.length>EPS,'connections must have nonzero length');
@@ -555,6 +655,7 @@ export function generateWorld(input = {}) {
   world.biomes=createBiomes(world,input.biomes);
   placeStations(world);
   world.placements=[];
+  placeCityDevelopment(world);
   placeScenery(world,random,clamp(Number(input.density??1)||0,0,3));
   return world;
 }
@@ -563,6 +664,47 @@ export function generateWorld(input = {}) {
 export function validateWorld(world) {
   const violations=[];
   const add=(type,id,detail)=>violations.push({type,id,detail});
+  const playerIds=new Set((world.players??[]).map(p=>p.id));
+  try{normalizePlayers(world.players??[]);}catch(error){add('players','world',error.message);}
+  for(const city of world.cities){
+    if(!playerIds.has(city.ownerId))add('city-owner',city.id,'City references an unknown player');
+    if(!Number.isInteger(city.level)||city.level<1||city.level>10)add('city-level',city.id,'City level must be an integer from 1 through 10');
+  }
+  for(const [id,ownerId] of Object.entries(world.trainOwners??{}))if(!playerIds.has(ownerId))add('train-owner',id,'Train references an unknown player');
+  for(const line of world.lines)if(!playerIds.has(line.ownerId))add('line-owner',line.id,'Railway references an unknown player');
+  const dry=['farmland','forest','plains','desert'];
+  for(const street of world.cityStreets??[]){
+    const city=world.cities.find(c=>c.id===street.cityId);
+    if(!city||street.ownerId!==city.ownerId)add('street-owner',street.id,'Street must belong to its existing city owner');
+    if(!Number.isFinite(street.width)||street.width<=0||street.points.length<2||!street.points.every(finitePoint)){
+      add('street-geometry',street.id,'Street requires a positive width and finite points');continue;
+    }
+    for(let i=1;i<street.points.length;i++){
+      const a=street.points[i-1],b=street.points[i],steps=Math.max(1,Math.ceil(distance(a,b)/.5)),r=street.width/2;
+      for(let j=0;j<=steps;j++){
+        const p={x:lerp(a.x,b.x,j/steps),z:lerp(a.z,b.z,j/steps)};
+        if(!inWorld(world,p.x,p.z,r+CLEARANCES.worldEdge-.001)||city&&distance(p,city)>city.radius-r+.001)add('street-edge',street.id,'Street leaves its dry city footprint');
+        if(world.biomes&&!fitsBiome(world,dry,p.x,p.z,r-.001))add('street-biome',street.id,'Street enters ocean, shore, or mountain');
+        if(distanceToRoutes(world,p.x,p.z)<r+CLEARANCES.track-.001)add('street-track',street.id,'Street enters railway clearance');
+        if(distanceToRiver(world,p.x,p.z)<r+world.river.width/2+CLEARANCES.riverBank-.001)add('street-water',street.id,'Street enters river bank');
+        if(world.mountains.some(m=>distance(p,m)<r+m.radius+CLEARANCES.mountain-.001))add('street-mountain',street.id,'Street crosses a mountain');
+        if(world.stations.some(station=>distanceToRectangle(station,p.x,p.z)<r-.001))add('street-station',street.id,'Street overlaps a station');
+      }
+    }
+  }
+  for(const city of world.cities){
+    const streets=(world.cityStreets??[]).filter(s=>s.cityId===city.id);
+    if(!streets.length)continue;
+    const key=p=>`${p.x.toFixed(5)},${p.z.toFixed(5)}`,graph=new Map();
+    for(const street of streets)for(let i=1;i<street.points.length;i++){
+      const a=key(street.points[i-1]),b=key(street.points[i]);
+      if(!graph.has(a))graph.set(a,new Set());if(!graph.has(b))graph.set(b,new Set());
+      graph.get(a).add(b);graph.get(b).add(a);
+    }
+    const visited=new Set(),queue=[graph.keys().next().value];
+    while(queue.length){const id=queue.pop();if(visited.has(id))continue;visited.add(id);queue.push(...graph.get(id));}
+    if(visited.size!==graph.size)add('street-connectivity',city.id,'City street graph is disconnected');
+  }
   for(const line of world.lines){
     if(!Number.isFinite(line.length)||line.length<=0)add('route-length',line.id,'Route length must be positive');
     if(line.alignment)for(const segment of line.alignment.segments)if(segment.type==='arc'&&segment.radius<(world.minTurnRadius??WORLD_DEFAULTS.minTurnRadius)-1e-6)add('route-curvature',line.id,'Railway bend is tighter than its minimum turning radius');
@@ -580,11 +722,14 @@ export function validateWorld(world) {
     }
   }
   for(const station of world.stations){
+    if(station.ownerId!==world.cities.find(c=>c.id===station.cityId)?.ownerId)add('station-owner',station.id,'Station must belong to its city owner');
     for(const line of world.lines)if(rectangleToLine(station,line)<CLEARANCES.trackHalfWidth+.25-.001)add('station-track',station.id,`Platform overlaps ${line.id}`);
     if(rectangleToLine(station,world.river)<world.river.width/2+CLEARANCES.riverBank-.001)add('station-water',station.id,'Platform enters river bank');
   }
   for(let i=0;i<world.placements.length;i++){
     const item=world.placements[i],r=item.radius;
+    if(item.cityId&&item.ownerId!==world.cities.find(c=>c.id===item.cityId)?.ownerId)add('asset-owner',item.id,'City asset must belong to its city owner');
+    for(const street of world.cityStreets??[])if(distanceToLine(street,item.x,item.z)<r+street.width/2+CLEARANCES.street-.001)add('asset-street',item.id,'Footprint enters a city street');
     if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],item.x,item.z,r-.001))add('asset-biome',item.id,'Footprint enters ocean, shore, or mountain');
     if(!inWorld(world,item.x,item.z,r+CLEARANCES.worldEdge-.001))add('asset-edge',item.id,'Footprint crosses island edge');
     if(distanceToRoutes(world,item.x,item.z)<r+CLEARANCES.track-.001)add('asset-track',item.id,'Footprint enters railway clearance');

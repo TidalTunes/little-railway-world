@@ -3,6 +3,7 @@ import { buildTrainCar } from './assets.js';
 import { buildBridge } from './geography.js';
 import { sampleLine } from './world-model.js';
 import { createNetworkTraffic } from './network-traffic.js';
+import { createPlayerPalette } from './player-palette.js';
 
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 
@@ -36,9 +37,12 @@ export function buildRailways(parent,world){
 // Reversible shuttles remain available for authored networks without a circuit.
 export function makeTrains(parent,world){
   const traffic=createNetworkTraffic(world);
+  const palettes=new Map((world.players??[]).map(player=>[player.id,createPlayerPalette(player)]));
+  parent.userData.ownedMaterials=[...(parent.userData.ownedMaterials??[]),
+    ...[...palettes.values()].flatMap(palette=>Object.values(palette))];
   const trains=traffic.trains.map(state=>{
     const parts=Array.from({length:state.count},(_,i)=>consolidate(buildTrainCar(parent,{
-      color:LIVERY[state.color]??'redLight',cab:i===0||i===state.count-1,
+      color:LIVERY[state.color]??'redLight',palette:palettes.get(state.ownerId),cab:i===0||i===state.count-1,
     })));
     parts.forEach(part=>{part.userData.trainId=state.id;});
     return {state,parts,update(){

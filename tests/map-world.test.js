@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { generateWorld } from '../src/world-model.js';
 import { buildMapWorld } from '../src/map-world.js';
+import { playerColors } from '../src/player-palette.js';
 
 test('the map draws the complete world as a small set of flat unlit batches', () => {
   const world=generateWorld(),parent=new THREE.Group(),map=buildMapWorld(parent,world);
@@ -83,4 +84,91 @@ test('map replacement frees its owned materials, buffers and instance resources 
   map.dispose();map.dispose();map.update([]);
   assert.equal(parent.children.length,0,'disposing also detaches the map');
   for(const count of disposed.values())assert.equal(count,1,'per-map GPU resources are disposed once');
+});
+
+test('far-map geometry depends on geography and cities, never the number of decorative assets or stations', () => {
+  const world=generateWorld({cityCount:16,density:0});
+  const plain=buildMapWorld(new THREE.Group(),{...world,placements:[],stations:[]});
+  const kinds=['house','landmark','tree','farm','rock','cactus','sheep'];
+  const detailed=buildMapWorld(new THREE.Group(),{...world,
+    placements:Array.from({length:1400},(_,i)=>({kind:kinds[i%kinds.length],x:i%30,z:i%20,scale:1,variant:i%3})),
+    stations:Array.from({length:50},(_,i)=>({x:i,z:i})),
+  });
+  const staticGeometry=map=>map.root.getObjectByName('map-static').children.map(mesh=>({
+    name:mesh.name,positions:Array.from(mesh.geometry.attributes.position.array),
+  }));
+  assert.deepEqual(staticGeometry(detailed),staticGeometry(plain),
+    'zoomed-out network summaries do not inherit individual houses, trees, fields, rocks, or station marks');
+  assert.equal(detailed.root.getObjectByName('map-cities').children.length,16);
+  assert.ok(detailed.root.getObjectByName('map-static').children.length<20,
+    'broad terrain and rail colors keep the static material set restrained');
+  plain.dispose();detailed.dispose();
+});
+
+test('one city glyph encodes ownership and steadily increasing development across all ten levels', () => {
+  const players=[{id:'orchid',color:{l:.62,c:.13,h:310}},{id:'copper',color:{l:.64,c:.14,h:38}}];
+  const world=generateWorld({cityCount:10,density:0});
+  world.players=players;
+  world.cities.forEach((city,i)=>Object.assign(city,{ownerId:players[i%2].id,level:i+1}));
+  const map=buildMapWorld(new THREE.Group(),world),cityRoot=map.root.getObjectByName('map-cities');
+  assert.equal(cityRoot.children.length,world.cities.length,'each city has exactly one symbol');
+  let previousSize=0;
+  for(const city of world.cities){
+    const glyph=cityRoot.getObjectByName(`map-city-${city.id}`);
+    assert.ok(glyph?.isMesh);assert.equal(glyph.children.length,0,'a city is one merged glyph, not a building cluster');
+    assert.equal(glyph.userData.level,city.level);assert.equal(glyph.userData.ownerId,city.ownerId);
+    assert.equal(glyph.position.x,city.x);assert.equal(glyph.position.z,city.z);
+    glyph.geometry.computeBoundingBox();
+    const size=glyph.geometry.boundingBox.getSize(new THREE.Vector3());
+    assert.ok(size.x>previousSize,'every development level has a visibly larger footprint');previousSize=size.x;
+    const colors=glyph.geometry.attributes.color,owner=playerColors(players.find(player=>player.id===city.ownerId)).body;
+    assert.ok(Array.from({length:colors.count},(_,i)=>i).some(i=>
+      Math.abs(colors.getX(i)-owner.r)<1e-6&&Math.abs(colors.getY(i)-owner.g)<1e-6&&Math.abs(colors.getZ(i)-owner.b)<1e-6),
+    'city ink comes from its owner palette');
+    assert.equal(glyph.material.map,null);assert.equal(glyph.material.toneMapped,false);
+    const positions=glyph.geometry.attributes.position;
+    assert.ok(positions.count<120,'development adds only a concise silhouette, never fine scenery');
+    for(let i=0;i<positions.count;i++)assert.ok(Number.isFinite(positions.getX(i))&&Number.isFinite(positions.getZ(i)));
+  }
+  map.dispose();
+});
+
+test('map train colors use stable player ownership and re-batch when ownership changes', () => {
+  const world=generateWorld({density:0});
+  world.players=[{id:'orchid',color:{l:.62,c:.13,h:310}},{id:'copper',color:{l:.64,c:.14,h:38}}];
+  const map=buildMapWorld(new THREE.Group(),world),part=new THREE.Group();
+  const state={id:'owned-train',ownerId:'orchid',color:'teal',active:true},trains=[{state,parts:[part]}];
+  map.update(trains);
+  const orchid=map.root.getObjectByName('map-train-player:orchid:body');
+  assert.ok(orchid);assert.ok(orchid.material.color.equals(playerColors(world.players[0]).body),
+    'owner identity takes precedence over an older route livery');
+  let disposed=0;orchid.addEventListener('dispose',()=>disposed++);
+  state.ownerId='copper';map.update(trains);
+  assert.equal(disposed,1,'obsolete instance buffers are freed when the ownership grouping changes');
+  assert.equal(map.root.getObjectByName('map-train-player:orchid:body'),undefined);
+  const copper=map.root.getObjectByName('map-train-player:copper:body');
+  assert.ok(copper.material.color.equals(playerColors(world.players[1]).body));
+  assert.equal(state.ownerId,'copper','rendering does not change train ownership');
+  map.dispose();
+});
+
+test('large maps enlarge city symbols and train width without changing carriage length or positions',()=>{
+  const base=generateWorld({density:0}),wide={...base,bounds:{width:320,depth:250}};
+  const small=buildMapWorld(new THREE.Group(),base),large=buildMapWorld(new THREE.Group(),wide);
+  const glyphSize=map=>new THREE.Box3().setFromObject(map.root.getObjectByName('map-cities').children[0]).getSize(new THREE.Vector3());
+  const ratio=glyphSize(large).x/glyphSize(small).x;
+  assert.ok(ratio>2&&ratio<=2.6,'larger worlds preserve readable symbols with bounded enlargement');
+  const parts=[new THREE.Group(),new THREE.Group(),new THREE.Group()];
+  parts.forEach((part,i)=>part.position.set(7,.42,4+i*2.64));
+  const train={state:{id:'sample',color:'teal',active:true},parts};small.update([train]);large.update([train]);
+  const a=small.root.getObjectByName('map-train-outlines'),b=large.root.getObjectByName('map-train-outlines');
+  a.geometry.computeBoundingBox();b.geometry.computeBoundingBox();
+  const sizeA=a.geometry.boundingBox.getSize(new THREE.Vector3()),sizeB=b.geometry.boundingBox.getSize(new THREE.Vector3());
+  assert.ok(sizeB.x/sizeA.x>=1.5&&sizeB.x/sizeA.x<=2);
+  assert.ok(Math.abs(sizeB.z-sizeA.z)<1e-6,'carriage length is unchanged');
+  assert.ok(sizeB.z<2.64,'adjacent carriage outlines retain a longitudinal gap');
+  const matrixA=new THREE.Matrix4(),matrixB=new THREE.Matrix4();
+  for(let i=0;i<parts.length;i++){a.getMatrixAt(i,matrixA);b.getMatrixAt(i,matrixB);assert.deepEqual(matrixA.elements,matrixB.elements);}
+  assert.equal(large.root.getObjectByName('map-train-windows'),undefined,'tiny map window detail is omitted');
+  small.dispose();large.dispose();
 });

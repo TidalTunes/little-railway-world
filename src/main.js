@@ -57,8 +57,11 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
 const {navigation,controls}=view;
 let frameWidth=170,frameHeight=112,time=0;
 function dispose(root){
-  const geometries=new Set();root.traverse(node=>{if(node.geometry)geometries.add(node.geometry);});
-  geometries.forEach(geometry=>geometry.dispose());root.removeFromParent();
+  const geometries=new Set(),materials=new Set();root.traverse(node=>{
+    if(node.geometry)geometries.add(node.geometry);
+    for(const material of node.userData.ownedMaterials??[])materials.add(material);
+  });
+  geometries.forEach(geometry=>geometry.dispose());materials.forEach(material=>material.dispose());root.removeFromParent();
 }
 function fitWorld(){
   // Clear orbit inertia before a replacement world establishes its home frame.
@@ -80,7 +83,7 @@ function fitWorld(){
   model.mountains.forEach(m=>points.push(new THREE.Vector3(m.x,m.height,m.z)));
   let x=0,y=0;
   points.forEach(p=>{p.sub(controls.target).applyQuaternion(inverse);x=Math.max(x,Math.abs(p.x));y=Math.max(y,Math.abs(p.y));});
-  frameWidth=x*2+10;frameHeight=y*2+10;
+  frameWidth=x*2+Math.max(10,x*.20);frameHeight=y*2+Math.max(10,y*.20);
   resize();view.setHome();
 }
 function loadWorld(input={}){
@@ -112,8 +115,9 @@ const parameters=new URLSearchParams(location.search);
 const initial={seed:parameters.get('seed')??27};
 const cityCount=Number(parameters.get('cities'));
 if(Number.isFinite(cityCount)&&cityCount>=3&&cityCount<=20)initial.cityCount=cityCount;
-if(parameters.get('layout')==='crossroads'){
-  const response=await fetch(new URL('./worlds/crossroads.json',location.href));
+const layout=parameters.get('layout')??(parameters.has('cities')?'classic':'showcase');
+if(['crossroads','showcase'].includes(layout)){
+  const response=await fetch(new URL(`./worlds/${layout}.json`,location.href));
   if(!response.ok)throw new Error('Could not load the authored world');
   const preset=await response.json();
   if(parameters.has('seed'))preset.seed=parameters.get('seed');
@@ -145,7 +149,8 @@ window.__railway={
   get ready(){return frames>0;},
   get time(){return time;},
   get paused(){return paused;},
-  get trains(){return trains.map(t=>({x:t.parts[0].position.x,y:t.parts[0].position.y,z:t.parts[0].position.z,cars:t.parts.length}));},
+  get trains(){return trains.map(t=>({id:t.state.id,ownerId:t.state.ownerId,homeCityId:t.state.homeCityId,
+    x:t.parts[0].position.x,y:t.parts[0].position.y,z:t.parts[0].position.z,cars:t.parts.length}));},
   get render(){return {...renderer.info.render,geometries:renderer.info.memory.geometries};},
   get camera(){return {zoom:camera.zoom,width:innerWidth,height:innerHeight,mode:view.mode,mapBlend:view.blend,following:view.selected};},
 };

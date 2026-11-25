@@ -4,7 +4,9 @@ The planner accepts a JSON-compatible authoring configuration and produces a det
 
 ## Load and inspect
 
-Open `?seed=42&cities=12` for a generated world. Seeds can be numbers or strings; the `cities` parameter selects 3–20 generated cities, with 8 by default. Open `?layout=crossroads` for the authored [Crossroads configuration](public/worlds/crossroads.json): seven cities, curved connections, two river bridges, a mountain tunnel, and an interior railway crossing.
+The browser opens the authored [sixteen-city showcase](public/worlds/showcase.json) by default, also available as `?layout=showcase`. Its two connected railway loops span city development levels 1–10. `?layout=classic` uses the earlier generated layout; `?seed=42&cities=12` selects that generator with twelve cities. Seeds can be numbers or strings, and the `cities` parameter accepts 3–20. `?layout=crossroads` loads the authored [seven-city crossing preset](public/worlds/crossroads.json).
+
+The pure `generateWorld()` function and `railway.loadWorld({})` still default to the classic eight-city generator. Loading the browser showcase is a separate startup choice. A seed override changes generated variation while retaining an authored preset's city coordinates and levels.
 
 With the canvas focused, **R** changes the seed while preserving the current authoring settings. **Space** pauses motion. The browser console exposes:
 
@@ -32,8 +34,10 @@ Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, ra
 | `seed` | Number or string controlling generation. Default `27`. |
 | `bounds` | `{ width, depth }`. Default `{ width: 130, depth: 95 }`; minimum 35 × 30. |
 | `cityCount` | Generated city count, rounded and clamped to 3–20. Default 8. Ignored with explicit `cities`. |
-| `cities` | At least two `{ id?, x, z, radius? }` objects. IDs are unique; omitted IDs become `city-1`, etc. Radius defaults to `9.6` and controls the neighborhood area. |
-| `connections` | Complete array of `{ id?, from, to, points?, color? }` connections between different city IDs. |
+| `players` | Nonempty array of `{ id?, name?, color? }`. IDs are unique. Colors accept OKLCH `{ l, c, h }` or `#RRGGBB`; omitted players use the four default railway palettes. |
+| `cities` | At least two `{ id?, name?, x, z, ownerId?, level?, radius? }` objects. IDs are unique; omitted IDs become `city-1`, etc. Authored radius defaults to the development level's footprint. |
+| `connections` | Complete array of `{ id?, from, to, points?, ownerId?, color? }` connections between different city IDs. Operator defaults to the origin city's owner. |
+| `trainOwners` | Optional object mapping train IDs to player IDs. Overrides default ownership for those trains. |
 | `minTurnRadius` | Positive finite minimum radius for railway bends. Default `8`. |
 | `throatLength` | Nonnegative requested length of each straight city approach. Default `4`; shortened for closely spaced cities. |
 | `river` | `{ points, width? }`. Width defaults to `5.4`; points need at least two distinct positions. |
@@ -42,13 +46,29 @@ Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, ra
 | `outline` | Simple island polygon as `[[x, z], ...]`. Omit for the default twelve-sided tile. |
 | `density` | Scattered scenery multiplier, clamped to 0–3; default 1. City buildings and a small baseline of farms are retained independently. |
 
-Connection `points` are intermediate waypoints in travel order; city centres are added automatically at both ends. The alias `waypoints` is also accepted. Points can be `[x, z]` pairs or `{ x, z }` objects. Route colors are `coral`, `teal`, `gold`, and `blue`.
+Connection `points` are intermediate waypoints in travel order; city centres are added automatically at both ends. The alias `waypoints` is also accepted. Points can be `[x, z]` pairs or `{ x, z }` objects. Legacy route colors are `coral`, `teal`, `gold`, and `blue`; owner palettes determine the current train colors.
 
 Without explicit connections, the planner joins cities in array order into a ring. Two cities receive one connection; eight cities also receive two cross-valley connections. Explicit graphs may be disconnected. Duplicate graph edges and unrelated coincident routes are rejected.
 
 Explicit city coordinates disable automatic mountains unless `mountains` is supplied. Generated mountain candidates that do not fit safely are omitted. Authored mountains must fit inside the island and remain clear of the river and its banks.
 
 River waypoints are rounded independently of railway alignments. Place the first and last river points beyond the island edge for a river that enters and leaves the island. The renderer clips water and banks to the outline.
+
+## Players and city development
+
+Players provide a shared identity for cities and trains. The default IDs are `coral`, `teal`, `gold`, and `blue`. Custom player colors are normalized to serializable OKLCH: `l` is 0–1, `c` is 0–0.4, and finite hue values wrap into 0–360 degrees. Six-digit hexadecimal colors are converted to that format. Names remain metadata; the world displays no labels.
+
+Each city has an `ownerId` referencing a player and an integer `level` from 1 through 10. Omitted ownership is chosen deterministically from the city ID and seed. Explicit cities without levels receive stable seeded levels; the classic generator uses level 3 and retains its layout-scaled neighborhood radii. An authored city's omitted radius comes from its level; a positive explicit radius overrides it.
+
+Development controls the neighborhood footprint, building budget, street width and spacing, and available building types. Houses appear at every level; landmarks enter at level 2, apartments and plazas at level 4, civic buildings at level 6, and towers at level 8. Higher levels use larger footprints and denser districts. Geometry and placement variation use the city ID and seed, independently of the player's selected color. Actual building counts depend on safe available space.
+
+The city planner builds a connected street graph on a clear side of the railway, then places buildings facing its edges. Streets stay on dry terrain and clear tracks, river banks, shorelines, mountains, other city footprints, and station platforms. Buildings and decorative scenery reserve full clearance around streets. Constrained plots are skipped; a city can have fewer buildings or no streets when its authored footprint cannot accommodate them.
+
+`city.development` records the resolved `radius`, `buildingBudget`, `streetWidth`, `streetSpacing`, `features`, and `variantSeed`, plus generated `placedBuildings`, `streetCount`, `connectionCount`, and, where development was placed, `placedFeatures`. `world.cityStreets` contains `{ id, cityId, ownerId, points, width }`; each street's points use `{ x, z }` coordinates.
+
+`src/development.js` exports player/color normalization and development rules. `src/player-palette.js` derives `body`, `light`, `dark`, `roof`, `accent`, and `trim` colors from one player color. Those tones are shared by owned architecture and trains. Ownership and development are authoring data; this version has no resource costs, level progression, or management UI.
+
+The far map uses one owner-colored city glyph at its centre. Its size increases at every level, with a house silhouette at levels 1–3, a civic-hall silhouette at 4–6, and a stepped tower at 7–10. Broad terrain, water, restrained mountain contours, railway lines, and live train markers remain visible. Individual scenery and street/building detail belong to the closer views.
 
 ## Track geometry and city connections
 
@@ -128,13 +148,15 @@ Railway corridors require a `1.35`-unit island-edge margin. Shared city approach
 
 ## Scene plan and traffic
 
-The compiled plan has `version: 1`. In addition to the geometry and network fields above, it contains `cities`, `mountains`, `river`, `bounds`, `outline`, `seed`, and `minTurnRadius`, plus:
+The compiled plan has `version: 2`. In addition to the geometry and network fields above, it contains `players`, `trainOwners`, `cities`, `cityStreets`, `mountains`, `river`, `bounds`, `outline`, `seed`, and `minTurnRadius`, plus:
 
-- `stations`: positions, rotations, served city and line IDs, distance along the line, and platform dimensions. The planner first tries the city centre beside its straight rail axis, then offset candidates if needed.
-- `placements`: asset `kind`, position, conservative `radius`, `scale`, `rotation`, `variant`, and `biome`. City buildings also include `cityId`.
+- `stations`: positions, rotations, `ownerId`, served city and line IDs, distance along the line, and platform dimensions. The planner first tries the city centre beside its straight rail axis, then offset candidates if needed.
+- `placements`: asset `kind`, position, conservative `radius`, `scale`, `rotation`, `variant`, and `biome`. City buildings also include `cityId` and `ownerId`.
 - `junctions`: interior crossings as `{ id, x, y, z, lines: [{ lineId, distance }] }`. Recognized shared sections and mutual city endpoints are excluded.
 
 `createNetworkTraffic(world)` in `src/network-traffic.js` returns `mode`, `trains`, `paths`, `reservations`, `update(dt)`, and `sampleTrain(train, offset)`. Time is in seconds; an update of zero leaves traffic unchanged. The renderer samples every carriage separately by its offset along the network path.
+
+Each train state includes an `id`, `homeCityId`, and stable `ownerId`. A circuit train inherits its home city's owner; a shuttle inherits its line's operator. `trainOwners` overrides either default. Entering another city does not change ownership or color. Runtime train IDs and owners are available through the read-only `window.__railway.trains` diagnostics; circuit IDs have the form `circuit-1-train-1`, and shuttle IDs have the form `train-<line-id>`.
 
 The controller looks for continuous directed circuits through the city's transitions and selects a broad circuit in each component where one is found. Circuit trains pass through stations without terminal dwell. Selected circuits do not necessarily use every branch. If circuits exist in only some components, components without a circuit may have no trains. If no circuit exists anywhere, the controller falls back to `src/traffic.js` shuttles.
 
@@ -151,10 +173,10 @@ railway.loadWorld({
   seed: 'four-cities',
   bounds: { width: 130, depth: 95 },
   cities: [
-    { id: 'northwest', x: -40, z: -25 },
-    { id: 'northeast', x:  40, z: -25 },
-    { id: 'southeast', x:  40, z:  25 },
-    { id: 'southwest', x: -40, z:  25 },
+    { id: 'northwest', x: -40, z: -25, level: 2, ownerId: 'coral' },
+    { id: 'northeast', x:  40, z: -25, level: 4, ownerId: 'teal' },
+    { id: 'southeast', x:  40, z:  25, level: 6, ownerId: 'gold' },
+    { id: 'southwest', x: -40, z:  25, level: 3, ownerId: 'blue' },
   ],
   river: {
     points: [[-80, 3], [-20, 1], [20, 5], [80, 3]],
@@ -176,8 +198,8 @@ railway.loadWorld({
 
 The same seed and configuration produce the same plan within this implementation. Generation does not read the clock or share mutable random state with animation. Keep the source revision alongside configurations that need exact long-term reproduction, since generation and asset rules can change between revisions.
 
-Malformed coordinates, duplicate IDs, missing city references, invalid bounds, infeasible alignments, unsafe ocean polygons, unrelated coincident routes, and invalid mountain geography throw errors. `validateWorld(plan)` reports violations as `{ type, id, detail }`, checking route data and curvature, structures, platforms, and scenery footprints.
+Malformed coordinates, duplicate IDs, missing city or player references, invalid levels or colors, invalid bounds, infeasible alignments, unsafe ocean polygons, unrelated coincident routes, and invalid mountain geography throw errors. `validateWorld(plan)` reports violations as `{ type, id, detail }`, checking ownership, street connectivity and clearance, route data and curvature, structures, platforms, and scenery footprints.
 
 `src/world-model.js` exports `WORLD_DEFAULTS`, `CLEARANCES`, and helpers including `sampleLine`, `distanceToLine`, `distanceToRoutes`, `distanceToRiver`, `pointSegmentDistance`, `inWorld`, `mountainHeight`, `surfaceHeight`, and `worldSurface`. `worldSurface` distinguishes outside, river water, ocean, shore, mountain, and ground. Surface-height queries describe terrain before railway excavation.
 
-Run `npm test` for the tests in `tests/`. They exercise seeded generation, authored and rotated crossings, exact alignment continuity, shared render ownership, biome coverage and footprint fit, closed mountain volumes, actual tunnel and trench geometry, asset bounds, continuous circuits, and shuttle reservations.
+Run `npm test` for the tests in `tests/`. They exercise seeded generation, development and ownership, streets, map simplification and train synchronization, camera controls, authored and rotated crossings, exact alignment continuity, shared render ownership, biome coverage and footprint fit, closed mountain volumes, actual tunnel and trench geometry, asset bounds, continuous circuits, and shuttle reservations.
