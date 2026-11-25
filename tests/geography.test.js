@@ -208,7 +208,7 @@ test('river excavation keeps water, sloped banks and dry land separate at arbitr
     for (const along of [-10, 0, 10]) {
       for (const side of [-1, 1]) {
         for (const [offset, material, height] of [[0, M.waterLight, -1.17],
-          [3.1 * side, M.sand, -.585], [4 * side, M.grass, .018]]) {
+          [3.1 * side, M.sand, -.585], [4 * side, M.terrainVertex, .018]]) {
           const x = direction.x * along + direction.z * offset;
           const z = direction.z * along - direction.x * offset;
           const hits = rayHits(scene, new THREE.Vector3(x, 10, z), new THREE.Vector3(x, -4, z));

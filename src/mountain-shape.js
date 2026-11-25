@@ -113,7 +113,7 @@ export function mountainSnowHeight(mountain, x, z) {
   if(mountain.range)return rangeSnowHeight(mountain,x,z);
   const { phase } = mountainMeshData(mountain);
   const angle = Math.atan2(z - mountain.z, x - mountain.x);
-  return mountain.height * (.64 + .055 * Math.sin(angle * 3 + phase) + .028 * Math.sin(angle * 7 - phase));
+  return mountain.height * (.72 + .045 * Math.sin(angle * 3 + phase) + .025 * Math.sin(angle * 7 - phase));
 }
 
 /** Negative inside the complete mountain footprint, positive outside. */

@@ -73,7 +73,12 @@ export function consolidate(root) {
     if(node.geometry!==unitBox)originals.add(node.geometry);
     if(!batches.has(material))batches.set(material,[]);
     const geometry=node.geometry.index?node.geometry.toNonIndexed():node.geometry.clone();
-    geometry.deleteAttribute('uv');geometry.deleteAttribute('color');geometry.deleteAttribute('tangent');
+    geometry.deleteAttribute('uv');geometry.deleteAttribute('tangent');
+    if(!material.vertexColors)geometry.deleteAttribute('color');
+    else if(!geometry.attributes.color){
+      const colors=new Float32Array(geometry.attributes.position.count*3);colors.fill(1);
+      geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));
+    }
     geometry.applyMatrix4(inverse.clone().multiply(node.matrixWorld));
     batches.get(material).push(geometry);
   });

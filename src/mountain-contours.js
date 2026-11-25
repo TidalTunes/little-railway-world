@@ -27,7 +27,7 @@ export function mountainContours(mountain,fraction){
 }
 
 export function createMountainContours(mountain){
-  return {low:mountainContours(mountain,.12),high:mountainContours(mountain,.51),
+  return {low:mountainContours(mountain,.12),high:mountainContours(mountain,.62),
     snow:mountain.range?contourPolygons(mountain,(x,z)=>mountainSnowHeight(mountain,x,z))
       :mountain.height>8?mountainContours(mountain,.84):[]};
 }

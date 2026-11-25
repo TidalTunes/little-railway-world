@@ -1,12 +1,11 @@
 import cityReference from '../data/europe-cities.json' with {type:'json'};
 import geography from '../data/europe-geography.json' with {type:'json'};
 import {createEuropeRanges} from './europe-ranges.js';
+import {projectGeographic,projectGeographicHeading} from './europe-projection.js';
 
-/** Shared geographic coordinates; north is negative z and east is positive x. */
+/** Shared conformal coordinates; grid north is negative z, grid east positive x. */
 export function projectEurope(longitude,latitude){
-  const p=geography.projection;
-  return {x:(longitude-p.centralLongitude)*p.unitsPerLongitudeDegree,
-    z:(p.centralLatitude-latitude)*p.unitsPerLatitudeDegree};
+  return projectGeographic(geography.projection,longitude,latitude);
 }
 
 // Schematic railway corridors, not a survey of real railway rights of way.
@@ -23,7 +22,7 @@ const ROUTES=[
   ['lyon','barcelona',[[4.40,44.10],[3.20,43.45],[2.80,42.75],[2.75,42.05]]],
   ['barcelona','valencia',[[1.10,41.30],[.40,40.85],[-.40,40.10]]],
   ['valencia','madrid',[[-.62,38.98],[-1.85,39.05],[-2.15,40.05]]],
-  ['madrid','lisbon',[[-6.35,39.55],[-7.49,39.82],[-8.68,39.23]]],
+  ['madrid','lisbon',[[-6.35,39.55],[-7.49,39.82],[-8.50,39.23]]],
   ['lisbon','porto',[[-9.05,39.15],[-8.42,40.20],[-8.30,40.85]]],
   ['porto','paris',[[-4.70,41.65],[-2.67,42.85],[-1.47,43.48],[-.58,44.84],[.68,47.39]]],
 
@@ -76,7 +75,9 @@ export function createEuropeWorld({seed='europe-50-2025',trainCount=180}={}){
   const cities=cityReference.cities.map((city,index)=>{
     const level=Math.max(4,Math.min(10,4+Math.round(6*Math.log(city.population/minimum)/Math.log(maximum/minimum))));
     return {...city,...projectEurope(city.lon,city.lat),populationYear:cityReference.populationYear,
-      ...(city.id in STATION_HEADINGS?{railHeading:STATION_HEADINGS[city.id],throatLength:1}:{}),
+      // Model railHeading is atan2(dz,dx); the projection helper uses the
+      // train's atan2(dx,dz) convention, so convert the geographic axis once.
+      ...(city.id in STATION_HEADINGS?{railHeading:Math.PI/2-projectGeographicHeading(geography.projection,city.lon,city.lat,Math.PI/2+STATION_HEADINGS[city.id]),throatLength:1}:{}),
       level,radius:Math.min(18,9+level*.9),ownerId:owners[index%owners.length]};
   });
   for(const city of cities){

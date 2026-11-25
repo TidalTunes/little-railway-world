@@ -7,9 +7,10 @@ import {generateWorld,generateWorldRegion,worldSurface} from '../src/world-model
 import {buildMapWorld} from '../src/map-world.js';
 import {compileDetailPacket} from '../src/detail-compiler.js';
 import {biomeAt} from '../src/biomes.js';
+import {projectEurope} from '../src/europe-world.js';
 
 const geography=JSON.parse(fs.readFileSync(new URL('../data/europe-geography.json',import.meta.url),'utf8'));
-const project=(lon,lat)=>({x:(lon-9.75)*geography.projection.unitsPerLongitudeDegree,z:(50.75-lat)*36});
+const project=projectEurope;
 const rectangle=(minX,minZ,maxX,maxZ)=>[[[[minX,minZ],[maxX,minZ],[maxX,maxZ],[minX,maxZ],[minX,minZ]]]];
 let realNetwork;
 function geographicNetwork(){

@@ -4,15 +4,13 @@ import { C } from './palette.js';
 import { sampleLine } from './world-model.js';
 import { playerColors } from './player-palette.js';
 import {prepareMapTerrain} from './map-terrain.js';
-
-const BIOME_COLORS = {farmland:'farmland',forest:'forestFloor',plains:'grass',
-  desert:'desert',ocean:'ocean',mountain:'mountainFloor'};
+import {compileMapTerrainGeometry} from './map-terrain-geometry.js';
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 const PALETTE = {
   grass:C.grass.clone().lerp(C.trim,.10), farmland:C.farmland.clone().lerp(C.trim,.08),
   forestFloor:C.forestFloor.clone().lerp(C.grass,.27), desert:C.desert.clone(),
   mountainFloor:C.mountainFloor.clone().lerp(C.grass,.25),
-  contour0:C.rock.clone().lerp(C.grass,.18), contour1:C.rockLight.clone().lerp(C.rock,.35),
+  contour0:C.forestFloor.clone().lerp(C.grass,.32), contour1:C.rockLight.clone().lerp(C.grass,.20),
   ink:C.window.clone().lerp(C.rail,.18), paper:C.trim.clone(),
 };
 
@@ -71,7 +69,8 @@ export function buildMapWorld(parent,world){
   let disposed=false;
   const material=name=>{
     if(!materials.has(name))materials.set(name,new THREE.MeshBasicMaterial({
-      name:`map-${name}`,color:ownerColors.get(name)??PALETTE[name.replace('route-','')]??C[name]??C.trim,side:THREE.DoubleSide,toneMapped:false,
+      name:`map-${name}`,color:name==='terrain'?0xffffff:ownerColors.get(name)??PALETTE[name.replace('route-','')]??C[name]??C.trim,
+      vertexColors:name==='terrain',side:THREE.DoubleSide,toneMapped:false,
     }));
     const result=materials.get(name);
     if(name.startsWith('route-')&&!result.userData.routeShader){
@@ -93,7 +92,6 @@ export function buildMapWorld(parent,world){
     for(const attribute of Object.keys(plain.attributes))if(attribute!=='position'&&attribute!=='routeOffset')plain.deleteAttribute(attribute);
     if(!batches.has(color))batches.set(color,[]);batches.get(color).push(plain);
   };
-  const polygons=(multi,y,color)=>multi.forEach(rings=>add(shapeGeometry(rings),color,y));
   const strip=(points,width,y,color)=>{
     const vertices=[],offsets=[];
     for(let i=0;i<points.length-1;i++){
@@ -113,20 +111,10 @@ export function buildMapWorld(parent,world){
   };
 
   const terrain=world.mapTerrain??prepareMapTerrain(world);
-  if(terrain.meshes){
-    for(const {color,position}of terrain.meshes){
-      const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(position,3));
-      batches.set(color,[geometry]);
-    }
-  }else{
-    const {land,shores,river,ocean,biomes,mountains}=terrain;
-    polygons(land,0,'grass');polygons(shores,.003,'sand');
-    for(const biome of biomes)polygons(biome.polygons,.004,BIOME_COLORS[biome.type]??'grass');
-    polygons(river,.006,'waterLight');polygons(ocean,.007,'ocean');
-    for(const contours of mountains){
-      [contours.low,contours.high].forEach((contour,i)=>polygons(contour,.020+i*.003,`contour${i}`));
-      polygons(contours.snow,.033,'snow');
-    }
+  for(const {color,position,vertexColor}of terrain.meshes??compileMapTerrainGeometry(terrain)){
+    const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(position,3));
+    if(vertexColor)geometry.setAttribute('color',new THREE.BufferAttribute(vertexColor,3));
+    batches.set(color,[geometry]);
   }
 
   for(const line of world.lines){

@@ -51,12 +51,29 @@ function bounds(ring){return {minX:Math.min(...ring.map(p=>p[0])),maxX:Math.max(
 function area(ring){return Math.abs(ring.reduce((sum,p,i)=>{const q=ring[(i+1)%ring.length];return sum+p[0]*q[1]-q[0]*p[1];},0)/2);}
 const intersects=(a,b)=>a.minX<=b.maxX&&a.maxX>=b.minX&&a.minZ<=b.maxZ&&a.maxZ>=b.minZ;
 
+function projectPath(points,project,closed=false){
+  const result=[],edges=closed?points.length:points.length-1;
+  for(let i=0;i<edges;i++){
+    const a=points[i],b=points[(i+1)%points.length];
+    const count=Math.max(1,Math.ceil(Math.hypot(b[0]-a[0],b[1]-a[1])/.1));
+    for(let j=0;j<count;j++){
+      const t=j/count,p=project(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t);
+      result.push(a.length>2?[...p,a[2]+(b[2]-a[2])*t]:p);
+    }
+  }
+  if(closed)result.push([...result[0]]);
+  else{const p=points.at(-1);result.push(p.length>2?[...project(p[0],p[1]),p[2]]:project(p[0],p[1]));}
+  return result;
+}
+
 /** Create land-clipped mountain metadata. project(lon,lat) returns [x,z]. */
 export function createEuropeRanges(project,land){
   if(typeof project!=='function'||!Array.isArray(land))throw new TypeError('createEuropeRanges requires a projection and land MultiPolygon');
   const landPieces=land.map(polygon=>({polygon,bounds:bounds(polygon[0])})),result=[];
   for(const spec of EUROPE_RANGE_SPECS){
-    const polygon=spec.polygon.map(([lon,lat])=>project(lon,lat)),extent=bounds(polygon);
+    // Geographic edges curve in LCC; use the same 0.1-degree densification as
+    // the coastline builder so range boundaries remain attached to real land.
+    const polygon=projectPath(spec.polygon,project,true),extent=bounds(polygon);
     const localLand=landPieces.filter(p=>intersects(p.bounds,extent)).map(p=>p.polygon);
     if(!localLand.length)continue;
     const polygons=clipping.intersection([[polygon]],localLand).filter(rings=>area(rings[0])>=48)
@@ -64,7 +81,7 @@ export function createEuropeRanges(project,land){
     for(let i=0;i<polygons.length;i++){
       const rings=polygons[i],partBounds=bounds(rings[0]);
       const cellSize=Math.min(8,Math.max(2,Math.min(partBounds.maxX-partBounds.minX,partBounds.maxZ-partBounds.minZ)/3));
-      const ridges=spec.ridges.map(ridge=>({width:ridge.width,points:ridge.points.map(([lon,lat,height])=>[...project(lon,lat),height])}));
+      const ridges=spec.ridges.map(ridge=>({width:ridge.width,points:projectPath(ridge.points,project)}));
       result.push(compileMountainRange({id:i===0?spec.id:`${spec.id}-${i+1}`,seed:spec.id,
         polygon:rings[0],holes:rings.slice(1),ridges,cellSize,snowLine:spec.snowLine}));
     }

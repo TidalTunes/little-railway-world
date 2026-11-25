@@ -9,6 +9,7 @@ import {buildMapWorld} from '../src/map-world.js';
 
 const staticGeometry=map=>map.root.getObjectByName('map-static').children.map(mesh=>({
   name:mesh.name,positions:Array.from(mesh.geometry.attributes.position.array),
+  colors:mesh.geometry.attributes.color?Array.from(mesh.geometry.attributes.color.array):null,
   routeOffset:mesh.geometry.attributes.routeOffset?Array.from(mesh.geometry.attributes.routeOffset.array):null,
 }));
 
@@ -18,9 +19,8 @@ test('prepared map terrain is clone-safe and does not alter source geography',()
   assert.deepEqual(world,before);
   assert.deepEqual(structuredClone(prepared),prepared);
   for(const key of ['land','shores','river','ocean'])assert.ok(prepared[key].length,`${key} survives preparation`);
-  assert.ok(prepared.biomes.length>0&&prepared.mountains.length>0);
-  assert.equal(prepared.biomes.some(biome=>biome.type==='ocean'),false);
-  const nonland=[...prepared.biomes.map(b=>b.polygons),...prepared.mountains.flatMap(m=>[m.low,m.high,m.snow])];
+  assert.ok(prepared.colorField.sites.length>0&&prepared.mountains.length>0);
+  const nonland=prepared.mountains.flatMap(m=>[m.low,m.high,m.snow]);
   for(const shapes of nonland){
     const outside=polygons.difference(shapes,prepared.land);
     const area=outside.reduce((sum,rings)=>sum+rings.reduce((total,ring)=>total+Math.abs(ring.reduce((n,p,i)=>{
@@ -33,7 +33,7 @@ test('prepared map terrain is clone-safe and does not alter source geography',()
 test('worker-triangulated map buffers survive transfer and preserve the complete static drawing',()=>{
   const world=generateWorld({density:0},{detail:'network'}),baseline=buildMapWorld(new THREE.Group(),world);
   const meshes=compileMapTerrainGeometry(prepareMapTerrain(world));
-  const buffers=meshes.map(mesh=>mesh.position.buffer);
+  const buffers=meshes.flatMap(mesh=>[mesh.position.buffer,...(mesh.vertexColor?[mesh.vertexColor.buffer]:[])]);
   const packet=structuredClone({meshes},{transfer:buffers});
   assert.ok(buffers.every(buffer=>buffer.byteLength===0),'worker buffers are transferred instead of copied');
   const map=buildMapWorld(new THREE.Group(),{...world,mapTerrain:packet});

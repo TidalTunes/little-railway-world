@@ -10,9 +10,12 @@ test('the map draws the complete world as a small set of flat unlit batches', ()
   assert.equal(map.root.parent,parent);
   const staticRoot=map.root.getObjectByName('map-static');
   assert.ok(staticRoot.children.length<40,'static drawings merge by material');
-  for(const name of ['farmland','forestFloor','grass','desert','ocean','mountainFloor','waterLight','ink']){
+  for(const name of ['terrain','ocean','contour0','waterLight','ink']){
     assert.ok(staticRoot.getObjectByName(`map-${name}`),`${name} is represented in the map`);
   }
+  const terrain=staticRoot.getObjectByName('map-terrain');
+  assert.equal(terrain.material.vertexColors,true);
+  assert.ok(new Set(terrain.geometry.attributes.color.array).size>20,'land biomes blend through continuous vertex colors');
   for(const mesh of staticRoot.children){
     assert.ok(mesh.material.isMeshBasicMaterial,'map colors do not depend on scene lights');
     assert.equal(mesh.material.toneMapped,false);

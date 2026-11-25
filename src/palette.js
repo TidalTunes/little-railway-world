@@ -37,6 +37,7 @@ const values = {
 };
 export const C = Object.fromEntries(Object.entries(values).map(([k,v]) => [k, color(...v)]));
 export const M = Object.fromEntries(Object.entries(C).map(([k,v]) => [k, new THREE.MeshStandardMaterial({ color: v, roughness: 1, metalness: 0, flatShading: true })]));
+M.terrainVertex=new THREE.MeshStandardMaterial({color:0xffffff,vertexColors:true,roughness:1,flatShading:true,name:'terrain-vertex'});
 M.rail.metalness = .35;
 M.rail.roughness = .6;
 M.water.roughness = .45;

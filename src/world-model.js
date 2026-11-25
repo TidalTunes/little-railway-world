@@ -757,7 +757,7 @@ export function generateWorldRegion(network,{x=0,z=0,size=192}={}){
   const mountains=network.mountains.filter(m=>m.range?boxesOverlap(bounds,m.range.bounds):owns(m))
     .map(m=>m.range?{...m,renderBounds:bounds}:m),stations=network.stations.filter(owns);
   const lines=network.lines.filter(line=>boxesOverlap(bounds,lineTree(line).box));
-  const margin=Math.max(0,...owned.map(c=>c.radius),...mountains.filter(m=>!m.range).map(m=>m.radius),...stations.map(s=>s.radius));
+  const margin=Math.max(mountains.some(m=>m.range)?1.2:0,...owned.map(c=>c.radius),...mountains.filter(m=>!m.range).map(m=>m.radius),...stations.map(s=>s.radius));
   return{key,bounds,cullBounds:{minX:bounds.minX-margin,minZ:bounds.minZ-margin,maxX:bounds.maxX+margin,maxZ:bounds.maxZ+margin},
     cities:owned,placements:working.placements,cityStreets:working.cityStreets,stations,lines,mountains,farmland:working.farmland};
 }

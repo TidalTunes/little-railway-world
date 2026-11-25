@@ -6,7 +6,7 @@ A sunlit miniature railway. The viewport is entirely the world: no typography, l
 
 ## Composition
 
-An irregular layered terrain tile carries towns, a river, and broad coherent biomes. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places. Quiet open ground makes the trains easy to follow. The default sixteen-city showcase spans development levels 1–10; the classic generator and authored layouts use the same placement rules.
+An irregular layered terrain tile carries towns, a river, and broad coherent biomes. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places, with gently varied, blended ground colors between them. Quiet open ground makes the trains easy to follow. The default fifty-city Europe map uses a Lambert conformal conic projection to preserve local shapes across the continent; the sixteen-city showcase, classic generator, and authored layouts use the same placement rules.
 
 The world has three viewing distances. The far view is a network summary: broad biome fills, water, two quiet mountain contour layers, railways, moving train marks, and one city glyph per settlement. Individual buildings, trees, farms, rocks, animals, station marks, and water strokes belong to the closer views. The middle view presents the isometric miniature. The close view looks down on individual trains and their surroundings. All three share the same geography and simulation state.
 
@@ -18,11 +18,11 @@ Ownership has one hue family per player, shared by city buildings, station detai
 
 ## Form and scale
 
-Small, consistent silhouettes: two-tier pines, faceted broadleaf crowns, pitched houses, a few taller civic landmarks, compact station platforms, cacti, and double-ended railcars. Mountains use irregular ridges and secondary peaks, with snow following their excavated faces. Details remain inside each asset's declared footprint. Passengers, benches, crop rows, hay bales, sheep, and roof trim reward a closer look without overwhelming the wide view.
+Small, consistent silhouettes: two-tier pines, faceted broadleaf crowns, pitched houses, a few taller civic landmarks, compact station platforms, cacti, and double-ended railcars. Mountains use irregular ridges and secondary peaks. Their lower slopes blend into neighboring meadows and woodland, with sparse pine groups on gentle ground, exposed stone on steep faces, and snow on high upward-facing surfaces. The exact heightfield and excavated tunnel clearances remain shared by art and simulation. Details remain inside each asset's declared footprint. Passengers, benches, crop rows, hay bales, sheep, and roof trim reward a closer look without overwhelming the wide view.
 
 City development adds apartments, plazas, civic buildings, and towers as levels rise. Compact groups of buildings follow gently winding lanes and irregular branches, with seeded variation in their arrangement and forms. Small villages gather around a short lane; larger towns develop interconnected neighborhoods rather than repeated rectangular blocks. The map compresses that development into a single house, civic-hall, or stepped-tower silhouette, increasing its size at every level. A pale halo separates each owner-colored city mark from the railway beneath it.
 
-Farmland reads as cultivated countryside: neighboring crop parcels share an orientation, with narrow dividing paths and related crop colors. Larger field groups fill the available agricultural land, while their complete footprints stay clear of towns, railways, and water. Crop rows and occasional bales remain visible close up.
+Farmland reads as cultivated countryside: nearby estates share a local bearing, while their sizes and oblique parcel divisions vary. Wheat, pasture, orchards, vegetables, and fallow earth form quiet clusters separated by meadow. Low hedges, gates, troughs, hay bales, and occasional small barns reward a closer look. Their complete footprints stay clear of towns, railways, and water; individual details remain inside each irregular field.
 
 ## Construction rules
 

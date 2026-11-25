@@ -6,7 +6,10 @@ import { biomeDistance } from './biomes.js';
 import {hydrologyFor,riverBankDistance} from './hydrology.js';
 import { box, beam, mesh, group, v, solidRibbon } from './geometry.js';
 import { sampleLine, distanceToLine, CLEARANCES } from './world-model.js';
-import { mountainMeshData, mountainSnowHeight } from './mountain-shape.js';
+import { mountainMeshData, mountainSnowHeight, mountainSurfaceHeight } from './mountain-shape.js';
+import {mountainSurfaceColor,mountainTrees} from './mountain-cover.js';
+import {tree} from './assets.js';
+import {colorTerrainGeometry} from './terrain-colors.js';
 
 const TUNNEL_RADIUS = 1.08;
 const TUNNEL_SPRING = 1.80;
@@ -51,14 +54,11 @@ export function buildTerrain(parent,world){
   const land=clipping.difference(island,water,banks);
   surface(parent,islandMulti,waterY-.12,'soil',waterY-.12-BASE);
   surface(parent,land,0,'soilLight',-waterY+.12);
-  const biomes=world.biomes?.regions;
-  if(biomes){
-    const materials={farmland:'farmland',forest:'forestFloor',plains:'grass',desert:'desert',mountain:'mountainFloor'};
-    for(const region of biomes){
-      if(!materials[region.type])continue;
-      surface(parent,clipping.intersection(region.polygons,land),.018,materials[region.type]);
-    }
-  }else surface(parent,land,.018,'grass');
+  for(const rings of land){
+    const base=new THREE.ShapeGeometry(polygonShape(rings));base.rotateX(-Math.PI/2);
+    const geometry=colorTerrainGeometry(base,world);base.dispose();
+    mesh(parent,geometry,M.terrainVertex,0,.018,0);
+  }
   for(const rings of banks){
     const geometry=new THREE.ShapeGeometry(polygonShape(rings));geometry.rotateX(-Math.PI/2);
     const pos=geometry.attributes.position;
@@ -198,16 +198,19 @@ export function buildMountains(parent,world){
     const geo=createMountainGeometry(mountain,world.lines);
     const positions=geo.getAttribute('position'),index=geo.getIndex();
     const count=index?index.count:positions.count;
-    const facets={rock:[],rockLight:[],rockDark:[]},snow=[];
-    const light=v(-.55,.77,.32).normalize();
+    const vertices=[],colors=[],snow=[],color=new THREE.Color();
     for(let i=0;i<count;i+=3){
       const points=[0,1,2].map(j=>v().fromBufferAttribute(positions,index?index.getX(i+j):i+j));
       const normal=points[1].clone().sub(points[0]).cross(points[2].clone().sub(points[0])).normalize();
-      const brightness=normal.dot(light);
-      const material=normal.y<-.15?'rockDark':normal.y>=0&&normal.y<.15?'rockLight'
-        :brightness<.05?'rockDark':brightness>.68?'rockLight':'rock';
-      points.forEach(p=>facets[material].push(p.x,p.y,p.z));
-      if(mountain.height<=8||normal.y<.10)continue;
+      const center=points[0].clone().add(points[1]).add(points[2]).multiplyScalar(1/3);
+      // Excavated walls and tunnel ceilings remain exposed stone. Surface
+      // cover uses the same global height lookup across every regional slice.
+      const surface=normal.y>.18&&Math.abs(center.y-mountainSurfaceHeight(mountain,center.x,center.z))<.025;
+      for(const p of points){
+        mountainSurfaceColor(world,mountain,p,normal,{surface,target:color});
+        vertices.push(p.x,p.y,p.z);colors.push(color.r,color.g,color.b);
+      }
+      if(mountain.height<=8||normal.y<.48||!surface)continue;
       // Clip snow to the already excavated rock faces. No independent cap can
       // span a tunnel or fill an opening, even on a low or off-centre summit.
       const signed=points.map(p=>p.y-mountainSnowHeight(mountain,p.x,p.z));
@@ -221,16 +224,20 @@ export function buildMountains(parent,world){
         for(const p of [clipped[0],clipped[j],clipped[j+1]])snow.push(p.x,p.y+.018,p.z);
       }
     }
-    for(const [material,vertices]of Object.entries(facets)){
-      if(!vertices.length)continue;
+    if(vertices.length){
       const faces=new THREE.BufferGeometry();faces.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));faces.computeVertexNormals();
-      const rock=mesh(parent,faces,material);rock.name=`mountain-${mountain.id}-${material}`;result.push(rock);
+      faces.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
+      const rock=mesh(parent,faces,M.terrainVertex);rock.name=`mountain-${mountain.id}-surface`;result.push(rock);
     }
     if(snow.length){
       const cap=new THREE.BufferGeometry();cap.setAttribute('position',new THREE.Float32BufferAttribute(snow,3));cap.computeVertexNormals();
       const cover=mesh(parent,cap,'snow');cover.name=`mountain-${mountain.id}-snow`;
     }
     geo.dispose();
+    for(const placement of mountainTrees(world,mountain)){
+      const pine=tree(parent,placement);pine.name=`mountain-${placement.id}`;
+      pine.userData.mountainId=mountain.id;pine.userData.treePlacement=placement;
+    }
   }
   for(const line of world.lines)for(const t of line.tunnels){
     const own=distance=>{

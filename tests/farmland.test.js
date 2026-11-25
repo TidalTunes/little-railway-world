@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { createBiomes, fitsBiome } from '../src/biomes.js';
 import { placeFarmland } from '../src/farmland.js';
-import { farmPatch } from '../src/assets.js';
+import { farmPatch,ASSET_BOUNDS } from '../src/assets.js';
 
 function plan(seed=27,density=1){
   const world={seed,bounds:{width:100,depth:80},outline:[[-50,-40],[50,-40],[50,40],[-50,40]],
@@ -18,22 +18,50 @@ function plan(seed=27,density=1){
   return{world,result,obstacles};
 }
 
-test('farmland is deterministic, aligned and genuinely denser than isolated small fields',()=>{
+const area=points=>Math.abs(points.reduce((sum,p,index)=>{
+  const q=points[(index+1)%points.length];return sum+p[0]*q[1]-q[0]*p[1];
+},0))/2;
+function separated(a,b){
+  for(const polygon of [a,b])for(let index=0;index<polygon.length;index++){
+    const p=polygon[index],q=polygon[(index+1)%polygon.length],nx=q[1]-p[1],nz=p[0]-q[0];
+    const aa=a.map(p=>p[0]*nx+p[1]*nz),bb=b.map(p=>p[0]*nx+p[1]*nz);
+    if(Math.max(...aa)<=Math.min(...bb)+1e-7||Math.max(...bb)<=Math.min(...aa)+1e-7)return true;
+  }
+  return false;
+}
+const inConvex=(point,polygon)=>polygon.every((a,index)=>{
+  const b=polygon[(index+1)%polygon.length];
+  return(b[0]-a[0])*(point.z-a[1])-(b[1]-a[1])*(point.x-a[0])>=-1e-5;
+});
+
+test('farmland has deterministic clustered bearings and varied, tightly subdivided parcels',()=>{
   const first=plan(),again=plan(),changed=plan(44);
   assert.deepEqual(again,first,'seed controls both plots and crop patterns');
   assert.notDeepEqual(changed.world.placements,first.world.placements,'different seeds change the coherent layout');
   assert.ok(first.result.area>1500,'a broad farming region receives substantial continuous cultivated acreage');
-  assert.equal(new Set(first.world.placements.map(p=>p.rotation)).size,1,'all districts share a regional bearing');
+  const clusters=new Map();
   for(const farm of first.world.placements){
-    assert.ok(farm.parcels.length>=4,'a district groups neighboring fields');
+    if(!clusters.has(farm.clusterId))clusters.set(farm.clusterId,[]);
+    clusters.get(farm.clusterId).push(farm);
+  }
+  assert.ok(clusters.size>1&&clusters.size<first.world.placements.length/2,'estates form local groups');
+  for(const farms of clusters.values())assert.equal(new Set(farms.map(farm=>farm.rotation)).size,1,'neighbors share a local bearing');
+  assert.ok(new Set(first.world.placements.map(p=>p.width.toFixed(2))).size>10,'estate dimensions do not repeat three stamps');
+  assert.ok(new Set(first.world.placements.map(p=>p.parcels.length)).size>=4,'parcel count varies with the estate');
+  assert.deepEqual(new Set(first.world.placements.flatMap(farm=>farm.parcels.map(p=>p.crop))),new Set(['wheat','pasture','orchard','fallow','vegetables']));
+  const gaps=first.world.placements.map(farm=>Math.min(...first.world.placements.filter(other=>other!==farm)
+    .map(other=>Math.hypot(farm.x-other.x,farm.z-other.z)-farm.radius-other.radius))).sort((a,b)=>a-b);
+  assert.ok(gaps[Math.floor(gaps.length/2)]<=.6,'neighboring estates pack closely instead of floating apart');
+  for(const farm of first.world.placements){
+    assert.ok(farm.parcels.length>=3&&farm.parcels.length<=8,'a district groups a few neighboring fields');
     assert.equal(farm.radius,Math.hypot(farm.width,farm.depth)/2,'the reserved circle encloses the full district');
-    const coverage=farm.parcels.reduce((total,p)=>total+p.width*p.depth,0)/(farm.width*farm.depth);
-    assert.ok(coverage>.85,'narrow lanes leave most of a district cultivated');
+    const coverage=farm.parcels.reduce((total,p)=>total+area(p.polygon),0)/(farm.width*farm.depth);
+    assert.ok(coverage>.80,'narrow lanes and corner headlands leave most of a district cultivated');
     for(let i=0;i<farm.parcels.length;i++){
       const p=farm.parcels[i];
       assert.ok(Math.abs(p.x)+p.width/2<=farm.width/2&&Math.abs(p.z)+p.depth/2<=farm.depth/2);
-      for(const q of farm.parcels.slice(0,i))assert.ok(Math.abs(p.x-q.x)>=(p.width+q.width)/2
-        ||Math.abs(p.z-q.z)>=(p.depth+q.depth)/2,'crop rectangles never overlap');
+      const polygon=p.polygon.map(([x,z])=>[x+p.x,z+p.z]);
+      for(const q of farm.parcels.slice(0,i))assert.ok(separated(polygon,q.polygon.map(([x,z])=>[x+q.x,z+q.z])),'neighboring oblique parcels never overlap');
     }
   }
 });
@@ -70,9 +98,46 @@ test('rendered irregular parcels stay inside their scaled, rotated district rese
         vertex.fromBufferAttribute(positions,i).applyMatrix4(transform);
         assert.ok(Math.abs(vertex.x)<=fixture.width/2+1e-5&&Math.abs(vertex.z)<=fixture.depth/2+1e-5);
         assert.ok(Math.hypot(vertex.x,vertex.z)<=Math.hypot(fixture.width,fixture.depth)/2+1e-5);
-        assert.ok(vertex.y>=-1e-5&&vertex.y<=.42+1e-5,'crop rows and bales obey their vertical envelope');
+        assert.ok(vertex.y>=-1e-5&&vertex.y<=ASSET_BOUNDS.farmPatch.height+1e-5,'crops, orchard crowns and barns obey their vertical envelope');
       }
     });
   }
   assert.throws(()=>farmPatch(new THREE.Group(),{width:3,depth:4,parcels:[{x:1,z:0,width:2,depth:2}]}),TypeError);
+});
+
+test('every crop, hedge and farm feature stays within its actual oblique parcel',()=>{
+  let features=0,orchards=0,hedges=0;
+  for(const seed of [27,44,12,3])for(const fixture of plan(seed).world.placements){
+    const root=farmPatch(new THREE.Group(),fixture);root.updateMatrixWorld(true);
+    let triangles=0;
+    for(const [index,field]of fixture.parcels.entries()){
+      const group=root.children[index],inverse=group.matrixWorld.clone().invert(),point=new THREE.Vector3();
+      if(field.feature)features++;if(field.crop==='orchard')orchards++;hedges+=field.hedgeEdges.length;
+      group.traverse(mesh=>{
+        if(!mesh.isMesh)return;const matrix=inverse.clone().multiply(mesh.matrixWorld),position=mesh.geometry.attributes.position;
+        triangles+=(mesh.geometry.index?.count??position.count)/3;
+        for(let vertex=0;vertex<position.count;vertex++){
+          point.fromBufferAttribute(position,vertex).applyMatrix4(matrix);
+          assert.ok(inConvex(point,field.polygon),`${seed}: ${fixture.districtId}/${index} ${field.crop} stays inside its field`);
+        }
+      });
+    }
+    assert.ok(triangles<2000,'details retain a small geometry budget per estate');
+  }
+  assert.ok(features>20&&orchards>20&&hedges>100,'the test exercises detailed fields, not only empty crop polygons');
+});
+
+test('regional generation keeps cluster identity and details independent of request order',()=>{
+  const source=plan().world;
+  function region(minX,minZ){
+    const world={...source,placements:[],detailRegion:{minX,maxX:minX+48,minZ,maxZ:minZ+40}};
+    placeFarmland(world,{density:1,canPlace:item=>item.x-item.radius>=minX&&item.x+item.radius<=minX+48
+      &&item.z-item.radius>=minZ&&item.z+item.radius<=minZ+40
+      &&world.placements.every(other=>Math.hypot(item.x-other.x,item.z-other.z)>=item.radius+other.radius+.32),add:item=>world.placements.push(item)});
+    return world.placements;
+  }
+  const a=region(-48,-40),b=region(0,0);
+  assert.ok(a.length>0&&b.length>0);
+  assert.deepEqual(region(0,0),b);assert.deepEqual(region(-48,-40),a);
+  assert.equal(new Set([...a,...b].map(farm=>farm.districtId)).size,a.length+b.length);
 });

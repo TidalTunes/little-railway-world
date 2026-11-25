@@ -22,18 +22,38 @@ import zipfile
 import shapefile
 import shapely
 from shapely import make_valid, set_precision
-from shapely.affinity import affine_transform
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box, shape
 from shapely.geometry.polygon import orient
-from shapely.ops import linemerge, unary_union
+from shapely.ops import linemerge, unary_union, transform
 
 ROOT = Path(__file__).resolve().parents[1]
 BBOX = (-26.0, 30.0, 45.5, 71.5)
-LONGITUDE_ORIGIN, LATITUDE_ORIGIN = 9.75, 50.75
-STANDARD_PARALLEL, LATITUDE_SCALE = 52.0, 36.0
-LONGITUDE_SCALE = LATITUDE_SCALE * math.cos(math.radians(STANDARD_PARALLEL))
+LONGITUDE_ORIGIN, LATITUDE_ORIGIN = 10.0, 52.0
+STANDARD_PARALLELS = (35.0, 65.0)
+SEMI_MAJOR_AXIS, INVERSE_FLATTENING = 6378137.0, 298.257222101
+UNITS_PER_METER = 1 / 3000
+FLATTENING = 1 / INVERSE_FLATTENING
+ECCENTRICITY = math.sqrt(FLATTENING * (2 - FLATTENING))
+MAX_GEOGRAPHIC_SEGMENT = .1
+OUTLINE_TOLERANCE = .02
+
+
+def conformal_t(latitude):
+    phi = math.radians(latitude)
+    eccentric_sine = ECCENTRICITY * math.sin(phi)
+    return math.tan(math.pi / 4 - phi / 2) / ((1 - eccentric_sine) / (1 + eccentric_sine)) ** (ECCENTRICITY / 2)
+
+
+def conformal_m(latitude):
+    phi = math.radians(latitude)
+    return math.cos(phi) / math.sqrt(1 - ECCENTRICITY ** 2 * math.sin(phi) ** 2)
+
+
+CONE_CONSTANT = math.log(conformal_m(STANDARD_PARALLELS[0]) / conformal_m(STANDARD_PARALLELS[1])) / math.log(conformal_t(STANDARD_PARALLELS[0]) / conformal_t(STANDARD_PARALLELS[1]))
+RADIAL_CONSTANT = SEMI_MAJOR_AXIS * UNITS_PER_METER * conformal_m(STANDARD_PARALLELS[0]) / (CONE_CONSTANT * conformal_t(STANDARD_PARALLELS[0]) ** CONE_CONSTANT)
+ORIGIN_RADIUS = RADIAL_CONSTANT * conformal_t(LATITUDE_ORIGIN) ** CONE_CONSTANT
 LAND_TOLERANCE, RIVER_TOLERANCE = .55, .22
-MIN_ISLAND_AREA, PRECISION = .4, .001
+MIN_ISLAND_AREA, PRECISION = .4, .000001
 SHORE_WIDTH = .9
 SOURCES = [
     {
@@ -134,12 +154,15 @@ BIOME_SITES = [
 
 
 def project(lon, lat):
-    return ((lon - LONGITUDE_ORIGIN) * LONGITUDE_SCALE, (LATITUDE_ORIGIN - lat) * LATITUDE_SCALE)
+    rho = RADIAL_CONSTANT * conformal_t(lat) ** CONE_CONSTANT
+    theta = CONE_CONSTANT * math.radians(lon - LONGITUDE_ORIGIN)
+    return (rho * math.sin(theta), rho * math.cos(theta) - ORIGIN_RADIUS)
 
 
 def projected(geometry):
-    return affine_transform(geometry, [LONGITUDE_SCALE, 0, 0, -LATITUDE_SCALE,
-                                      -LONGITUDE_ORIGIN * LONGITUDE_SCALE, LATITUDE_ORIGIN * LATITUDE_SCALE])
+    # A geographic straight edge becomes curved under LCC. Densify before
+    # projection so source clipping edges and range boundaries stay aligned.
+    return transform(project, geometry.segmentize(MAX_GEOGRAPHIC_SEGMENT))
 
 
 def parts_of(geometry, kind):
@@ -166,7 +189,7 @@ def archive_records(source, cache):
 
 
 def coordinates(ring):
-    return [[round(x, 3), round(z, 3)] for x, z in ring.coords]
+    return [[round(x, 6), round(z, 6)] for x, z in ring.coords]
 
 
 def multipolygon_data(geometry):
@@ -187,10 +210,9 @@ def slug(name):
 
 def build(cache):
     geographic_extent = box(*BBOX)
-    southwest, northeast = project(BBOX[0], BBOX[1]), project(BBOX[2], BBOX[3])
-    # Snap the clipping rectangle too: independently rounding a nearly coincident
-    # coast/rectangle vertex only at JSON serialization can invalidate the ocean.
-    extent = set_precision(box(southwest[0], northeast[1], northeast[0], southwest[1]), PRECISION)
+    # Snap the projected extent too: independently rounding a nearly coincident
+    # coast/extent vertex only at JSON serialization can invalidate the ocean.
+    extent = set_precision(projected(geographic_extent).simplify(OUTLINE_TOLERANCE, preserve_topology=True), PRECISION)
     raw_land = []
     for record in archive_records(SOURCES[0], cache):
         geometry = shape(record.shape.__geo_interface__)
@@ -209,8 +231,11 @@ def build(cache):
     ocean = set_precision(extent.difference(land), PRECISION)
     land_interior = set_precision(land.buffer(-SHORE_WIDTH, quad_segs=2), PRECISION).intersection(land)
     ocean_shore = land.difference(land_interior)
-    if not land.is_valid or not ocean.is_valid or land.intersection(ocean).area > 1e-6:
-        raise RuntimeError("Land/ocean topology is invalid")
+    # Fixed-grid intersections at the curved extent can differ by sub-grid
+    # triangular slivers. Bound their total area rather than requiring bitwise
+    # equality between independently rounded overlay operations.
+    if not land.is_valid or not ocean.is_valid or land.intersection(ocean).area > 1e-4:
+        raise RuntimeError(f"Land/ocean topology is invalid: land={land.is_valid}, ocean={ocean.is_valid}, overlap={land.intersection(ocean).area}")
 
     # Inland waters have their own semantics. Do not turn lakes into ocean when
     # subtracting them from dry land or when deriving the separate bank bands.
@@ -299,19 +324,23 @@ def build(cache):
                     "x": round(project(lon, lat)[0], 3), "z": round(project(lon, lat)[1], 3)}
                    for id_, name, type_, lon, lat in BIOME_SITES]
     return {
-        "version": 1, "name": "Europe geographic base", "coordinateOrder": "x,z",
+        "version": 2, "name": "Europe geographic base", "coordinateOrder": "x,z",
         "bbox": {"west": BBOX[0], "south": BBOX[1], "east": BBOX[2], "north": BBOX[3]},
-        "projection": {"type": "equirectangular", "sourceCRS": "EPSG:4326",
+        "projection": {"type": "lambert-conformal-conic", "sourceCRS": "EPSG:4326",
                        "centralLongitude": LONGITUDE_ORIGIN, "centralLatitude": LATITUDE_ORIGIN,
-                       "standardParallel": STANDARD_PARALLEL, "unitsPerLatitudeDegree": LATITUDE_SCALE,
-                       "unitsPerLongitudeDegree": LONGITUDE_SCALE,
-                       "xFormula": "(longitude - 9.75) * 36 * cos(52 degrees)",
-                       "zFormula": "(50.75 - latitude) * 36", "north": "-z", "east": "+x"},
-        "bounds": {"width": northeast[0] - southwest[0], "depth": southwest[1] - northeast[1]},
-        "outline": [[round(extent.bounds[0], 3), round(extent.bounds[1], 3)],
-                    [round(extent.bounds[2], 3), round(extent.bounds[1], 3)],
-                    [round(extent.bounds[2], 3), round(extent.bounds[3], 3)],
-                    [round(extent.bounds[0], 3), round(extent.bounds[3], 3)]],
+                       "standardParallels": list(STANDARD_PARALLELS), "unitsPerMeter": UNITS_PER_METER,
+                       "ellipsoid": {"name": "GRS80", "semiMajorAxis": SEMI_MAJOR_AXIS, "inverseFlattening": INVERSE_FLATTENING},
+                       "eccentricity": ECCENTRICITY, "coneConstant": CONE_CONSTANT,
+                       "radialConstant": RADIAL_CONSTANT, "originRadius": ORIGIN_RADIUS,
+                       "xFormula": "rho * sin(n * (longitude - longitudeOrigin))",
+                       "zFormula": "rho * cos(n * (longitude - longitudeOrigin)) - rhoOrigin",
+                       "north": "-z on the central meridian", "east": "+x",
+                       "reference": "Ellipsoidal LCC 2SP with the EPSG:3034 Europe projection parameters, zero false origin and uniform world scaling. Source geographic coordinates are evaluated on GRS80; no datum-epoch transformation is applied.",
+                       "documentation": "https://proj.org/en/stable/operations/projections/lcc.html",
+                       "equationReference": "https://github.com/OSGeo/PROJ/blob/master/src/projections/lcc.cpp"},
+        "bounds": {"width": 2 * max(abs(extent.bounds[0]), abs(extent.bounds[2])),
+                   "depth": 2 * max(abs(extent.bounds[1]), abs(extent.bounds[3]))},
+        "outline": coordinates(orient(extent, sign=1).exterior),
         "land": land_data, "landInterior": interior_data, "ocean": ocean_data,
         "oceanShore": shore_data, "shoreWidth": SHORE_WIDTH, "rivers": rivers,
         "lakes": multipolygon_data(lakes), "lakeShore": multipolygon_data(lake_shore), "lakeFeatures": lake_features,
@@ -322,16 +351,17 @@ def build(cache):
         "methodology": {
             "builder": "scripts/build-europe-geography.py",
             "dependencies": {"shapely": "2.1.2", "pyshp": "2.3.1"},
-            "coastline": "Union Natural Earth land pieces, clip to geographic bbox, project, filter tiny islands, simplify with topology preservation, snap to precision grid. Ocean is rectangular extent minus this coastal land; final land additionally excludes inland lake water.",
+            "coastline": "Union Natural Earth land pieces, clip to geographic bbox, densify geographic segments to 0.1 degree, project with ellipsoidal Lambert conformal conic, filter tiny islands, simplify with topology preservation, snap to precision grid. Ocean is the projected bbox outline minus coastal land; final land additionally excludes inland lake water.",
             "landTolerance": LAND_TOLERANCE, "riverTolerance": RIVER_TOLERANCE,
+            "maximumGeographicSegmentDegrees": MAX_GEOGRAPHIC_SEGMENT, "outlineTolerance": OUTLINE_TOLERANCE,
             "precision": PRECISION, "minimumIslandArea": MIN_ISLAND_AREA,
             "islandPolicy": "Retain polygons with original projected area >=0.4 square units, plus every protected island polygon. No artificial islands or coastline widening.",
-            "shore": "Coastal land is eroded inward by 0.9 units with polygonal rounded corners, snapped to 0.001. oceanShore is that coastal band minus lake water. landInterior also excludes lakes buffered outward 0.9 units; lakeShore is the remaining inland lake band. Ocean remains rectangle minus original simplified coast-land. Tiny islands may consist entirely of shoreline.",
+            "shore": "Coastal land is eroded inward by 0.9 units with polygonal rounded corners, snapped to 0.000001. oceanShore is that coastal band minus lake water. landInterior also excludes lakes buffered outward 0.9 units; lakeShore is the remaining inland lake band. Ocean remains the projected bbox outline minus original simplified coast-land. Tiny islands may consist entirely of shoreline.",
             "lakes": "Use the base and Europe supplement. Select named lakes of at least 40 projected square units, plus explicitly selected recognizable lakes of at least 2.4 square units. Simplify at 0.25 units and clip water to coastal land. Source reservoir categories are excluded except named natural lakes classified as reservoirs, such as Mjosa. Lakes remain separate from ocean; lakeFeatures records names, source IDs and interior probes without duplicating their polygons.",
             "rivers": "Explicit named cartographic selection. Combine source river and lake-centerline parts of each name, merge connected lines, clip to bbox, project and simplify. Paths preserve source connectivity; disconnected parts stay separate. Width is intentionally left to the renderer.",
             "riverAliases": ALIASES,
             "biomes": "Named hand-authored illustrative control points reflecting broad European landscapes. These are art direction, not measured land-cover boundaries; mountain regions are supplied separately.",
-            "accuracy": "Stylized small-scale physical geography, not navigation data. Bbox includes neighboring North African and Asian land. Projection uses the true east-west scale at latitude 52; areas and distances are not geodesic.",
+            "accuracy": "Stylized small-scale physical geography, not navigation data. Bbox includes neighboring North African and Asian land. Lambert conformal conic preserves local angles and aspect ratios; scale varies with latitude, so areas and distances are not geodesic. A uniform 1:3000 meter-to-world scale applies to both horizontal axes.",
         },
         "statistics": {"landPolygons": len(land_data), "oceanPolygons": len(ocean_data),
                        "landVertices": sum(len(ring) for polygon in land_data for ring in polygon),

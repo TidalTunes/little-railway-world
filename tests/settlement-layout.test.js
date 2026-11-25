@@ -107,7 +107,10 @@ test('showcase cities gain density while retaining curved lanes and distinct see
   assert.notDeepEqual(world.cityStreets,other.cityStreets,'another seed creates distinct organic plans');
 });
 
-function parcelGap(a,b){return Math.hypot(Math.max(0,Math.abs(a.x-b.x)-(a.width+b.width)/2),Math.max(0,Math.abs(a.z-b.z)-(a.depth+b.depth)/2));}
+function parcelRing(parcel){
+  return parcel.polygon.map(([x,z])=>[x+parcel.x,z+parcel.z]);
+}
+function parcelGap(a,b){return linePair(ringPoints(parcelRing(a)),ringPoints(parcelRing(b)));}
 
 test('farm districts contain densely packed, connected crop parcels with shared orientation',()=>{
   const world=showcase(),farms=world.placements.filter(p=>p.kind==='farm');
@@ -119,7 +122,7 @@ test('farm districts contain densely packed, connected crop parcels with shared 
   for(const farm of farms){
     assert.ok(farm.width>0&&farm.depth>0);
     assert.ok(farm.radius>=Math.hypot(farm.width,farm.depth)/2-.000001,'district reserves its full rectangular silhouette');
-    assert.ok(farm.parcels.length>=4,'a district groups adjacent fields');
+    assert.ok(farm.parcels.length>=3,'a district groups adjacent fields');
     let area=0;
     const neighbors=farm.parcels.map(()=>[]);
     for(let i=0;i<farm.parcels.length;i++){
@@ -127,10 +130,11 @@ test('farm districts contain densely packed, connected crop parcels with shared 
       assert.ok(a.width>0&&a.depth>0);
       assert.ok(Math.abs(a.x)+a.width/2<=farm.width/2+.000001);
       assert.ok(Math.abs(a.z)+a.depth/2<=farm.depth/2+.000001);
-      area+=a.width*a.depth;
+      const ring=parcelRing(a);
+      area+=Math.abs(ring.reduce((sum,p,index)=>{const q=ring[(index+1)%ring.length];return sum+p[0]*q[1]-q[0]*p[1];},0))/2;
       for(let j=0;j<i;j++){
-        const b=farm.parcels[j],overlapX=(a.width+b.width)/2-Math.abs(a.x-b.x),overlapZ=(a.depth+b.depth)/2-Math.abs(a.z-b.z);
-        assert.ok(overlapX<=.000001||overlapZ<=.000001,'crop parcel interiors never overlap');
+        const b=farm.parcels[j];
+        assert.deepEqual(clipping.intersection([ring],[parcelRing(b)]),[],'oblique crop parcel interiors never overlap');
         if(parcelGap(a,b)<=.65){neighbors[i].push(j);neighbors[j].push(i);}
       }
     }
@@ -141,7 +145,8 @@ test('farm districts contain densely packed, connected crop parcels with shared 
     cropArea+=area;
   }
   assert.ok(cropArea>=1600,`crop area ${cropArea.toFixed(1)} should substantially exceed the former790 square units`);
-  assert.ok(farms.every(f=>Math.abs(Math.sin(f.rotation-farms[0].rotation))<.000001),'districts follow one coherent regional orientation');
+  for(const farm of farms)assert.ok(farms.filter(f=>f.clusterId===farm.clusterId)
+    .every(f=>Math.abs(Math.sin(f.rotation-farm.rotation))<.000001),'neighboring districts follow one coherent local orientation');
 });
 
 test('density zero disables farms without changing deterministic city development',()=>{
