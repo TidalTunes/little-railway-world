@@ -1,0 +1,15 @@
+:root {
+  color-scheme: light;
+  --world-background: oklch(0.855 0.035 218);
+  --railway-red: oklch(0.52 0.16 355);
+  --river-blue: oklch(0.69 0.10 214);
+  --meadow: oklch(0.75 0.13 127);
+}
+* { box-sizing: border-box; }
+html, body, main { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { background: var(--world-background); overscroll-behavior: none; }
+main { height: 100svh; }
+canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; cursor: grab; }
+canvas:active { cursor: grabbing; }
+canvas:focus-visible { outline: 2px solid oklch(0.52 0.16 355); outline-offset: -4px; }
+@media (prefers-reduced-motion: reduce) { canvas { scroll-behavior: auto; } }
