@@ -1,5 +1,7 @@
 # Little Railway World
 
+[Open the live world](https://tidaltunes.github.io/little-railway-world/)
+
 A text-free, self-running isometric miniature built with Three.js. Two steam trains connect three towns through a landscape of low-poly forests, fields, mountains, a river, and an arched viaduct. All geometry is authored in code; no external assets or services load at runtime.
 
 ## Run
