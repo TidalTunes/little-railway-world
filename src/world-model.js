@@ -1,8 +1,12 @@
+import { createBiomes, biomeAt, biomeDistance, fitsBiome } from './biomes.js';
+import { createAlignment, combineAlignments, straightSegment, sampleAlignment, sampleAlignmentPoints } from './alignments.js';
+import { mountainSurfaceHeight } from './mountain-shape.js';
 /**
  * Deterministic, renderer-independent railway world planner.
  *
- * All coordinates are metres in the x/z plane. Routes are sampled polylines with
- * cumulative distances; interval start/end values use those same distances.
+ * All coordinates are metres in the x/z plane. Routes are exact tangent-connected
+ * line/arc alignments with sampled display polylines. Structure intervals and
+ * samples use the exact cumulative arc distances.
  * Custom cities, rivers, mountains and connections can be supplied independently.
  * A connection's optional points are intermediate waypoints (its city endpoints
  * are always included). Ground is y=0, water y=-1.2 and track centre y=.42.
@@ -11,13 +15,13 @@
  */
 export const WORLD_DEFAULTS = Object.freeze({
   seed: 27, width: 130, depth: 95, cityRadius: 9.6, riverWidth: 5.4,
-  groundY: 0, waterY: -1.2, railY: .42, sampleSpacing: .55,
+  groundY: 0, waterY: -1.2, railY: .42, sampleSpacing: .35, minTurnRadius: 8, throatLength: 4,
 });
 export const CLEARANCES = Object.freeze({
   trackHalfWidth: 1.05, routeEdge: 1.35, cuttingHalfWidth: 1.08, track: 1.45, riverBank: .8, mountain: .35,
   objects: .32, worldEdge: .75, city: 1.25, stationOffset: 3,
   stationLength: 6.4, stationWidth: 2.4, stationEndDistance: 7,
-  tunnelRoofHeight: 3.9, tunnelArchRadius: 1.4, tunnelArchSpring: 1.8, tunnelRockCover: .1, mountainFacets: 24, bridgeBank: 2.2, maximumGrade: .12,
+  tunnelRoofHeight: 3.9, tunnelArchRadius: 1.4, tunnelArchSpring: 1.8, tunnelRockCover: .1, bridgeBank: 2.2, maximumGrade: .12,
 });
 
 const EPS = 1e-7;
@@ -74,9 +78,9 @@ export function inWorld(world, x, z, margin = 0) {
   return true;
 }
 
-/** Exact linear cone profile used by the renderer, including at tunnel portals. */
+/** Exact height of the shared triangulated mountain surface. */
 export function mountainHeight(mountain, x, z) {
-  return Math.max(0, 1 - Math.hypot(x - mountain.x, z - mountain.z) / mountain.radius) * mountain.height;
+  return mountainSurfaceHeight(mountain,x,z);
 }
 export function surfaceHeight(world, x, z) {
   let height = WORLD_DEFAULTS.groundY;
@@ -86,6 +90,11 @@ export function surfaceHeight(world, x, z) {
 export function worldSurface(world, x, z) {
   if (!inWorld(world, x, z)) return {type:'outside', height:-5};
   if (distanceToRiver(world, x, z) < world.river.width / 2) return {type:'water',height:world.river.y};
+  if(world.biomes){
+    const biome=biomeAt(world,x,z);
+    if(biome==='ocean')return{type:'ocean',height:world.river.y};
+    if(biome==='shore')return{type:'shore',height:world.river.y*(1-clamp(-biomeDistance(world,'ocean',x,z)/world.biomes.shoreWidth,0,1))};
+  }
   const height = surfaceHeight(world, x, z);
   return {type:height > 0 ? 'mountain' : 'ground', height};
 }
@@ -128,6 +137,7 @@ function roundedWaypoints(nodes, radius = 4) {
 
 /** sampleLine clamps open routes; angle is the rotation of a +z-facing train. */
 export function sampleLine(line, distanceAlong) {
+  if(line.alignment)return sampleAlignment(line.alignment,distanceAlong);
   const s = clamp(distanceAlong,0,line.length);
   let lo=0,hi=line.distances.length-1;
   while(lo+1<hi){const mid=(lo+hi)>>1;if(line.distances[mid]<=s)lo=mid;else hi=mid;}
@@ -146,8 +156,8 @@ function intervalsFor(line, signedDistance) {
     if((fa<=0)===(fb<=0))continue;
     let lo=0,hi=1;
     for(let j=0;j<18;j++){
-      const t=(lo+hi)/2,p={x:lerp(a.x,b.x,t),z:lerp(a.z,b.z,t)};
-      const s=lerp(line.distances[i-1],line.distances[i],t);
+      const t=(lo+hi)/2,s=lerp(line.distances[i-1],line.distances[i],t);
+      const p=line.alignment?sampleLine(line,s):{x:lerp(a.x,b.x,t),z:lerp(a.z,b.z,t)};
       if((signedDistance(p,s)<=0)===(fa<=0))lo=t;else hi=t;
     }
     const crossing=lerp(line.distances[i-1],line.distances[i],(lo+hi)/2);
@@ -180,7 +190,7 @@ function normalizeCities(input, bounds, random) {
   if(count!==8)return Array.from({length:count},(_,i)=>{
     const a=Math.PI*2*i/count+.35+(random()-.5)*.14;
     return {id:`city-${i+1}`,x:Math.cos(a)*bounds.width*.35,z:Math.sin(a)*bounds.depth*.32,
-      y:0,radius:Math.min(WORLD_DEFAULTS.cityRadius*scale,Math.min(bounds.width,bounds.depth)*.85/count),stationIds:[]};
+      y:0,radius:Math.min(WORLD_DEFAULTS.cityRadius*scale,Math.min(bounds.width,bounds.depth)*1.05/count),stationIds:[]};
   });
   return anchors.map(([id,x,z])=>({id,x:x*bounds.width/130+(random()-.5)*2.6*scale,z:z*bounds.depth/95+(random()-.5)*2.6*scale,
     y:0,radius:WORLD_DEFAULTS.cityRadius*scale,stationIds:[]}));
@@ -220,7 +230,7 @@ function placeStations(world) {
     for(const line of world.lines){
       if(line.from!==city.id&&line.to!==city.id)continue;
       const from=line.from===city.id;
-      for(const endDistance of [7,8.5,10]){
+      for(const endDistance of [0,7,8.5,10]){
         if(line.length<endDistance*2+1)continue;
         const d=from?endDistance:line.length-endDistance,p=sampleLine(line,d);
         for(const side of [-1,1]){
@@ -231,6 +241,7 @@ function placeStations(world) {
             radius:Math.hypot(CLEARANCES.stationLength/2,CLEARANCES.stationWidth/2),
             platform:{width:CLEARANCES.stationWidth,length:CLEARANCES.stationLength}};
           if(!inWorld(world,station.x,station.z,station.radius+CLEARANCES.worldEdge))continue;
+          if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],station.x,station.z,station.radius))continue;
           if(world.mountains.some(m=>distance(station,m)<station.radius+m.radius+CLEARANCES.mountain))continue;
           if(rectangleToLine(station,world.river)<world.river.width/2+CLEARANCES.riverBank)continue;
           if(world.lines.some(other=>rectangleToLine(station,other)<CLEARANCES.trackHalfWidth+.25))continue;
@@ -256,6 +267,7 @@ function placeStations(world) {
 
 function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   const r=item.radius;
+  if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],item.x,item.z,r))return false;
   if(!inWorld(world,item.x,item.z,r+CLEARANCES.worldEdge))return false;
   if(distanceToRoutes(world,item.x,item.z)<r+CLEARANCES.track)return false;
   if(distanceToRiver(world,item.x,item.z)<r+world.river.width/2+CLEARANCES.riverBank)return false;
@@ -267,7 +279,7 @@ function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   return true;
 }
 function placeScenery(world,random,density) {
-  const add=item=>world.placements.push({id:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,...item});
+  const add=item=>world.placements.push({id:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,biome:biomeAt(world,item.x,item.z),...item});
   for(let ci=0;ci<world.cities.length;ci++){
     const city=world.cities[ci];
     // Candidates are independent of previous accepted candidates: stable and repeatable.
@@ -280,28 +292,129 @@ function placeScenery(world,random,density) {
     }
   }
   const scale=Math.sqrt(world.bounds.width*world.bounds.depth/(130*95));
-  const farmCount=Math.max(2,Math.round(8*density*scale));
-  for(let attempt=0,accepted=0;attempt<800&&accepted<farmCount;attempt++){
-    const item={kind:'farm',x:(random()-.5)*world.bounds.width*.88,z:(random()-.5)*world.bounds.depth*.82,
-      radius:2.5,scale:1,variant:Math.floor(random()*3),rotation:Math.floor(random()*4)*Math.PI/2};
-    if(canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+  const candidate=()=>({x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94});
+  const farmCount=Math.max(2,Math.round(12*density*scale));
+  for(let attempt=0,accepted=0;attempt<1800&&accepted<farmCount;attempt++){
+    const size=1.3+random()*.3;
+    const item={kind:'farm',...candidate(),radius:2.5*size,scale:size,variant:Math.floor(random()*3),rotation:Math.floor(random()*4)*Math.PI/2};
+    if(fitsBiome(world,'farmland',item.x,item.z,item.radius)&&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
   }
-  // Groves leave open meadows. Large canopy discs reserve space for all later details.
-  const groves=Array.from({length:13},()=>({x:(random()-.5)*world.bounds.width*.9,z:(random()-.5)*world.bounds.depth*.85}));
-  const treeTarget=Math.round(245*density*scale);
-  for(let attempt=0,accepted=0;attempt<treeTarget*32&&accepted<treeTarget;attempt++){
-    const grove=groves[Math.floor(random()*groves.length)],a=random()*Math.PI*2,r=Math.sqrt(random())*12;
-    const size=.72+random()*.52;
+  // The forest is a connected biome, with small open glades between groves.
+  const groves=[];
+  for(let i=0;i<500&&groves.length<16;i++){const p=candidate();if(biomeAt(world,p.x,p.z)==='forest')groves.push(p);}
+  const treeTarget=Math.round(250*density*scale);
+  for(let attempt=0,accepted=0;attempt<treeTarget*65&&accepted<treeTarget;attempt++){
+    const forest=attempt%13!==0;
+    const grove=forest&&groves.length?groves[Math.floor(random()*groves.length)]:candidate();
+    const a=random()*Math.PI*2,r=Math.sqrt(random())*11,size=.68+random()*.4;
     const item={kind:'tree',x:grove.x+Math.cos(a)*r,z:grove.z+Math.sin(a)*r,radius:.85*size,
       scale:size,variant:random()<.66?'pine':random()<.55?'round':'gold'};
-    if(canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+    const biome=biomeAt(world,item.x,item.z);
+    if((forest?biome==='forest':biome==='plains')&&fitsBiome(world,['forest','plains'],item.x,item.z,item.radius)
+      &&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
   }
-  for(let attempt=0,accepted=0;attempt<1200&&accepted<Math.round(70*density*scale);attempt++){
-    const kind=attempt%7===0?'sheep':'rock',size=.6+random()*.55;
-    const item={kind,x:(random()-.5)*world.bounds.width*.9,z:(random()-.5)*world.bounds.depth*.9,
-      radius:kind==='sheep'?.7:.65*size,scale:kind==='sheep'?1:size,variant:Math.floor(random()*3)};
-    if(canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+  for(let attempt=0,accepted=0;attempt<2200&&accepted<Math.round(25*density*scale);attempt++){
+    const size=.8+random()*.35,item={kind:'cactus',...candidate(),radius:.7*size,scale:size,variant:Math.floor(random()*3)};
+    if(fitsBiome(world,'desert',item.x,item.z,item.radius)&&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
   }
+  for(let attempt=0,accepted=0;attempt<2500&&accepted<Math.round(65*density*scale);attempt++){
+    const kind=attempt%6===0?'sheep':'rock',size=.6+random()*.55;
+    const item={kind,...candidate(),radius:kind==='sheep'?.7:.65*size,scale:kind==='sheep'?1:size,variant:Math.floor(random()*3)};
+    if(fitsBiome(world,kind==='sheep'?'plains':['plains','desert'],item.x,item.z,item.radius)
+      &&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+  }
+}
+
+function configureRailAxes(world,connections,throatLength){
+  for(const city of world.cities){
+    const incident=connections.filter(c=>c.from===city.id||c.to===city.id).map(c=>{
+      const from=c.from===city.id,other=world.cities.find(t=>t.id===(from?c.to:c.from));
+      const target=c.waypoints.length?(from?c.waypoints[0]:c.waypoints.at(-1)):other;
+      const d=distance(city,target)||1;
+      return{connection:c,end:from?'start':'end',x:(target.x-city.x)/d,z:(target.z-city.z)/d};
+    });
+    let axis=incident.length?{x:incident[0].x,z:incident[0].z}:{x:1,z:0},opposition=Infinity;
+    for(let i=0;i<incident.length;i++)for(let j=i+1;j<incident.length;j++){
+      const a=incident[i],b=incident[j],dot=a.x*b.x+a.z*b.z;
+      if(dot>=opposition)continue;opposition=dot;
+      const dx=a.x-b.x,dz=a.z-b.z,len=Math.hypot(dx,dz);
+      if(len>EPS)axis={x:dx/len,z:dz/len};
+    }
+    if(axis.x<0||(Math.abs(axis.x)<EPS&&axis.z<0))axis={x:-axis.x,z:-axis.z};
+    city.railAxis=axis;
+    const nearest=Math.min(...incident.map(item=>distance(city,world.cities.find(t=>t.id===(item.connection.from===city.id?item.connection.to:item.connection.from)))));
+    city.throatLength=Math.min(throatLength,nearest*.18);
+    for(const item of incident){
+      const side=item.x*axis.x+item.z*axis.z>=0?1:-1;
+      item.connection[item.end==='start'?'fromPort':'toPort']={cityId:city.id,side,
+        x:city.x+axis.x*side*city.throatLength,z:city.z+axis.z*side*city.throatLength,
+        heading:Math.atan2(axis.z*side,axis.x*side)};
+    }
+  }
+}
+function outwardPose(line,end,s){
+  const pose=sampleLine(line,end==='start'?s:line.length-s),sign=end==='start'?1:-1;
+  return{...pose,tangent:{x:pose.tangent.x*sign,y:0,z:pose.tangent.z*sign},curvature:(pose.curvature??0)*sign};
+}
+function commonPrefix(a,b){
+  const directed=item=>item.end==='start'?item.line.alignment.segments:item.line.alignment.segments.toReversed();
+  const aa=directed(a),bb=directed(b);let ia=0,ib=0,usedA=0,usedB=0,total=0;
+  while(ia<aa.length&&ib<bb.length){
+    const pa=outwardPose(a.line,a.end,total+1e-6),pb=outwardPose(b.line,b.end,total+1e-6);
+    if(distance(pa,pb)>1e-5||pa.tangent.x*pb.tangent.x+pa.tangent.z*pb.tangent.z<1-1e-8||Math.abs(pa.curvature-pb.curvature)>1e-8)break;
+    const step=Math.min(aa[ia].length-usedA,bb[ib].length-usedB);
+    if(step<EPS)break;total+=step;usedA+=step;usedB+=step;
+    if(usedA>=aa[ia].length-EPS){ia++;usedA=0;}
+    if(usedB>=bb[ib].length-EPS){ib++;usedB=0;}
+  }
+  return total;
+}
+function buildSharedNetwork(world){
+  world.sharedSections=[];world.transitions=[];
+  for(const line of world.lines){line.sharedSections=[];line.renderRanges=[{start:0,end:line.length}];}
+  for(const city of world.cities){
+    const incident=world.lines.flatMap(line=>line.from===city.id?[{line,end:'start',port:line.fromPort}]:line.to===city.id?[{line,end:'end',port:line.toPort}]:[]);
+    for(const from of incident)for(const to of incident)if(from.line!==to.line&&from.port.side!==to.port.side)
+      world.transitions.push({cityId:city.id,fromLineId:from.line.id,fromEnd:from.end,toLineId:to.line.id,toEnd:to.end});
+    for(const side of [-1,1]){
+      const members=incident.filter(item=>item.port.side===side);
+      if(members.length<2)continue;
+      const prefix=new Map();
+      const key=(a,b)=>[a.line.id,b.line.id].sort().join('|');
+      for(let i=0;i<members.length;i++)for(let j=i+1;j<members.length;j++)prefix.set(key(members[i],members[j]),commonPrefix(members[i],members[j]));
+      const boundaries=[0,...new Set([...prefix.values()].filter(v=>v>EPS).map(v=>Math.round(v*1e7)/1e7))].sort((a,b)=>a-b);
+      for(let k=1;k<boundaries.length;k++){
+        const lo=boundaries[k-1],hi=boundaries[k],mid=(lo+hi)/2,remaining=[...members];
+        while(remaining.length){
+          const owner=remaining.shift(),group=[owner];
+          for(let j=remaining.length-1;j>=0;j--)if((prefix.get(key(owner,remaining[j]))??0)>mid){group.push(remaining[j]);remaining.splice(j,1);}
+          if(group.length<2)continue;
+          group.sort((a,b)=>world.lines.indexOf(a.line)-world.lines.indexOf(b.line));
+          const lead=group[0],id=`shared-${city.id}-${side}-${world.sharedSections.length+1}`;
+          const points=Array.from({length:Math.max(2,Math.ceil((hi-lo)/.35)+1)},(_,i)=>{
+            const p=outwardPose(lead.line,lead.end,lo+(hi-lo)*i/(Math.max(2,Math.ceil((hi-lo)/.35)+1)-1));return{x:p.x,y:p.y,z:p.z};
+          });
+          const section={id,cityId:city.id,side,ownerLineId:lead.line.id,length:hi-lo,points,lines:[]};
+          for(const item of group){
+            const start=item.end==='start'?lo:item.line.length-hi,end=item.end==='start'?hi:item.line.length-lo;
+            const ref={id,cityId:city.id,side,start,end,ownerLineId:lead.line.id};item.line.sharedSections.push(ref);
+            section.lines.push({lineId:item.line.id,start,end,forward:item.end==='start'});
+            if(item!==lead)item.line.renderRanges=item.line.renderRanges.flatMap(r=>{
+              if(end<=r.start+EPS||start>=r.end-EPS)return[r];
+              return[{start:r.start,end:Math.max(r.start,start)},{start:Math.min(r.end,end),end:r.end}].filter(range=>range.end-range.start>EPS);
+            });
+          }
+          world.sharedSections.push(section);
+        }
+      }
+    }
+  }
+}
+function sharedAt(world,first,second,d1,d2,margin=.5){
+  return world.sharedSections.some(section=>{
+    const a=section.lines.find(l=>l.lineId===first.id),b=section.lines.find(l=>l.lineId===second.id);
+    return a&&b&&d1>=a.start-margin&&d1<=a.end+margin&&d2>=b.start-margin&&d2<=b.end+margin;
+  });
 }
 
 /** Locate actual at-grade crossings for the train reservation controller. */
@@ -316,6 +429,7 @@ function buildJunctions(world) {
     const first=world.lines[li],second=world.lines[lj];
     for(const u of segments[li])for(const v of segments[lj]){
       if(u.maxX<v.minX-EPS||v.maxX<u.minX-EPS||u.maxZ<v.minZ-EPS||v.maxZ<u.minZ-EPS)continue;
+      if(sharedAt(world,first,second,(first.distances[u.index]+first.distances[u.index+1])/2,(second.distances[v.index]+second.distances[v.index+1])/2))continue;
       const rx=u.b.x-u.a.x,rz=u.b.z-u.a.z,sx=v.b.x-v.a.x,sz=v.b.z-v.a.z;
       const qx=v.a.x-u.a.x,qz=v.a.z-u.a.z,denominator=cross(rx,rz,sx,sz);
       const r2=rx*rx+rz*rz;
@@ -380,16 +494,28 @@ export function generateWorld(input = {}) {
   assert(world.mountains.every(m=>distanceToRiver(world,m.x,m.z)>m.radius+riverWidth/2+CLEARANCES.riverBank),'mountain footprints must not overlap the river or its banks');
   const defaultConnections=(cities.length===2?cities.slice(0,1):cities).map((city,i)=>({from:city.id,to:cities[(i+1)%cities.length].id}));
   if(cities.length===8){defaultConnections.push({from:cities[7].id,to:cities[2].id},{from:cities[6].id,to:cities[3].id});}
-  const connections=input.connections??defaultConnections,colors=['coral','teal','gold','blue','coral','gold','teal','blue','gold','coral'];
-  assert(Array.isArray(connections)&&connections.length>0,'at least one connection is required');
+  const rawConnections=input.connections??defaultConnections,colors=['coral','teal','gold','blue','coral','gold','teal','blue','gold','coral'];
+  assert(Array.isArray(rawConnections)&&rawConnections.length>0,'at least one connection is required');
+  const connections=rawConnections.map((c,i)=>({...c,id:String(c.id??`line-${i+1}`),from:String(c.from),to:String(c.to),waypoints:(c.points??c.waypoints??[]).map(p=>point(p))}));
+  assert(connections.every(c=>cities.some(t=>t.id===c.from)&&cities.some(t=>t.id===c.to)&&c.from!==c.to),'connections must reference two different existing city IDs');
+  const edgeKeys=connections.map(c=>[c.from,c.to].sort().join('|'));
+  assert(new Set(edgeKeys).size===edgeKeys.length,'overlapping duplicate city connections must be represented by one railway');
+  const minTurnRadius=Number(input.minTurnRadius??WORLD_DEFAULTS.minTurnRadius),throatLength=Number(input.throatLength??WORLD_DEFAULTS.throatLength);
+  assert(Number.isFinite(minTurnRadius)&&minTurnRadius>0,'minTurnRadius must be positive and finite');
+  assert(Number.isFinite(throatLength)&&throatLength>=0,'throatLength must be finite and nonnegative');
+  world.minTurnRadius=minTurnRadius;configureRailAxes(world,connections,throatLength);
   for(let i=0;i<connections.length;i++){
     const connection=connections[i],from=cities.find(c=>c.id===String(connection.from)),to=cities.find(c=>c.id===String(connection.to));
     assert(from&&to&&from!==to,'connections must reference two different existing city IDs');
-    const waypoints=(connection.points??connection.waypoints??[]).map(p=>point(p));
+    const waypoints=connection.waypoints;
     assert(waypoints.every(finitePoint),'connection waypoints require finite x/z');
-    const nodes=[point(from),...waypoints,point(to)].filter((p,j,list)=>j===0||distance(p,list[j-1])>EPS);
-    const line={id:String(connection.id??`line-${i+1}`),from:from.id,to:to.id,color:connection.color??colors[i%colors.length],closed:false,
-      ...sampledPolyline(roundedWaypoints(nodes),WORLD_DEFAULTS.railY),bridges:[],tunnels:[],cuts:[],stationIds:[]};
+    const start=connection.fromPort,end={...connection.toPort,heading:connection.toPort.heading+Math.PI};
+    const middle=createAlignment(start,end,{radius:minTurnRadius,waypoints,y:WORLD_DEFAULTS.railY,
+      isAllowed:p=>inWorld(world,p.x,p.z,CLEARANCES.routeEdge)});
+    const alignment=combineAlignments([straightSegment(from,start),middle,straightSegment(end,to)],minTurnRadius);
+    const line={id:connection.id,from:from.id,to:to.id,color:connection.color??colors[i%colors.length],closed:false,
+      fromPort:connection.fromPort,toPort:connection.toPort,alignment,
+      ...sampleAlignmentPoints(alignment,WORLD_DEFAULTS.sampleSpacing),bridges:[],tunnels:[],cuts:[],stationIds:[]};
     assert(line.length>EPS,'connections must have nonzero length');
     assert(line.points.every(p=>inWorld(world,p.x,p.z,CLEARANCES.routeEdge))
       &&world.outline.every(([x,z])=>distanceToLine(line,x,z)>=CLEARANCES.routeEdge),
@@ -406,10 +532,7 @@ export function generateWorld(input = {}) {
         for(let j=0;j<=24;j++){
           const a=j/24*Math.PI,lateral=Math.cos(a)*CLEARANCES.tunnelArchRadius;
           const archY=WORLD_DEFAULTS.railY+CLEARANCES.tunnelArchSpring+Math.sin(a)*CLEARANCES.tunnelArchRadius;
-          // The inscribed circle is a lower bound on every face of the
-          // rendered polygonal cone, even for very tall custom mountains.
-          const innerRadius=mountain.radius*Math.cos(Math.PI/CLEARANCES.mountainFacets);
-          const rockHeight=Math.max(0,1-Math.hypot(p.x+nx*lateral-mountain.x,p.z+nz*lateral-mountain.z)/innerRadius)*mountain.height;
+          const rockHeight=mountainHeight(mountain,p.x+nx*lateral,p.z+nz*lateral);
           deficit=Math.max(deficit,archY+CLEARANCES.tunnelRockCover-rockHeight);
         }
         return deficit;
@@ -427,7 +550,9 @@ export function generateWorld(input = {}) {
     world.lines.push(line);
   }
   assert(new Set(world.lines.map(l=>l.id)).size===world.lines.length,'line IDs must be unique');
+  buildSharedNetwork(world);
   buildJunctions(world);
+  world.biomes=createBiomes(world,input.biomes);
   placeStations(world);
   world.placements=[];
   placeScenery(world,random,clamp(Number(input.density??1)||0,0,3));
@@ -440,6 +565,7 @@ export function validateWorld(world) {
   const add=(type,id,detail)=>violations.push({type,id,detail});
   for(const line of world.lines){
     if(!Number.isFinite(line.length)||line.length<=0)add('route-length',line.id,'Route length must be positive');
+    if(line.alignment)for(const segment of line.alignment.segments)if(segment.type==='arc'&&segment.radius<(world.minTurnRadius??WORLD_DEFAULTS.minTurnRadius)-1e-6)add('route-curvature',line.id,'Railway bend is tighter than its minimum turning radius');
     for(let i=1;i<line.points.length;i++){
       const a=line.points[i-1],b=line.points[i];
       if(!finitePoint(a)||!finitePoint(b)||!Number.isFinite(b.y))add('route-coordinate',line.id,'Non-finite route point');
@@ -459,6 +585,7 @@ export function validateWorld(world) {
   }
   for(let i=0;i<world.placements.length;i++){
     const item=world.placements[i],r=item.radius;
+    if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],item.x,item.z,r-.001))add('asset-biome',item.id,'Footprint enters ocean, shore, or mountain');
     if(!inWorld(world,item.x,item.z,r+CLEARANCES.worldEdge-.001))add('asset-edge',item.id,'Footprint crosses island edge');
     if(distanceToRoutes(world,item.x,item.z)<r+CLEARANCES.track-.001)add('asset-track',item.id,'Footprint enters railway clearance');
     if(distanceToRiver(world,item.x,item.z)<r+world.river.width/2+CLEARANCES.riverBank-.001)add('asset-water',item.id,'Footprint enters river bank');

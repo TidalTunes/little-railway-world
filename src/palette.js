@@ -16,6 +16,9 @@ export function color(l, c, h) {
 
 const values = {
   grass: [.72, .117, 126], grassLight: [.76, .12, 122], grassDark: [.67, .105, 131],
+  farmland: [.77, .095, 105], forestFloor: [.66, .085, 136], desert: [.81, .083, 80],
+  desertLight: [.85, .068, 85], desertRock: [.66, .083, 55], cactus: [.51, .073, 153],
+  ocean: [.64, .101, 220], oceanLight: [.72, .085, 208], mountainFloor: [.64, .039, 143],
   meadow: [.75, .105, 118], soil: [.55, .065, 69], soilLight: [.66, .068, 77],
   rock: [.66, .027, 170], rockLight: [.75, .031, 163], rockDark: [.52, .024, 181],
   snow: [.96, .012, 202], water: [.64, .095, 216], waterLight: [.73, .087, 207],

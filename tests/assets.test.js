@@ -6,6 +6,7 @@ import {
   house,
   station,
   tree,
+  cactus,
   landmark,
   farmPatch,
   sheep,
@@ -15,7 +16,7 @@ import {
 import { generateWorld } from '../src/world-model.js';
 import { buildMountains } from '../src/geography.js';
 
-const builders = {house, station, tree, landmark, farmPatch, sheep, person, trainCar: buildTrainCar};
+const builders = {house, station, tree, cactus, landmark, farmPatch, sheep, person, trainCar: buildTrainCar};
 const epsilon = 1e-5;
 
 function checkBounds(name, variant, rotation, scale) {
@@ -71,7 +72,7 @@ function checkBounds(name, variant, rotation, scale) {
 
 for (const name of Object.keys(builders)) {
   test(`${name} variants stay inside their declared footprint and height`, () => {
-    const scales = name === 'house' || name === 'tree' ? [.7, 1, 1.3] : [1];
+    const scales = ['house', 'tree', 'cactus'].includes(name) ? [.7, 1, 1.3] : [1];
     for (let variant = -1; variant < 7; variant++) {
       for (const rotation of [0, .47, Math.PI / 2]) {
         for (const scale of scales) checkBounds(name, variant, rotation, scale);

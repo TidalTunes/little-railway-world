@@ -21,14 +21,14 @@
     { "id": "east-hill", "x": 31, "z": -5, "radius": 6, "height": 7 }
   ],
   "connections": [
-    { "id": "cedar-summit", "from": "cedar", "to": "summit", "points": [[-26, -28]], "color": "coral" },
+    { "id": "cedar-summit", "from": "cedar", "to": "summit", "color": "coral" },
     { "id": "summit-eastbank", "from": "summit", "to": "eastbank", "points": [[14, -33]], "color": "teal" },
     { "id": "eastbank-harbor", "from": "eastbank", "to": "harbor", "points": [[46, -9]], "color": "gold" },
     { "id": "harbor-orchard", "from": "harbor", "to": "orchard", "points": [[42, 29]], "color": "blue" },
     { "id": "orchard-meadow", "from": "orchard", "to": "meadow", "points": [[6, 35]], "color": "coral" },
     { "id": "meadow-westfield", "from": "meadow", "to": "westfield", "points": [[-30, 29]], "color": "teal" },
     { "id": "westfield-cedar", "from": "westfield", "to": "cedar", "points": [[-50, -1]], "color": "gold" },
-    { "id": "cedar-meadow", "from": "cedar", "to": "meadow", "points": [[-31, -3], [-22, 14]], "color": "blue" },
-    { "id": "westfield-summit", "from": "westfield", "to": "summit", "points": [[-29, 1], [-19, -16]], "color": "coral" }
+    { "id": "cedar-meadow", "from": "cedar", "to": "meadow", "color": "blue" },
+    { "id": "westfield-summit", "from": "westfield", "to": "summit", "color": "coral" }
   ]
 }

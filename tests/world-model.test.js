@@ -49,8 +49,18 @@ function assertLineGeometry(line) {
     finitePoint(point, `${line.id} point ${index}`);
     if (index > 0) {
       const previous = line.points[index - 1];
-      const segmentLength = Math.hypot(point.x - previous.x,
+      let segmentLength = Math.hypot(point.x - previous.x,
         point.y - previous.y, point.z - previous.z);
+      // Exact arcs have a greater length than their sampled display chords.
+      // Recover each sample interval geometrically from its circular centre.
+      const midpoint = (line.distances[index - 1] + line.distances[index]) / 2;
+      const primitive = line.alignment?.segments.find(piece =>
+        midpoint >= piece.startDistance && midpoint <= piece.endDistance);
+      if (primitive?.type === 'arc') {
+        const ax = previous.x - primitive.center.x, az = previous.z - primitive.center.z;
+        const bx = point.x - primitive.center.x, bz = point.z - primitive.center.z;
+        segmentLength = Math.abs(Math.atan2(ax * bz - az * bx, ax * bx + az * bz)) * primitive.radius;
+      }
       assert.ok(segmentLength > 0, `${line.id} has no duplicate adjacent points`);
       measuredLength += segmentLength;
       close(line.distances[index], measuredLength, `${line.id} cumulative length`);
@@ -70,8 +80,11 @@ function assertLineGeometry(line) {
     finitePoint(point.tangent, `${line.id} tangent ${step}`);
     close(Math.hypot(point.tangent.x, point.tangent.y, point.tangent.z),
       1, `${line.id} unit tangent`);
+    const radius = line.alignment?.minRadius;
+    const largestStep = Math.max(...line.distances.slice(1).map((d, i) => d - line.distances[i]));
+    const chordTolerance = radius ? radius * (1 - Math.cos(largestStep / (2 * radius))) + 1e-6 : 1e-6;
     close(polylineDistance(point, line.points), 0,
-      `${line.id} sampling stays on its rendered route`);
+      `${line.id} sampled rail chords stay within the exact arc sagitta`, chordTolerance);
   }
   for (const [kind, intervals] of [['bridge', line.bridges], ['tunnel', line.tunnels]]) {
     let previousEnd = -Infinity;
@@ -373,8 +386,8 @@ test('city counts and bent authored layouts do not depend on the showcase arrang
       {id: 'c', x: -33, z: 23}],
     mountains: [],
     river: {points: [[0, -60], [4, -15], [-5, 15], [0, 60]], width: 4},
-    connections: [{from: 'a', to: 'b', points: [[-22, -16], [21, -13], [22, 17]]},
-      {from: 'b', to: 'c', points: [[15, 28], [-8, 28]]}, {from: 'c', to: 'a'}]});
+    connections: [{from: 'a', to: 'b', points: [[-10, -22], [15, -5]]},
+      {from: 'b', to: 'c', points: [[10, 34], [-14, 32]]}, {from: 'c', to: 'a'}]});
   assertConnected(world);
   world.lines.forEach(assertLineGeometry);
   assertPlacementClearance(world);

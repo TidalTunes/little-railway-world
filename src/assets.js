@@ -8,6 +8,7 @@ export const ASSET_BOUNDS = Object.freeze({
   tree: { radius: .85, height: 2.8 },
   landmark: { radius: 2, height: 4.5 },
   farmPatch: { width: 3, depth: 4, height: .42 },
+  cactus: { radius: .70, height: 2.4 },
   sheep: { width: .46, depth: .72, height: .53 },
   person: { radius: .17, height: .75 },
   trainCar: { width: 1.12, depth: 2.4, height: 1.6 },
@@ -136,8 +137,8 @@ export function landmark(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 
   return g;
 }
 
-export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0 } = {}) {
-  const g = asset(parent, 'farmPatch', { x, y, z, rotation });
+export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1 } = {}) {
+  const g = asset(parent, 'farmPatch', { x, y, z, rotation, scale });
   const type = variantOf(variant, 3);
   box(g, 0, .025, 0, 3, .05, 4, 'field');
   const crop = ['wheat', 'leaf', 'lavender'][type];
@@ -196,6 +197,19 @@ export function buildTrainCar(parent, { color = 'red', cab = false } = {}) {
     box(g, 0, .77, 1.085, .86, .25, .12, color);
     for (const xx of [-.31, .31]) box(g, xx, .79, 1.151, .14, .13, .03, 'gold');
     box(g, 0, 1.515, -.35, .48, .06, .45, color);
+  }
+  return g;
+}
+
+export function cactus(parent,{x=0,y=0,z=0,rotation=0,scale=1,variant=0}={}){
+  const g=asset(parent,'cactus',{x,y,z,rotation,scale});
+  const height=variant%2?1.8:2.2;
+  cylinder(g,0,height/2,0,.16,.20,height,'cactus',6);
+  ico(g,0,height,0,.16,.17,.16,'cactus');
+  for(const [side,level] of [[-1,.72],[1,1.1]]){
+    beam(g,v(0,level,0),v(side*.47,level,0),.16,'cactus');
+    cylinder(g,side*.47,level+.24,0,.10,.12,.50,'cactus',6);
+    ico(g,side*.47,level+.49,0,.10,.11,.10,'cactus');
   }
   return g;
 }

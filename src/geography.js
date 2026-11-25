@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import clipping from 'polygon-clipping';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { M } from './palette.js';
-import { box, beam, mesh, group, v } from './geometry.js';
-import { sampleLine, CLEARANCES } from './world-model.js';
+import { biomeDistance } from './biomes.js';
+import { box, beam, mesh, group, v, solidRibbon } from './geometry.js';
+import { sampleLine, distanceToLine, CLEARANCES } from './world-model.js';
+import { mountainMeshData, mountainSnowHeight } from './mountain-shape.js';
 
 const TUNNEL_RADIUS = 1.08;
 const TUNNEL_SPRING = 1.80;
@@ -44,27 +46,42 @@ function distanceToRiver(points,x,z){
 }
 
 export function buildTerrain(parent,world){
-  const island=[world.outline];
+  const island=[world.outline],islandMulti=[island];
   const waterY=world.river.points[0]?.y??-1.2;
   const waterRing=ribbonRing(world.river.points,world.river.width);
   const bankRing=ribbonRing(world.river.points,world.river.width+1.6);
-  const land=clipping.difference(island,[bankRing]);
-  const banks=clipping.intersection(island,clipping.difference([bankRing],[waterRing]));
-  const water=clipping.intersection(island,[waterRing]);
-  surface(parent,[island],waterY-.12,'soil',waterY-.12-BASE);
+  const riverWater=clipping.intersection(island,[waterRing]);
+  const riverBanks=clipping.intersection(island,clipping.difference([bankRing],[waterRing]));
+  const ocean=world.biomes?.ocean??[],oceanShore=world.biomes?.oceanShore??[];
+  const water=ocean.length?clipping.union(riverWater,ocean):riverWater;
+  const bankUnion=oceanShore.length?clipping.union(riverBanks,oceanShore):riverBanks;
+  const banks=clipping.difference(bankUnion,water);
+  const land=clipping.difference(island,water,banks);
+  surface(parent,islandMulti,waterY-.12,'soil',waterY-.12-BASE);
   surface(parent,land,0,'soilLight',-waterY+.12);
-  surface(parent,land,.018,'grass');
+  const biomes=world.biomes?.regions;
+  if(biomes){
+    const materials={farmland:'farmland',forest:'forestFloor',plains:'grass',desert:'desert',mountain:'mountainFloor'};
+    for(const region of biomes){
+      if(!materials[region.type])continue;
+      surface(parent,clipping.intersection(region.polygons,land),.018,materials[region.type]);
+    }
+  }else surface(parent,land,.018,'grass');
   for(const rings of banks){
     const geometry=new THREE.ShapeGeometry(polygonShape(rings));geometry.rotateX(-Math.PI/2);
     const pos=geometry.attributes.position;
     for(let i=0;i<pos.count;i++){
-      const distance=distanceToRiver(world.river.points,pos.getX(i),pos.getZ(i));
-      pos.setY(i,waterY+THREE.MathUtils.clamp((distance-world.river.width/2)/.8,0,1)*(-waterY)+.015);
+      const x=pos.getX(i),z=pos.getZ(i);
+      const riverSlope=(distanceToRiver(world.river.points,x,z)-world.river.width/2)/.8;
+      const oceanSlope=ocean.length?-biomeDistance(world,'ocean',x,z)/(world.biomes.shoreWidth??.9):Infinity;
+      pos.setY(i,waterY+THREE.MathUtils.clamp(Math.min(riverSlope,oceanSlope),0,1)*(-waterY)+.015);
     }
     geometry.computeVertexNormals();mesh(parent,geometry,'sand');
   }
-  surface(parent,water,waterY+.03,'waterLight');
-  // Thin strata and spillways follow the island boundary, not fixed coordinates.
+  surface(parent,riverWater,waterY+.03,'waterLight');
+  if(ocean.length){
+    surface(parent,ocean,waterY+.035,'ocean');
+  }
   for(let i=0;i<world.outline.length;i++){
     const a=world.outline[i],b=world.outline[(i+1)%world.outline.length];
     beam(parent,v(a[0],BASE+.55,a[1]),v(b[0],BASE+.55,b[1]),.08,'soilLight',.06);
@@ -72,6 +89,8 @@ export function buildTerrain(parent,world){
     for(let j=0;j<count;j++){
       const t=(j+.5)/count,x=THREE.MathUtils.lerp(a[0],b[0],t),z=THREE.MathUtils.lerp(a[1],b[1],t);
       if(distanceToRiver(world.river.points,x,z)>world.river.width/2-.15)continue;
+      // River spillways stop where the river has already joined the ocean.
+      if(ocean.length&&biomeDistance(world,'ocean',x,z)>-.3)continue;
       const out=v(b[1]-a[1],0,a[0]-b[0]).normalize().multiplyScalar(.06);
       box(parent,x+out.x,(waterY+BASE)/2,z+out.z,.47,waterY-BASE,.16,j%4?'waterLight':'foam',Math.atan2(b[0]-a[0],b[1]-a[1])+Math.PI/2);
     }
@@ -89,8 +108,8 @@ function archProfile(radius=TUNNEL_RADIUS,spring=TUNNEL_SPRING,bottom=-.9){
 }
 
 // Closed, consistently wound loft: this volume is physically subtracted from rock.
-export function tunnelCutter(line,start,end){
-  const profile=archProfile(),n=profile.length,vertices=[],indices=[];
+function excavationLoft(line,start,end,profile){
+  const n=profile.length,vertices=[],indices=[];
   const steps=Math.max(2,Math.ceil((end-start)/1.0));
   for(let s=0;s<=steps;s++){
     const p=sampleLine(line,start+(end-start)*s/steps),d=p.tangent;
@@ -110,15 +129,31 @@ export function tunnelCutter(line,start,end){
   return geometry;
 }
 
+export function tunnelCutter(line,start,end){
+  return excavationLoft(line,start,end,archProfile());
+}
+
+export function openCuttingCutter(line,start,end,height){
+  // An unroofed cutting reaches beyond the entire mountain. A small outward
+  // batter makes its exposed stone walls readable without encroaching on trains.
+  const bottom=-.9,top=height+2,floor=TUNNEL_RADIUS,lip=floor+.65;
+  return excavationLoft(line,start,end,[new THREE.Vector2(-floor,bottom),
+    new THREE.Vector2(floor,bottom),new THREE.Vector2(lip,top),new THREE.Vector2(-lip,top)]);
+}
+
 export function createMountainGeometry(mountain,lines){
-  const cone=new THREE.ConeGeometry(mountain.radius,mountain.height,CLEARANCES.mountainFacets,1);
-  cone.translate(mountain.x,mountain.height/2,mountain.z);cone.clearGroups();
-  let result=new Brush(cone,M.rock);result.updateMatrixWorld(true);
+  const {vertices,triangles}=mountainMeshData(mountain);
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices.flatMap(p=>[p.x,p.y,p.z]),3));
+  geometry.setIndex(triangles.flat());geometry.computeVertexNormals();
+  let result=new Brush(geometry,M.rock);result.updateMatrixWorld(true);
   const evaluator=new Evaluator();evaluator.attributes=['position','normal'];evaluator.useGroups=false;
   for(const line of lines)for(const tunnel of (line.cuts??line.tunnels).filter(t=>t.mountainId===mountain.id)){
     const start=Math.max(0,(tunnel.cutStart??tunnel.start)-2);
     const end=Math.min(line.length,(tunnel.cutEnd??tunnel.end)+2);
-    const cutter=new Brush(tunnelCutter(line,start,end),M.rock);cutter.updateMatrixWorld(true);
+    const covered=(line.tunnels??[]).some(span=>span.mountainId===mountain.id
+      &&span.start<tunnel.end&&span.end>tunnel.start);
+    const cutter=new Brush(covered?tunnelCutter(line,start,end):openCuttingCutter(line,start,end,mountain.height),M.rock);cutter.updateMatrixWorld(true);
     const next=evaluator.evaluate(result,cutter,SUBTRACTION);
     result.geometry.dispose();cutter.geometry.dispose();result=next;result.updateMatrixWorld(true);
   }
@@ -148,13 +183,41 @@ export function buildMountains(parent,world){
   const result=[];
   for(const mountain of world.mountains){
     const geo=createMountainGeometry(mountain,world.lines);
-    const rock=mesh(parent,geo,'rock');result.push(rock);
-    if(mountain.height>8){
-      const capFraction=.27;
-      const cap=new THREE.ConeGeometry(mountain.radius*capFraction+.012,mountain.height*capFraction,CLEARANCES.mountainFacets);
-      cap.translate(mountain.x,mountain.height*(1-capFraction/2)+.015,mountain.z);
-      mesh(parent,cap,'snow');
+    const positions=geo.getAttribute('position'),index=geo.getIndex();
+    const count=index?index.count:positions.count;
+    const facets={rock:[],rockLight:[],rockDark:[]},snow=[];
+    const light=v(-.55,.77,.32).normalize();
+    for(let i=0;i<count;i+=3){
+      const points=[0,1,2].map(j=>v().fromBufferAttribute(positions,index?index.getX(i+j):i+j));
+      const normal=points[1].clone().sub(points[0]).cross(points[2].clone().sub(points[0])).normalize();
+      const brightness=normal.dot(light);
+      const material=normal.y<-.15?'rockDark':normal.y>=0&&normal.y<.15?'rockLight'
+        :brightness<.05?'rockDark':brightness>.68?'rockLight':'rock';
+      points.forEach(p=>facets[material].push(p.x,p.y,p.z));
+      if(mountain.height<=8||normal.y<.10)continue;
+      // Clip snow to the already excavated rock faces. No independent cap can
+      // span a tunnel or fill an opening, even on a low or off-centre summit.
+      const signed=points.map(p=>p.y-mountainSnowHeight(mountain,p.x,p.z));
+      const clipped=[];
+      for(let j=0;j<3;j++){
+        const next=(j+1)%3,a=points[j],b=points[next],da=signed[j],db=signed[next];
+        if(da>=0)clipped.push(a.clone());
+        if((da>=0)!==(db>=0))clipped.push(a.clone().lerp(b,da/(da-db)));
+      }
+      for(let j=1;j<clipped.length-1;j++){
+        for(const p of [clipped[0],clipped[j],clipped[j+1]])snow.push(p.x,p.y+.018,p.z);
+      }
     }
+    for(const [material,vertices]of Object.entries(facets)){
+      if(!vertices.length)continue;
+      const faces=new THREE.BufferGeometry();faces.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));faces.computeVertexNormals();
+      const rock=mesh(parent,faces,material);rock.name=`mountain-${mountain.id}-${material}`;result.push(rock);
+    }
+    if(snow.length){
+      const cap=new THREE.BufferGeometry();cap.setAttribute('position',new THREE.Float32BufferAttribute(snow,3));cap.computeVertexNormals();
+      const cover=mesh(parent,cap,'snow');cover.name=`mountain-${mountain.id}-snow`;
+    }
+    geo.dispose();
   }
   for(const line of world.lines)for(const t of line.tunnels){
     tunnelPortal(parent,line,t.start,false);tunnelPortal(parent,line,t.end,true);
@@ -162,23 +225,33 @@ export function buildMountains(parent,world){
   return result;
 }
 
-export function buildBridge(parent,line,bridge,waterY){
+export function buildBridge(parent,line,bridge,waterY,world){
   const start=bridge.start,end=bridge.end;
-  const count=Math.max(1,Math.ceil((end-start)/2));
-  for(let i=0;i<count;i++){
-    const a=sampleLine(line,THREE.MathUtils.lerp(start,end,i/count));
-    const b=sampleLine(line,THREE.MathUtils.lerp(start,end,(i+1)/count));
-    // Oriented decks keep the full track width on every route bearing.
-    const angle=Math.atan2(b.x-a.x,b.z-a.z),length=Math.hypot(b.x-a.x,b.z-a.z)+.035;
-    const g=group(parent,(a.x+b.x)/2,0,(a.z+b.z)/2,angle);
-    box(g,0,(a.y+b.y)/2-.34,0,2.42,.25,length,'platform');
-    for(const side of [-1,1]){
-      box(g,side*1.13,(a.y+b.y)/2+.12,0,.10,.12,length,'trim');
-      box(g,side*1.13,(a.y+b.y)/2-.06,-length/2,.10,.45,.10,'platform');
-      beam(g,v(side*1.13,a.y-.25,-length/2),v(side*1.13,b.y+.12,length/2),.065,'platform');
+  const steps=Math.max(1,Math.ceil((end-start)/.30));
+  const points=Array.from({length:steps+1},(_,i)=>sampleLine(line,start+(end-start)*i/steps));
+  // A single swept deck follows the exact track normal through curved crossings.
+  solidRibbon(parent,points,2.42,-.465,-.215,'platform');
+  const safe=p=>!world||world.lines.every(other=>other.id===line.id||distanceToLine(other,p.x,p.z)>=1.03);
+  for(const side of [-1,1]){
+    const edge=points.map(p=>({...p,x:p.x+p.tangent.z*side*1.13,z:p.z-p.tangent.x*side*1.13}));
+    // At a turnout over water, the shared deck stays open to the joining line.
+    // Guard rails belong only on its outside edge, never across another track.
+    let run=[];
+    const finish=()=>{if(run.length>1)solidRibbon(parent,run,.10,.06,.18,'trim');run=[];};
+    for(const p of edge){if(safe(p))run.push(p);else finish();}finish();
+    const count=Math.max(1,Math.ceil((end-start)/2));
+    for(let i=0;i<=count;i++){
+      const p=sampleLine(line,start+(end-start)*i/count);
+      const x=p.x+p.tangent.z*side*1.13,z=p.z-p.tangent.x*side*1.13;
+      if(safe({x,z}))box(parent,x,p.y-.06,z,.10,.45,.10,'platform',p.angle);
+      if(i===count)continue;
+      const q=sampleLine(line,start+(end-start)*(i+1)/count);
+      const target={x:q.x+q.tangent.z*side*1.13,z:q.z-q.tangent.x*side*1.13};
+      if([0,.25,.5,.75,1].every(t=>safe({x:x+(target.x-x)*t,z:z+(target.z-z)*t})))
+        beam(parent,v(x,p.y-.25,z),v(target.x,q.y+.12,target.z),.065,'platform');
     }
   }
-  for(const s of [start,end]){
+  for(const s of [bridge.startAbutment!==false?start:null,bridge.endAbutment!==false?end:null].filter(s=>s!==null)){
     const p=sampleLine(line,s),bottom=waterY-.14,top=p.y-.46;
     box(parent,p.x,(bottom+top)/2,p.z,2.5,top-bottom,.7,'rockLight',p.angle);
   }

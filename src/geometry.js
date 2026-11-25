@@ -86,3 +86,22 @@ export function consolidate(root) {
   originals.forEach(geometry=>geometry.dispose());
   return root;
 }
+
+// Solid strips put ballast on the ground, sleepers on ballast and rails on
+// sleepers. The same vertical datum continues across a bridge and into a tunnel.
+export function solidRibbon(parent,points,width,bottom,top,material){
+  const vertices=[],indices=[];
+  points.forEach((p,i)=>{
+    const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)];
+    const n=p.tangent?v(p.tangent.z,0,-p.tangent.x).multiplyScalar(width/2):v(b.z-a.z,0,a.x-b.x).normalize().multiplyScalar(width/2);
+    vertices.push(p.x-n.x,p.y+bottom,p.z-n.z,p.x+n.x,p.y+bottom,p.z+n.z,
+      p.x-n.x,p.y+top,p.z-n.z,p.x+n.x,p.y+top,p.z+n.z);
+    if(i<points.length-1){const j=i*4;
+      indices.push(j+2,j+6,j+3,j+3,j+6,j+7, j,j+4,j+2,j+2,j+4,j+6,
+        j+1,j+3,j+5,j+3,j+7,j+5, j,j+1,j+4,j+1,j+5,j+4);
+    }
+  });
+  const j=(points.length-1)*4;indices.push(0,2,1,1,2,3,j,j+1,j+2,j+1,j+3,j+2);
+  const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+  geometry.setIndex(indices);geometry.computeVertexNormals();return mesh(parent,geometry,material);
+}
