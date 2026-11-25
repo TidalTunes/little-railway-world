@@ -40,6 +40,7 @@ export function makeTrains(parent,world){
     const parts=Array.from({length:state.count},(_,i)=>consolidate(buildTrainCar(parent,{
       color:LIVERY[state.color]??'redLight',cab:i===0||i===state.count-1,
     })));
+    parts.forEach(part=>{part.userData.trainId=state.id;});
     return {state,parts,update(){
       parts.forEach((car,i)=>{
         const offset=(i-(state.count-1)/2)*state.spacing;

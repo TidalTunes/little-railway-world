@@ -8,6 +8,8 @@ A sunlit miniature railway. The viewport is entirely the world: no typography, l
 
 An irregular layered terrain tile carries compact towns, a river, and broad coherent biomes. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places. Quiet open ground makes the trains easy to follow. The default eight-city map and authored layouts use the same placement rules.
 
+The world has three viewing distances. The far view becomes a flat illustrated map with broad colors, mountain contours, small town symbols, and moving train marks. The middle view presents the isometric miniature. The close view looks down on individual trains and their surroundings. All three share the same geography and simulation state.
+
 ## Color
 
 Green meadow, deep pine, warm fields, pale sand, cyan water, terracotta roofs, pale plaster, and colorful trains. Every material has a deliberate role. Definitions in `src/palette.js` use OKLCH converted to linear sRGB; the page background uses OKLCH directly.
@@ -28,6 +30,10 @@ Trains follow continuous circuits through cities when the graph permits them. Ea
 
 A small boat, water ripples, birds, and a balloon provide quieter background movement. Space pauses motion; reduced-motion preferences start paused.
 
+Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions finish in a clear flat representation. Reduced-motion preferences make camera transitions immediate.
+
 ## Inspection
 
-Orthographic camera gestures and keyboard shortcuts allow inspection. R generates another seed. A JSON authoring API loads and validates layouts, but there is no editor UI or playable economy in this iteration. The canvas has a screen-reader description and a focus outline during keyboard use.
+Scroll, pinch, and + / − move through the three views. Drag orbits the isometric world and pans the map or close view. Click or tap a visible train to follow it; F selects the visible train nearest the centre, and [ / ] cycle active trains. Escape, an empty click, or zooming out releases follow. Home and double-click restore the isometric view. Arrow keys orbit or pan, Space pauses, and R generates another seed.
+
+A JSON authoring API loads and validates layouts, but there is no editor UI or playable economy in this iteration. The canvas has a screen-reader description and a focus outline during keyboard use. Tab moves focus normally, and train selection has keyboard equivalents.
