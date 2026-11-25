@@ -7,13 +7,13 @@ import { biomeAt } from './biomes.js';
 
 const WALLS=['plaster','peach','sage','blush','plaster','blue'];
 
-export function buildWorld(parent,world){
+export function buildWorld(parent,world,{terrain=true}={}){
   const root=group(parent);root.name='landscape';
   const palettes=new Map((world.players??[]).map(player=>[player.id,createPlayerPalette(player)]));
   const cities=new Map(world.cities.map(city=>[city.id,city]));
   const paletteFor=p=>palettes.get(p.ownerId??cities.get(p.cityId)?.ownerId);
   root.userData.ownedMaterials=[...palettes.values()].flatMap(palette=>Object.values(palette));
-  buildTerrain(root,world);
+  if(terrain)buildTerrain(root,world);
   buildMountains(root,world);
   for(const street of world.cityStreets??[]){
     if(street.points.length<2)continue;
@@ -48,3 +48,5 @@ export function buildWorld(parent,world){
   });
   return consolidate(root);
 }
+
+export { createWorldRenderer } from './world-renderer.js';

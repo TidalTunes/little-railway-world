@@ -41,7 +41,9 @@ function parcelsFor(width,depth,variant){
 export function placeFarmland(world,{density=1,canPlace,add}={}){
   if(typeof canPlace!=='function'||typeof add!=='function')throw new TypeError('Farmland requires canPlace and add callbacks');
   const regions=(world.biomes?.regions??[]).filter(region=>region.type==='farmland');
-  const area=regions.reduce((total,region)=>total+polygonArea(region.polygons),0);
+  const regionBounds=world.detailRegion;
+  const regionArea=regions.reduce((total,region)=>total+polygonArea(region.polygons),0);
+  const area=regionBounds?Math.min(regionArea,(regionBounds.maxX-regionBounds.minX)*(regionBounds.maxZ-regionBounds.minZ)):regionArea;
   const amount=Math.max(0,Math.min(3,Number(density)||0));
   const result={districts:[],area:0,targetArea:area*Math.min(.50,.28*amount)};
   if(!amount||!area)return result;
@@ -55,7 +57,14 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
     const minU=Math.min(...local.map(p=>p.u)),maxU=Math.max(...local.map(p=>p.u));
     const minV=Math.min(...local.map(p=>p.v)),maxV=Math.max(...local.map(p=>p.v));
     const step=5.2,phaseU=random()*step,phaseV=random()*step,variant=Math.floor(random()*3);
-    for(let u=minU+phaseU;u<maxU;u+=step)for(let v=minV+phaseV;v<maxV;v+=step){
+    let startU=minU+phaseU,endU=maxU,startV=minV+phaseV,endV=maxV;
+    if(regionBounds){
+      const corners=[[regionBounds.minX,regionBounds.minZ],[regionBounds.maxX,regionBounds.minZ],[regionBounds.maxX,regionBounds.maxZ],[regionBounds.minX,regionBounds.maxZ]].map(([x,z])=>({u:x*cos-z*sin,v:x*sin+z*cos}));
+      const lowU=Math.min(...corners.map(p=>p.u)),lowV=Math.min(...corners.map(p=>p.v));
+      startU+=Math.max(0,Math.ceil((lowU-startU)/step))*step;startV+=Math.max(0,Math.ceil((lowV-startV)/step))*step;
+      endU=Math.min(endU,Math.max(...corners.map(p=>p.u)));endV=Math.min(endV,Math.max(...corners.map(p=>p.v)));
+    }
+    for(let u=startU;u<endU;u+=step)for(let v=startV;v<endV;v+=step){
       const x=u*cos+v*sin,z=-u*sin+v*cos,clearance=biomeDistance(world,'farmland',x,z);
       if(clearance<4.4)continue;
       candidates.push({x,z,rotation,regionId:region.id,variant,clearance,
@@ -71,7 +80,7 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
       if(result.area>=result.targetArea)return result;
       if(candidate.used||candidate.clearance<radius||!fitsBiome(world,'farmland',candidate.x,candidate.z,radius))continue;
       if(result.districts.some(d=>Math.hypot(candidate.x-d.x,candidate.z-d.z)<radius+d.radius))continue;
-      const districtId=`farm-${candidate.regionId}-${result.districts.length+1}`;
+      const districtId=`farm-${candidate.regionId}-${regionBounds?`${regionBounds.minX}-${regionBounds.minZ}-`:""}${result.districts.length+1}`;
       const item={kind:'farm',x:candidate.x,y:0,z:candidate.z,width,depth,radius,scale:1,
         rotation:candidate.rotation,variant:candidate.variant,districtId,
         parcels:parcelsFor(width,depth,candidate.variant)};

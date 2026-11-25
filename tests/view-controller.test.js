@@ -27,7 +27,7 @@ function event(type, properties = {}) {
   return value;
 }
 
-function fixture(t, {reduced = false} = {}) {
+function fixture(t, {reduced = false, isDetailReady = () => true} = {}) {
   const oldWindow = globalThis.window;
   const document = new EventTarget(), window = new EventTarget();
   globalThis.window = window;
@@ -50,6 +50,7 @@ function fixture(t, {reduced = false} = {}) {
   let paused = false, regenerationCount = 0;
   const reducedMotion = {matches: reduced};
   const view = createViewController({canvas, camera, scene, mapScene, reducedMotion,
+    isDetailReady,
     getTrains: () => trains, getWorldRoot: () => root,
     onPause: () => { paused = !paused; },
     onRegenerate: () => {
@@ -241,4 +242,30 @@ test('saving a replacement world home does not inherit residual orbit damping', 
   f.key('r'); f.settle();
   nearVector(f.view.controls.target, new THREE.Vector3(12, 1.3, -9));
   nearVector(f.view.navigation.position, new THREE.Vector3(112, 121.3, 131));
+});
+
+test('continental framing starts as a map and still reaches a train-scale follow view', t => {
+  const f = fixture(t, {reduced: true});
+  f.view.setScale(8);
+  f.view.navigation.left *= 8; f.view.navigation.right *= 8;
+  f.view.navigation.top *= 8; f.view.navigation.bottom *= 8;
+  f.view.setHome(); f.update();
+  assert.equal(f.view.mode, 'map'); assert.equal(f.view.blend, 1);
+  assert.equal(f.view.wantsDetail, false);
+  f.key('f'); f.update();
+  assert.equal(f.view.mode, 'close'); assert.equal(f.view.wantsDetail, true);
+  assert.ok(f.camera.zoom >= 8 * 3.2);
+  assert.ok((f.camera.right - f.camera.left) / f.camera.zoom < 45);
+  f.key('Home'); f.update();
+  assert.equal(f.view.selected, null); assert.equal(f.view.mode, 'map');
+});
+
+test('map remains visible until local geometry is ready, then reveals detail smoothly', t => {
+  let ready = false;
+  const f = fixture(t, {isDetailReady: () => ready});
+  f.zoom(1.2);
+  assert.equal(f.view.mode, 'world'); assert.equal(f.view.blend, 1);
+  ready = true; f.update();
+  assert.ok(f.view.blend > 0 && f.view.blend < 1);
+  f.settle(); assert.equal(f.view.blend, 0);
 });

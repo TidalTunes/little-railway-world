@@ -39,18 +39,25 @@ test('shuttle ownership inherits the line operator and accepts a per-train overr
 
 test('rendered train bodies and roofs both use their owners palette',()=>{
   const world=generateWorld({density:0}),root=new THREE.Group(),railway=makeTrains(root,world);
+  railway.updateView(null);
   for(const train of railway.trains){
     const player=world.players.find(player=>player.id===train.state.ownerId),colors=playerColors(player);
     for(const part of train.parts){
-      const materials=part.children.filter(mesh=>mesh.isMesh).map(mesh=>mesh.material);
+      assert.equal(part.children.length,0,'pose handles do not duplicate carriage geometry');
+      const meshes=railway.root.children.filter(mesh=>mesh.userData.instanceTrainIds.includes(train.state.id));
       for(const role of ['body','roof']){
-        const material=materials.find(material=>material.name===`player-${player.id}-${role}`);
-        assert.ok(material,`${role} has a player material`);
-        assert.ok(material.color.equals(colors[role]),`${role} agrees with map/player color`);
+        const expected=colors[role];
+        const found=meshes.some(mesh=>{
+          assert.equal(mesh.userData.ownerId,player.id);
+          assert.equal(mesh.material.vertexColors,true);
+          const attribute=mesh.geometry.attributes.color;
+          for(let i=0;i<attribute.count;i++)if(Math.abs(attribute.getX(i)-expected.r)<1e-6&&
+            Math.abs(attribute.getY(i)-expected.g)<1e-6&&Math.abs(attribute.getZ(i)-expected.b)<1e-6)return true;
+          return false;
+        });
+        assert.ok(found,`${role} keeps its owner's exact linear color in the shared geometry`);
       }
     }
   }
-  const materials=new Set(root.userData.ownedMaterials),geometries=new Set();
-  root.traverse(node=>{if(node.geometry)geometries.add(node.geometry);});
-  materials.forEach(material=>material.dispose());geometries.forEach(geometry=>geometry.dispose());
+  railway.dispose();
 });

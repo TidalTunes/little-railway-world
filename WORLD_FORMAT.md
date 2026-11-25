@@ -4,15 +4,15 @@ The planner accepts a JSON-compatible authoring configuration and produces a det
 
 ## Load and inspect
 
-The browser opens the authored [sixteen-city showcase](public/worlds/showcase.json) by default, also available as `?layout=showcase`. Its two connected railway loops span city development levels 1–10. `?layout=classic` uses the earlier generated layout; `?seed=42&cities=12` selects that generator with twelve cities. Seeds can be numbers or strings, and the `cities` parameter accepts 3–20. `?layout=crossroads` loads the authored [seven-city crossing preset](public/worlds/crossroads.json).
+The browser opens the authored [sixteen-city showcase](public/worlds/showcase.json) by default, also available as `?layout=showcase`. Its two connected railway loops span city development levels 1–10. `?layout=classic` uses the earlier generated layout; `?seed=42&cities=12` selects that generator with twelve cities. Seeds can be numbers or strings, and the `cities` parameter accepts 3–20. `?layout=crossroads` loads the authored [seven-city crossing preset](public/worlds/crossroads.json). `?layout=stress&cities=256&trains=2048` opens the large regional network in the 2D overview. Stress city counts must be multiples of 8 from 8–4096; train requests accept 0–32768 in the stress factory. These are input limits, not performance guarantees at every size.
 
 The pure `generateWorld()` function and `railway.loadWorld({})` still default to the classic eight-city generator. Loading the browser showcase is a separate startup choice. A seed override changes generated variation while retaining an authored preset's city coordinates and levels.
 
 With the canvas focused, **R** changes the seed while preserving the current authoring settings. **Space** pauses motion. The browser console exposes:
 
 ```js
-// Compile and display a world; return a copy of its generated plan.
-railway.loadWorld({ seed: 42, cityCount: 12 });
+// Compile in a worker and display the coarse world; resolve to a copy of its plan.
+await railway.loadWorld({ seed: 42, cityCount: 12 });
 
 // Export the small authoring configuration or inspect the full generated plan.
 const configuration = railway.exportWorld();
@@ -23,7 +23,7 @@ const candidate = railway.generateWorld(configuration);
 const violations = railway.validateWorld(candidate);
 ```
 
-`loadWorld` validates and builds the replacement before discarding the displayed world. Invalid configurations throw an error. `exportWorld()` and `inspectWorld()` return copies. An empty validation result means no violations were reported by the validator.
+`loadWorld` is asynchronous: it validates and compiles the replacement network in a module worker before discarding the displayed world. Invalid configurations reject its promise. Detailed scenery is requested separately as the camera approaches a region. `exportWorld()` and `inspectWorld()` return copies. An empty validation result means no violations were reported by the validator.
 
 ## Coordinates and configuration
 
@@ -38,6 +38,7 @@ Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, ra
 | `cities` | At least two `{ id?, name?, x, z, ownerId?, level?, radius? }` objects. IDs are unique; omitted IDs become `city-1`, etc. Authored radius defaults to the development level's footprint. |
 | `connections` | Complete array of `{ id?, from, to, points?, ownerId?, color? }` connections between different city IDs. Operator defaults to the origin city's owner. |
 | `trainOwners` | Optional object mapping train IDs to player IDs. Overrides default ownership for those trains. |
+| `traffic` | Optional `{ trainCount?, circuits? }`. `trainCount` requests a fleet, subject to safe track capacity. Explicit circuits are `{ id?, segments: [{ lineId, direction: 1 or -1 }] }`; consecutive directed lines must join with matching positions and tangents. |
 | `minTurnRadius` | Positive finite minimum radius for railway bends. Default `8`. |
 | `throatLength` | Nonnegative requested length of each straight city approach. Default `4`; shortened for closely spaced cities. |
 | `river` | `{ points, width? }`. Width defaults to `5.4`; points need at least two distinct positions. |
@@ -53,6 +54,34 @@ Without explicit connections, the planner joins cities in array order into a rin
 Explicit city coordinates disable automatic mountains unless `mountains` is supplied. Generated mountain candidates that do not fit safely are omitted. Authored mountains must fit inside the island and remain clear of the river and its banks.
 
 River waypoints are rounded independently of railway alignments. Place the first and last river points beyond the island edge for a river that enters and leaves the island. The renderer clips water and banks to the outline.
+
+## Large networks and regional detail
+
+`src/stress-world.js` exports `createStressWorld({ cities: 256, trains: 2048, seed })`, returning an ordinary authoring configuration. It creates spacious eight-city regional loops, connecting rails, four owners and varied city levels. The default has 256 cities, 287 railway connections and 32 explicit circuits with enough physical track to operate 2,048 trains. Explicit circuits avoid searching a large graph for cycles. Invalid nonmultiples of eight are rejected instead of silently changing the requested city count.
+
+The pure planner supports two compilation modes:
+
+```js
+import { generateWorld, generateWorldRegion } from './src/world-model.js';
+import { createStressWorld } from './src/stress-world.js';
+
+const network = generateWorld(createStressWorld(), { detail: 'network' });
+const detail = generateWorldRegion(network, { x: 190, z: -750, size: 192 });
+```
+
+`generateWorld(input)` still generates full detail by default for compatibility. Network mode retains the exact railway alignments, structures, shared sections, transitions, crossings, stations, biome polygons and city metadata, while leaving `placements` and `cityStreets` empty. `detailMode` records the selected mode, `density` retains the normalized scenery density, and `traffic` retains the requested fleet configuration. City development counts in a coarse network are zero until its independent detail packet is inspected. The network is structured-clone-safe; spatial acceleration structures stay in private weak caches and are not serialized.
+
+`generateWorldRegion(network, { x, z, size: 192 })` snaps query coordinates to a fixed grid cell using `Math.floor`, including negative coordinates. Its packet contains `key`, `bounds`, expanded `cullBounds`, `cities`, `stations`, `mountains`, full intersecting `lines`, `placements`, `cityStreets`, and `farmland`. Bounds use `{ minX, minZ, maxX, maxZ }`. Cities, stations and mountains belong to the cell containing their centres; their complete geometry may extend outside that cell. Ordinary scenery reserves its entire footprint and a spacing margin inside its cell. Neighboring city lots remain reserved even when their detailed buildings have not been generated.
+
+Regional generation does not mutate the network or retain an unbounded detail cache. Re-requesting a cell reproduces its detail independently of exploration order. Per-cell scenery seeds and per-city building seeds are separate; neighboring packets have unique asset IDs. Regional detail is deterministic but is not promised to match the legacy full-world scenery pass object for object, because each mode uses different scenery partitioning.
+
+The browser generates networks and compiles regional geometry in a worker. The renderer clips railway drawing ranges and terrain to cell bounds, builds each centre-owned mountain and settlement once, transfers plain geometry buffers, and retains a bounded local GPU cache. The whole-world overview stays in 2D; detailed 3D content is loaded only around the camera. Global train simulation continues while a distant region has no detailed scenery.
+
+The planner uses conservative bounding-volume trees for railway segments and dynamic spatial grids for object footprints. These discard impossible collision candidates before exact segment, rectangle and circle checks. They do not reduce clearance distances or relax the accepted geometry. Compiled network coordinates should be treated as immutable; authoring changes should generate a replacement network so cached indexes cannot become stale.
+
+Worker geometry batches deduplicate vertices only when every Float32 attribute bit matches, preserving triangle order, hard normal edges and color boundaries. Indexing is retained only when its vertex and index buffers are smaller than the original geometry.
+
+Run `node --expose-gc scripts/benchmark-generation.mjs 3` for generation, validation, regional detail and heap measurements, `node --expose-gc scripts/benchmark-traffic.mjs --stress` for fleet startup and update timings, and `node --expose-gc scripts/benchmark-indexing.mjs 7` for exact vertex indexing cost, buffer sizes and bit-preservation checks on a dense regional packet. Benchmarks report measured results on the machine running them and do not enforce hardware-dependent timing thresholds in tests.
 
 ## Players and city development
 
@@ -157,11 +186,11 @@ The compiled plan has `version: 2`. In addition to the geometry and network fiel
 - `farmland`: generated agricultural `districts`, total reserved field `area`, and `targetArea`. Each district records its ID, position, dimensions, radius, orientation, and parcel count. Available safe land can limit the achieved area.
 - `junctions`: interior crossings as `{ id, x, y, z, lines: [{ lineId, distance }] }`. Recognized shared sections and mutual city endpoints are excluded.
 
-`createNetworkTraffic(world)` in `src/network-traffic.js` returns `mode`, `trains`, `paths`, `reservations`, `update(dt)`, and `sampleTrain(train, offset)`. Time is in seconds; an update of zero leaves traffic unchanged. The renderer samples every carriage separately by its offset along the network path.
+`createNetworkTraffic(world)` in `src/network-traffic.js` returns `mode`, `trains`, `paths`, `reservations`, fleet `stats`, `update(dt)`, and `sampleTrain(train, offset)`. Its shared `poseBuffer` is a `Float32Array` with six values per carriage: x, y, z, angle, active flag and owner index. Fleet statistics distinguish requested count from allocated count and safe track capacity. Time is in seconds; an update of zero leaves traffic unchanged. The renderer samples every carriage separately by its offset along the network path.
 
 Each train state includes an `id`, `homeCityId`, and stable `ownerId`. A circuit train inherits its home city's owner; a shuttle inherits its line's operator. `trainOwners` overrides either default. Entering another city does not change ownership or color. Runtime train IDs and owners are available through the read-only `window.__railway.trains` diagnostics; circuit IDs have the form `circuit-1-train-1`, and shuttle IDs have the form `train-<line-id>`.
 
-The controller looks for continuous directed circuits through the city's transitions and selects a broad circuit in each component where one is found. Circuit trains pass through stations without terminal dwell. Selected circuits do not necessarily use every branch. If circuits exist in only some components, components without a circuit may have no trains. If no circuit exists anywhere, the controller falls back to `src/traffic.js` shuttles.
+When `traffic.circuits` is supplied, the controller validates and uses those directed circuits. Otherwise, it looks for continuous directed circuits through the city's transitions and selects a broad circuit in each component where one is found. Circuit trains pass through stations without terminal dwell. Selected circuits do not necessarily use every branch. If circuits exist in only some components, components without a circuit may have no trains. If no circuit exists anywhere, the controller falls back to `src/traffic.js` shuttles.
 
 Shuttles run on eligible lines longer than 12 units, dwell for 2.4 seconds at their stops, and reverse velocity. Stops normally sit 7 units from line ends and are adjusted to station positions where applicable; the controller additionally protects the whole train's endpoint envelope.
 

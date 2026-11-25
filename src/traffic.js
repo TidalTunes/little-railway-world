@@ -121,22 +121,25 @@ export function createTraffic(world) {
       start, end, distance: start, direction: 1, speed: 2.6 + index % 3 * .16,
       dwell: index * .45, active: false, waiting: false};
   }).filter(train => train.end > train.start);
+  const capacity=trains.length,requested=world.traffic?.trainCount;
+  if(requested!==undefined){
+    if(!Number.isInteger(requested)||requested<0||requested>100000)throw new TypeError('Traffic trainCount must be an integer from 0 through 100000');
+    trains.length=Math.min(trains.length,requested);
+  }
   const groups = crossingGroups(world, trains);
   const byId = new Map(trains.map(train => [train.id, train]));
   const routes = new Map(trains.map(train => [train.lineId,
-    groups.filter(group => group.zones.has(train.lineId))]));
+    groups.filter(group => group.zones.has(train.lineId)).sort((a,b)=>a.zones.get(train.lineId).min-b.zones.get(train.lineId).min)]));
 
   function activate(train) {
-    const current = routes.get(train.lineId).filter(group => occupies(train, group.zones.get(train.lineId)));
-    if (current.some(group => group.owner && group.owner !== train.id)) {
-      train.waiting = true;
-      return false;
+    const route=routes.get(train.lineId);
+    for(const group of route)if(occupies(train,group.zones.get(train.lineId))&&group.owner&&group.owner!==train.id){
+      train.waiting=true;return false;
     }
-    for (const group of current) group.owner = train.id;
-    train.active = true;
-    train.waiting = false;
-    return true;
+    for(const group of route)if(occupies(train,group.zones.get(train.lineId)))group.owner=train.id;
+    train.active=true;train.waiting=false;return true;
   }
+
   trains.forEach(activate);
 
   function step(dt) {
@@ -157,13 +160,11 @@ export function createTraffic(world) {
       let desired = direction > 0
         ? Math.min(train.end, train.distance + movingTime * train.speed)
         : Math.max(train.start, train.distance - movingTime * train.speed);
-      const relevant = routes.get(train.lineId).filter(group => {
-        const zone = group.zones.get(train.lineId);
-        return Math.max(train.distance, desired) + train.halfLength + STOP_GAP >= zone.min &&
-          Math.min(train.distance, desired) - train.halfLength - STOP_GAP <= zone.max;
-      }).sort((a, b) => direction * (a.zones.get(train.lineId).min - b.zones.get(train.lineId).min));
-      for (const group of relevant) {
-        const zone = group.zones.get(train.lineId);
+      const route=routes.get(train.lineId),first=direction>0?0:route.length-1;
+      for(let i=first;i>=0&&i<route.length;i+=direction){
+        const group=route[i],zone=group.zones.get(train.lineId);
+        if(Math.max(train.distance,desired)+train.halfLength+STOP_GAP<zone.min
+          ||Math.min(train.distance,desired)-train.halfLength-STOP_GAP>zone.max)continue;
         if (!group.owner || group.owner === train.id) {
           group.owner = train.id;
           continue;
@@ -188,7 +189,7 @@ export function createTraffic(world) {
   }
 
   return {
-    trains,
+    trains, capacity,
     get reservations() {
       return groups.map(group => ({id: group.id, junctionIds: [...group.junctionIds], trainId: group.owner}));
     },

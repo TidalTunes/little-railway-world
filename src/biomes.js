@@ -1,3 +1,4 @@
+import { polylineTree } from './spatial-index.js';
 import clipping from 'polygon-clipping';
 
 export const BIOME_TYPES = Object.freeze(['farmland', 'forest', 'plains', 'desert', 'ocean', 'mountain']);
@@ -101,13 +102,8 @@ function buffer(polygons, width) {
   return clipping.union(...pieces);
 }
 
-function distanceToRoutes(world, x, z) {
-  let distance = Infinity;
-  for (const line of world.lines || []) for (let i = 1; i < line.points.length; i++) {
-    const a = line.points[i - 1], b = line.points[i];
-    distance = Math.min(distance, segmentDistance(x, z, [a.x, a.z], [b.x, b.z]));
-  }
-  return distance;
+function distanceToRoutes(world,x,z){
+  return polylineTree(world.lines??[]).nearest(x,z,s=>segmentDistance(x,z,[s.a.x,s.a.z],[s.b.x,s.b.z]));
 }
 
 function protectedCircle(world, x, z, radius) {

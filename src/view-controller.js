@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { CAMERA_ZOOM,clampZoom,modeForZoom,shouldStopFollowing,fitZoomForSpan } from './camera-modes.js';
+import { CAMERA_ZOOM,modeForZoom,shouldStopFollowing,fitZoomForSpan } from './camera-modes.js';
 import { C } from './palette.js';
 
 const ease=(rate,dt,reduced)=>reduced?1:1-Math.exp(-rate*dt);
 const centerOf=train=>train.parts[Math.floor(train.parts.length/2)];
 
-export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,onPause,onRegenerate}){
+export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,onPause,onRegenerate,isDetailReady=()=>true}){
   // Navigation keeps the user's orbit. The displayed camera can rise above it
   // for the map or train view without feeding automatic motion into OrbitControls.
   const navigation=camera.clone();
@@ -15,9 +15,15 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     minZoom:CAMERA_ZOOM.min,maxZoom:CAMERA_ZOOM.max,minPolarAngle:Math.PI*.20,maxPolarAngle:Math.PI*.40});
   controls.target.set(0,1.3,0);controls.update();
   let mode='world',blend=0,closeBlend=0,selected=null,hovered=null,zoomGoal=null;
+  let zoomScale=1;
   let homePosition=new THREE.Vector3(),homeTarget=new THREE.Vector3();
   let lastPointer=null,gesture=null,gestureBlocked=false,hoverClock=0;
   const pointers=new Set(),raycaster=new THREE.Raycaster();
+  raycaster.firstHitOnly=true;
+  const pickMeshes=[];
+  const projected=new THREE.Vector3(),pointerNDC=new THREE.Vector2(),cameraOffset=new THREE.Vector3();
+  const spherical=new THREE.Spherical(),followTarget=new THREE.Vector3(),delta=new THREE.Vector3();
+  const domState={};
   const ringGeometry=new THREE.RingGeometry(.94,1,64);ringGeometry.rotateX(-Math.PI/2);
   const ringMaterial=new THREE.MeshBasicMaterial({color:C.trim,transparent:true,opacity:.9,depthWrite:false,toneMapped:false,side:THREE.DoubleSide});
   const ring=new THREE.Mesh(ringGeometry,ringMaterial),mapRing=new THREE.Mesh(ringGeometry,ringMaterial.clone());
@@ -26,8 +32,9 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
 
   function flushControls(){const damping=controls.enableDamping;controls.enableDamping=false;controls.update();controls.enableDamping=damping;}
   function clearSelection(){selected=null;zoomGoal=null;}
-  function followZoom(){return Math.max(CAMERA_ZOOM.follow,fitZoomForSpan({
-    viewWidth:navigation.right-navigation.left,viewHeight:navigation.top-navigation.bottom,
+  const zoomClamp=value=>Math.max(CAMERA_ZOOM.min,Math.min(CAMERA_ZOOM.max*zoomScale,value));
+  function followZoom(){return zoomScale*Math.max(CAMERA_ZOOM.follow,fitZoomForSpan({
+    viewWidth:(navigation.right-navigation.left)/zoomScale,viewHeight:(navigation.top-navigation.bottom)/zoomScale,
     spanWidth:40,spanHeight:32,padding:.1}));}
   function select(train){
     if(!train?.state.active)return;
@@ -38,14 +45,13 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     clearSelection();hovered=null;flushControls();
     navigation.position.copy(homePosition);controls.target.copy(homeTarget);
     navigation.zoom=1;navigation.updateProjectionMatrix();controls.update();
-    mode='world';blend=0;closeBlend=0;ring.visible=mapRing.visible=false;
-    getWorldRoot()?.scale.set(1,1,1);camera.copy(navigation);camera.updateMatrixWorld(true);
+    mode=modeForZoom(1/zoomScale);blend=mode==='map'||!isDetailReady()?1:0;closeBlend=0;ring.visible=mapRing.visible=false;
+    getWorldRoot()?.scale.set(1,1-blend*.985,1);camera.copy(navigation);camera.updateMatrixWorld(true);
     updateDOM();
   }
   function updateDOM(){
-    canvas.dataset.view=mode;canvas.dataset.following=selected?.state.id??'';
-    canvas.dataset.zoom=navigation.zoom.toFixed(3);
-    canvas.dataset.mapBlend=blend.toFixed(3);
+    const values={view:mode,following:selected?.state.id??'',zoom:navigation.zoom.toFixed(3),mapBlend:blend.toFixed(3)};
+    for(const key in values)if(domState[key]!==values[key])canvas.dataset[key]=domState[key]=values[key];
   }
   function screenPosition(train,part=centerOf(train)){
     const p=part.position.clone();
@@ -59,34 +65,43 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     const p=screenPosition(train,part);
     if(Math.abs(p.x)>1.05||Math.abs(p.y)>1.05||p.z < -1||p.z>1)return false;
     if(blend>.7)return true;
-    raycaster.setFromCamera(new THREE.Vector2(p.x,p.y),camera);
-    const hits=raycaster.intersectObject(getWorldRoot(),true);
-    const hit=hits.find(hit=>{
-      let object=hit.object;while(object){if(!object.visible)return false;object=object.parent;}return true;
+    raycaster.setFromCamera(pointerNDC.set(p.x,p.y),camera);
+    pickMeshes.length=0;
+    getWorldRoot()?.traverseVisible(object=>{
+      if(object.isMesh&&(!object.isInstancedMesh||object.count>0))pickMeshes.push(object);
     });
+    const hit=raycaster.intersectObjects(pickMeshes,false)[0];
+    if(hit?.object.userData.instanceTrainIds?.[hit.instanceId]===train.state.id)return true;
     let object=hit?.object;
     while(object){if(object.userData.trainId===train.state.id)return true;object=object.parent;}
     return false;
   }
   function pick(x,y,touch=false){
     const rect=canvas.getBoundingClientRect(),limit=touch?28:17;
-    let best=null,bestDistance=Infinity;
+    const candidates=[];
     getWorldRoot()?.updateMatrixWorld(true);camera.updateMatrixWorld(true);
     for(const train of getTrains()){
       if(!train.state.active)continue;
       for(const part of train.parts){
-        const p=part.position.clone();p.y=blend>.7?.3:(p.y+.8)*(getWorldRoot()?.scale.y??1);p.project(camera);
+        const p=projected.copy(part.position);p.y=blend>.7?.3:(p.y+.8)*(getWorldRoot()?.scale.y??1);p.project(camera);
         if(p.z < -1||p.z>1)continue;
         const d=Math.hypot((p.x+1)*rect.width/2+rect.left-x,(1-p.y)*rect.height/2+rect.top-y);
-        if(d<limit&&d<bestDistance&&isVisible(train,part)){best=train;bestDistance=d;}
+        if(d<limit)candidates.push({train,part,d});
       }
     }
-    return best;
+    candidates.sort((a,b)=>a.d-b.d);
+    for(const candidate of candidates)if(isVisible(candidate.train,candidate.part))return candidate.train;
+    return null;
   }
   function nearestTrain(){
-    return getTrains().filter(train=>isVisible(train)).sort((a,b)=>{
-      const x=screenPosition(a),y=screenPosition(b);return x.x*x.x+x.y*x.y-y.x*y.x-y.y*y.y;
-    })[0];
+    const candidates=[];
+    for(const train of getTrains()){
+      if(!train.state.active)continue;
+      const p=screenPosition(train);
+      if(Math.abs(p.x)<=1.05&&Math.abs(p.y)<=1.05&&p.z>=-1&&p.z<=1)candidates.push({train,d:p.x*p.x+p.y*p.y});
+    }
+    candidates.sort((a,b)=>a.d-b.d);
+    for(const candidate of candidates)if(isVisible(candidate.train))return candidate.train;
   }
   function cycle(direction){
     const trains=getTrains().filter(t=>t.state.active);
@@ -95,7 +110,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     select(trains[next]);
   }
   function configureInput(){
-    const plan=mode==='map'||mode==='close';
+    const plan=mode==='map'||mode==='close'||blend>.7;
     controls.enableRotate=!plan&&!selected;controls.enablePan=!selected;controls.screenSpacePanning=!plan;
     controls.mouseButtons.LEFT=plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
@@ -110,7 +125,6 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   canvas.addEventListener('pointermove',event=>{
     if(gesture?.id===event.pointerId&&Math.hypot(event.clientX-gesture.x,event.clientY-gesture.y)>6)gesture.moved=true;
     lastPointer={x:event.clientX,y:event.clientY,touch:event.pointerType==='touch'};
-    if(!pointers.size&&!lastPointer.touch){hovered=pick(lastPointer.x,lastPointer.y);canvas.style.cursor=hovered?'pointer':selected?'default':'grab';}
   });
   function pointerEnd(event){
     const tap=gesture?.id===event.pointerId&&!gesture.moved&&!gestureBlocked&&event.type==='pointerup'
@@ -136,7 +150,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     else if(event.key==='[')cycle(-1);
     else if(event.key===']')cycle(1);
     else if(['+','=','-','_'].includes(event.key)){
-      zoomGoal=null;navigation.zoom=clampZoom(navigation.zoom*(event.key==='+'||event.key==='='?1.16:1/1.16));navigation.updateProjectionMatrix();
+      zoomGoal=null;navigation.zoom=zoomClamp(navigation.zoom*(event.key==='+'||event.key==='='?1.16:1/1.16));navigation.updateProjectionMatrix();
     }else if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){
       if(mode==='world'&&!selected){
         const offset=navigation.position.clone().sub(controls.target),spherical=new THREE.Spherical().setFromVector3(offset);
@@ -158,6 +172,9 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   });
   return {
     navigation,controls,reset,
+    setScale(value){zoomScale=Math.max(1,Number(value)||1);controls.maxZoom=CAMERA_ZOOM.max*zoomScale;},
+    get zoomScale(){return zoomScale;},
+    get wantsDetail(){return navigation.zoom/zoomScale>.52||selected!==null;},
     setHome(){homePosition.copy(navigation.position);homeTarget.copy(controls.target);reset();},
     get mode(){return mode;},get blend(){return blend;},get selected(){return selected?.state.id??null;},
     update(dt){
@@ -166,22 +183,21 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
         if(Math.abs(navigation.zoom-zoomGoal)<.002){navigation.zoom=zoomGoal;zoomGoal=null;}
         navigation.updateProjectionMatrix();
       }
-      if(selected&&(!selected.state.active||(zoomGoal===null&&shouldStopFollowing(navigation.zoom))))selected=null;
-      mode=modeForZoom(navigation.zoom,mode);configureInput();controls.update();
+      if(selected&&(!selected.state.active||(zoomGoal===null&&shouldStopFollowing(navigation.zoom/zoomScale))))selected=null;
+      mode=modeForZoom(navigation.zoom/zoomScale,mode);configureInput();controls.update();
       if(selected){
-        const p=centerOf(selected).position.clone();p.y=.75;
-        const target=controls.target.clone().lerp(p,ease(7,dt,reducedMotion.matches));
-        const delta=target.sub(controls.target);controls.target.add(delta);navigation.position.add(delta);
+        followTarget.copy(centerOf(selected).position);followTarget.y=.75;
+        delta.copy(controls.target).lerp(followTarget,ease(7,dt,reducedMotion.matches)).sub(controls.target);controls.target.add(delta);navigation.position.add(delta);
       }
-      blend=THREE.MathUtils.lerp(blend,mode==='map'?1:0,ease(8,dt,reducedMotion.matches));
+      blend=THREE.MathUtils.lerp(blend,mode==='map'||!isDetailReady()?1:0,ease(8,dt,reducedMotion.matches));
       if(blend<.001)blend=0;if(blend>.999)blend=1;
-      const closeTarget=selected?1:THREE.MathUtils.smoothstep(navigation.zoom,1.9,2.8);
+      const closeTarget=selected?1:THREE.MathUtils.smoothstep(navigation.zoom/zoomScale,1.9,2.8);
       closeBlend=THREE.MathUtils.lerp(closeBlend,closeTarget,ease(6,dt,reducedMotion.matches));
       camera.copy(navigation);
-      const spherical=new THREE.Spherical().setFromVector3(navigation.position.clone().sub(controls.target));
+      spherical.setFromVector3(cameraOffset.copy(navigation.position).sub(controls.target));
       spherical.phi=THREE.MathUtils.lerp(spherical.phi,.36,closeBlend);
       spherical.phi=THREE.MathUtils.lerp(spherical.phi,.00001,blend);
-      camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
+      camera.position.copy(controls.target).add(cameraOffset.setFromSpherical(spherical));
       camera.lookAt(controls.target);camera.updateMatrixWorld(true);
       getWorldRoot()?.scale.set(1,1-blend*.985,1);
       hoverClock+=dt;

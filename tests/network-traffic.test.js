@@ -138,3 +138,81 @@ test('deterministic updates, pause and a graph without a circuit retain the comm
     assert.ok(Number.isFinite(fallback.sampleTrain(train, train.spacing).x));
   }
 });
+
+test('2048 trains use reusable exact car poses and retain headway on 256 city circuits', async () => {
+  const {circuitWorld}=await import('./fixtures/circuit-world.js');
+  const traffic=createNetworkTraffic(circuitWorld()),buffer=traffic.poseBuffer;
+  assert.equal(traffic.trains.length,2048);
+  assert.equal(traffic.trains.filter(train=>train.active).length,2048);
+  assert.equal(buffer.length,2048*3*6);
+  const first=traffic.trains[0],poses=first.carPoses,car=poses[0],tangent=car.tangent;
+  const distances=traffic.trains.map(train=>train.distance);
+  traffic.update(3.25);
+  assert.equal(traffic.poseBuffer,buffer);assert.equal(first.carPoses,poses);assert.equal(poses[0],car);assert.equal(car.tangent,tangent);
+  for(const [index,train] of traffic.trains.entries()){
+    const travelled=(train.distance-distances[index]+train.path.length)%train.path.length;
+    assert.ok(Math.abs(travelled-train.speed*3.25)<1e-8,'all trains advance without fleet-size-dependent stalls');
+    for(let i=0;i<train.count;i++){
+      const expected=traffic.sampleTrain(train,(i-(train.count-1)/2)*train.spacing),actual=train.carPoses[i],offset=(train.poseOffset+i)*6;
+      assert.ok(Math.hypot(expected.x-actual.x,expected.z-actual.z)<1e-9);
+      assert.ok(Math.hypot(buffer[offset]-actual.x,buffer[offset+2]-actual.z)<.001,'GPU poses preserve sub-millimetre accuracy');
+      assert.equal(buffer[offset+4],1);assert.equal(buffer[offset+5],0);
+    }
+  }
+  for(const path of traffic.paths){
+    const sorted=path.trains.toSorted((a,b)=>a.distance-b.distance);
+    for(let i=0;i<sorted.length;i++){
+      const a=sorted[i],b=sorted[(i+1)%sorted.length],gap=(b.distance-a.distance+path.length)%path.length;
+      assert.ok(gap>=a.halfLength+b.halfLength+.8-1e-8,'complete consists retain headway around the closing seam');
+    }
+  }
+});
+
+test('saturated crossing circuits cap admission safely and serve both queues fairly', async () => {
+  const {circuitWorld}=await import('./fixtures/circuit-world.js');
+  const traffic=createNetworkTraffic(circuitWorld({circuits:2,citiesPerCircuit:4,radius:20,trainCount:10000,overlap:true}));
+  assert.equal(traffic.stats.requestedTrainCount,10000);
+  assert.equal(traffic.trains.length,traffic.stats.capacity);
+  assert.ok(traffic.trains.length<10000,'oversubscribing a small network cannot overlap trains');
+  const travelled=new Float64Array(traffic.trains.length);
+  for(let step=0;step<1200;step++){
+    const before=traffic.trains.map(train=>train.distance),active=traffic.trains.map(train=>train.active);
+    traffic.update(.1);
+    if(step%12===0)assertClear(traffic);
+    for(let i=0;i<traffic.trains.length;i++)if(active[i]){
+      const train=traffic.trains[i];travelled[i]+=(train.distance-before[i]+train.path.length)%train.path.length;
+    }
+  }
+  assert.ok(traffic.trains.every(train=>train.active),'queued trains enter real free headways');
+  assert.ok(Math.min(...travelled)>100,'neither dense fleet can starve the other at a crossing');
+});
+
+test('explicit fleets validate circuit topology and support empty fleets and output poses', async () => {
+  const {circuitWorld}=await import('./fixtures/circuit-world.js');
+  const input=circuitWorld({circuits:1,trainCount:0}),empty=createNetworkTraffic(input);
+  assert.equal(empty.trains.length,0);assert.equal(empty.poseBuffer.length,0);empty.update(1);
+  for(const bad of [-1,2.5,NaN,100001]){
+    input.traffic.trainCount=bad;assert.throws(()=>createNetworkTraffic(input),/trainCount/);
+  }
+  input.traffic.trainCount=1;
+  const traffic=createNetworkTraffic(input),out={tangent:{x:0,y:0,z:0}};
+  assert.equal(traffic.sampleTrain(traffic.trains[0],0,out),out);
+  assert.deepEqual(out,traffic.sampleTrain(traffic.trains[0]));
+  input.traffic.circuits[0].segments[1].direction=-1;
+  assert.throws(()=>createNetworkTraffic(input),/continuous tangents/);
+  input.traffic.circuits[0].segments[0].lineId='missing';
+  assert.throws(()=>createNetworkTraffic(input),/invalid line/);
+});
+
+
+test('zero fleets and over-capacity requests also preserve safe shuttle fallback semantics',async()=>{
+  const {circuitWorld}=await import('./fixtures/circuit-world.js');
+  const input=circuitWorld({circuits:1,trainCount:0});input.traffic.circuits=[];input.transitions=[];
+  const empty=createNetworkTraffic(input);assert.equal(empty.mode,'shuttles');assert.equal(empty.trains.length,0);
+  assert.equal(empty.poseBuffer.length,0);assert.equal(empty.stats.capacity,8);empty.update(2);
+  input.traffic.trainCount=100;
+  const full=createNetworkTraffic(input);assert.equal(full.trains.length,8);assert.equal(full.stats.requestedTrainCount,100);
+  assert.equal(full.stats.capacity,8);full.update(2);assertClear(full);
+  const tiny=createNetworkTraffic(circuitWorld({circuits:1,radius:1,trainCount:2}));
+  assert.equal(tiny.stats.capacity,0);assert.equal(tiny.trains.length,0,'a circuit shorter than one safe headway cannot spawn an overlapping consist');tiny.update(1);
+});

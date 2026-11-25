@@ -8,6 +8,21 @@ import { M } from '../src/palette.js';
 const rockMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
 const railY = .42;
 
+test('regional terrain retains actual island spillways without decorating internal cell edges', () => {
+  const source = {outline: [[-40,-40],[40,-40],[40,40],[-40,40]],
+    river: {width: 6, points: [{x:-50,y:-1.2,z:0},{x:50,y:-1.2,z:0}]}};
+  const build = bounds => {
+    const root = new THREE.Group();
+    buildTerrain(root, {...source, terrainChunk: true, terrainSource: source, bounds,
+      outline: [[bounds.minX,bounds.minZ],[bounds.maxX,bounds.minZ],
+        [bounds.maxX,bounds.maxZ],[bounds.minX,bounds.maxZ]]});
+    const foam = root.children.filter(mesh => mesh.material === M.foam).length;
+    root.traverse(mesh => mesh.geometry?.dispose()); return foam;
+  };
+  assert.equal(build({minX:-10,maxX:10,minZ:-10,maxZ:10}), 0);
+  assert.ok(build({minX:30,maxX:40,minZ:-10,maxZ:10}) > 0);
+});
+
 function lineThrough(points) {
   const distances = [0];
   for (let i = 1; i < points.length; i++) {

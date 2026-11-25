@@ -45,6 +45,18 @@ function distanceToRiver(points,x,z){
   }return best;
 }
 
+function clippedEdge(a,b,bounds){
+  if(!bounds)return [a,b];
+  let start=0,end=1;
+  for(const [origin,delta,min,max]of [[a[0],b[0]-a[0],bounds.minX,bounds.maxX],[a[1],b[1]-a[1],bounds.minZ,bounds.maxZ]]){
+    if(Math.abs(delta)<1e-10){if(origin<min||origin>max)return null;continue;}
+    const near=(min-origin)/delta,far=(max-origin)/delta;
+    start=Math.max(start,Math.min(near,far));end=Math.min(end,Math.max(near,far));
+  }
+  if(end-start<1e-8)return null;
+  return [start,end].map(t=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);
+}
+
 export function buildTerrain(parent,world){
   const island=[world.outline],islandMulti=[island];
   const waterY=world.river.points[0]?.y??-1.2;
@@ -73,7 +85,7 @@ export function buildTerrain(parent,world){
     for(let i=0;i<pos.count;i++){
       const x=pos.getX(i),z=pos.getZ(i);
       const riverSlope=(distanceToRiver(world.river.points,x,z)-world.river.width/2)/.8;
-      const oceanSlope=ocean.length?-biomeDistance(world,'ocean',x,z)/(world.biomes.shoreWidth??.9):Infinity;
+      const oceanSlope=ocean.length?-biomeDistance(world.terrainSource??world,'ocean',x,z)/(world.biomes.shoreWidth??.9):Infinity;
       pos.setY(i,waterY+THREE.MathUtils.clamp(Math.min(riverSlope,oceanSlope),0,1)*(-waterY)+.015);
     }
     geometry.computeVertexNormals();mesh(parent,geometry,'sand');
@@ -82,15 +94,20 @@ export function buildTerrain(parent,world){
   if(ocean.length){
     surface(parent,ocean,waterY+.035,'ocean');
   }
-  for(let i=0;i<world.outline.length;i++){
-    const a=world.outline[i],b=world.outline[(i+1)%world.outline.length];
+  // Only the actual island edge gets trim and spillways. Clip those original
+  // edges into a local cell, rather than decorating artificial chunk borders.
+  const border=world.terrainSource?.outline??world.outline;
+  for(let i=0;i<border.length;i++){
+    const edge=clippedEdge(border[i],border[(i+1)%border.length],world.terrainChunk?world.bounds:null);
+    if(!edge)continue;
+    const [a,b]=edge;
     beam(parent,v(a[0],BASE+.55,a[1]),v(b[0],BASE+.55,b[1]),.08,'soilLight',.06);
     const count=Math.ceil(Math.hypot(b[0]-a[0],b[1]-a[1])/.45);
     for(let j=0;j<count;j++){
       const t=(j+.5)/count,x=THREE.MathUtils.lerp(a[0],b[0],t),z=THREE.MathUtils.lerp(a[1],b[1],t);
       if(distanceToRiver(world.river.points,x,z)>world.river.width/2-.15)continue;
       // River spillways stop where the river has already joined the ocean.
-      if(ocean.length&&biomeDistance(world,'ocean',x,z)>-.3)continue;
+      if(ocean.length&&biomeDistance(world.terrainSource??world,'ocean',x,z)>-.3)continue;
       const out=v(b[1]-a[1],0,a[0]-b[0]).normalize().multiplyScalar(.06);
       box(parent,x+out.x,(waterY+BASE)/2,z+out.z,.47,waterY-BASE,.16,j%4?'waterLight':'foam',Math.atan2(b[0]-a[0],b[1]-a[1])+Math.PI/2);
     }

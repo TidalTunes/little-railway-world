@@ -69,7 +69,7 @@ export function alignmentCandidates(start,end,{radius=8,y=.42}={}){
   return candidates.sort((x,y)=>x.length-y.length);
 }
 
-export function sampleAlignment(alignment,distanceAlong){
+export function sampleAlignmentInto(alignment,distanceAlong,out){
   const s=clamp(distanceAlong,0,alignment.length),segments=alignment.segments;
   if(!segments.length)throw new TypeError('An alignment must contain a nonzero segment');
   let lo=0,hi=segments.length-1;
@@ -84,8 +84,14 @@ export function sampleAlignment(alignment,distanceAlong){
     x=segment.center.x+Math.cos(theta)*segment.radius;z=segment.center.z+Math.sin(theta)*segment.radius;
     angle=theta+Math.sign(segment.sweep)*Math.PI/2;
   }
-  return {x,y:segment.start.y,z,distance:s,heading:angle,
-    tangent:{x:Math.cos(angle),y:0,z:Math.sin(angle)},angle:Math.atan2(Math.cos(angle),Math.sin(angle)),curvature:segment.curvature};
+  const tangent=out.tangent??(out.tangent={x:0,y:0,z:0});
+  tangent.x=Math.cos(angle);tangent.y=0;tangent.z=Math.sin(angle);
+  out.x=x;out.y=segment.start.y;out.z=z;out.distance=s;out.heading=angle;
+  out.angle=Math.atan2(tangent.x,tangent.z);out.curvature=segment.curvature;
+  return out;
+}
+export function sampleAlignment(alignment,distanceAlong){
+  return sampleAlignmentInto(alignment,distanceAlong,{tangent:{x:0,y:0,z:0}});
 }
 
 export function sampleAlignmentPoints(alignment,spacing=.35){

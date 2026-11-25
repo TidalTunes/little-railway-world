@@ -1,3 +1,4 @@
+import { BoundsTree, SpatialGrid, pointBox, pointsBox, boxesOverlap, polylineTree } from './spatial-index.js';
 import { createBiomes, biomeAt, biomeDistance, fitsBiome } from './biomes.js';
 import { createAlignment, combineAlignments, straightSegment, sampleAlignment, sampleAlignmentPoints } from './alignments.js';
 import { mountainSurfaceHeight } from './mountain-shape.js';
@@ -52,14 +53,16 @@ export function pointSegmentDistance(x, z, a, b) {
   const t = clamp(((x - a.x) * dx + (z - a.z) * dz) / (dx * dx + dz * dz || 1), 0, 1);
   return Math.hypot(x - lerp(a.x, b.x, t), z - lerp(a.z, b.z, t));
 }
-export function distanceToLine(line, x, z) {
-  let d = Infinity;
-  for (let i = 1; i < line.points.length; i++) d = Math.min(d, pointSegmentDistance(x, z, line.points[i - 1], line.points[i]));
-  return d;
+const lineTrees=new WeakMap(),circleGrids=new WeakMap();
+function segmentItems(line){return line.points.slice(1).map((b,index)=>{const a=line.points[index];return{a,b,index,box:pointsBox([a,b])};});}
+function lineTree(line){let cached=lineTrees.get(line);if(!cached||cached.count!==line.points.length){cached={count:line.points.length,tree:new BoundsTree(segmentItems(line),s=>s.box),box:pointsBox(line.points)};lineTrees.set(line,cached);}return cached;}
+function routeTree(world){return polylineTree(world.lines);}
+function nearCircles(items,item,extra=0){let cached=circleGrids.get(items);if(!cached||cached.count>items.length){cached={count:0,grid:new SpatialGrid()};circleGrids.set(items,cached);}while(cached.count<items.length){const p=items[cached.count++];cached.grid.insert(p,pointBox(p.x,p.z,p.radius??0));}return cached.grid.query(pointBox(item.x,item.z,item.radius+extra));}
+export function distanceToLine(line,x,z){
+  if(line.points.length>32)return lineTree(line).tree.nearest(x,z,s=>pointSegmentDistance(x,z,s.a,s.b));
+  let d=Infinity;for(let i=1;i<line.points.length;i++)d=Math.min(d,pointSegmentDistance(x,z,line.points[i-1],line.points[i]));return d;
 }
-export function distanceToRoutes(world, x, z) {
-  return world.lines.reduce((d, line) => Math.min(d, distanceToLine(line, x, z)), Infinity);
-}
+export function distanceToRoutes(world,x,z){return routeTree(world).nearest(x,z,s=>pointSegmentDistance(x,z,s.a,s.b));}
 export function distanceToRiver(world, x, z) {
   return distanceToLine(world.river, x, z);
 }
@@ -215,13 +218,15 @@ function distanceToRectangle(item,x,z) {
 }
 function rectangleToLine(item,line) {
   const corners=footprintCorners(item);
-  let closest=Infinity;
-  for(const corner of corners)closest=Math.min(closest,distanceToLine(line,corner.x,corner.z));
-  for(let i=0;i<line.points.length;i++){
-    const p=line.points[i];closest=Math.min(closest,distanceToRectangle(item,p.x,p.z));
-    if(i)for(let j=0;j<4;j++)if(segmentCrosses(line.points[i-1],p,corners[j],corners[(j+1)%4]))return 0;
-  }
-  return closest;
+  return lineTree(line).tree.nearest(item.x,item.z,segment=>{
+    const {a,b}=segment;
+    let closest=Math.min(distanceToRectangle(item,a.x,a.z),distanceToRectangle(item,b.x,b.z));
+    for(let i=0;i<4;i++){
+      if(segmentCrosses(a,b,corners[i],corners[(i+1)%4]))return 0;
+      closest=Math.min(closest,pointSegmentDistance(corners[i].x,corners[i].z,a,b));
+    }
+    return closest;
+  },Infinity,item.radius??Math.hypot(item.platform.length,item.platform.width)/2);
 }
 
 function placeStations(world) {
@@ -246,7 +251,7 @@ function placeStations(world) {
           if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],station.x,station.z,station.radius))continue;
           if(world.mountains.some(m=>distance(station,m)<station.radius+m.radius+CLEARANCES.mountain))continue;
           if(rectangleToLine(station,world.river)<world.river.width/2+CLEARANCES.riverBank)continue;
-          if(world.lines.some(other=>rectangleToLine(station,other)<CLEARANCES.trackHalfWidth+.25))continue;
+          if(world.lines.some(other=>boxesOverlap(pointBox(station.x,station.z,station.radius+CLEARANCES.trackHalfWidth+.25),lineTree(other).box)&&rectangleToLine(station,other)<CLEARANCES.trackHalfWidth+.25))continue;
           if(stations.some(other=>distance(station,other)<station.radius+other.radius+CLEARANCES.objects))continue;
           const score=distance(station,city)+endDistance*.05;
           options.push({station,score});
@@ -269,22 +274,23 @@ function placeStations(world) {
 
 function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   const r=item.radius;
+  if(world.detailRegion&&!cityId){const b=world.detailRegion;const edge=r+CLEARANCES.objects/2;if(item.x-edge<b.minX||item.x+edge>b.maxX||item.z-edge<b.minZ||item.z+edge>b.maxZ)return false;}
   if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],item.x,item.z,r))return false;
   if(!inWorld(world,item.x,item.z,r+CLEARANCES.worldEdge))return false;
   if(distanceToRoutes(world,item.x,item.z)<r+CLEARANCES.track)return false;
   if(distanceToRiver(world,item.x,item.z)<r+world.river.width/2+CLEARANCES.riverBank)return false;
-  if(world.mountains.some(m=>distance(item,m)<m.radius+r+CLEARANCES.mountain))return false;
-  if(keepOutsideCities&&world.cities.some(c=>distance(item,c)<c.radius+r+CLEARANCES.city))return false;
-  if(cityId&&world.cities.some(c=>c.id!==cityId&&distance(item,c)<c.radius+r*.5))return false;
-  if(world.stations.some(s=>distance(item,s)<r+s.radius+CLEARANCES.objects))return false;
-  if(world.placements.some(p=>distance(item,p)<r+p.radius+CLEARANCES.objects))return false;
+  if(nearCircles(world.mountains,item,CLEARANCES.mountain).some(m=>distance(item,m)<m.radius+r+CLEARANCES.mountain))return false;
+  if(keepOutsideCities&&nearCircles(world.cities,item,CLEARANCES.city).some(c=>distance(item,c)<c.radius+r+CLEARANCES.city))return false;
+  if(cityId&&nearCircles(world.cities,item,world.detailRegion?CLEARANCES.objects:0).some(c=>c.id!==cityId&&distance(item,c)<c.radius+(world.detailRegion?r+CLEARANCES.objects:r*.5)))return false;
+  if(nearCircles(world.stations,item,CLEARANCES.objects).some(s=>distance(item,s)<r+s.radius+CLEARANCES.objects))return false;
+  if(nearCircles(world.placements,item,CLEARANCES.objects).some(p=>distance(item,p)<r+p.radius+CLEARANCES.objects))return false;
   if((world.cityStreets??[]).some(street=>distanceToLine(street,item.x,item.z)<r+street.width/2+CLEARANCES.street))return false;
   return true;
 }
 /** Settlements grow along winding lanes, then fill their frontages compactly. */
-function placeCityDevelopment(world) {
+function placeCityDevelopment(world,selectedCities=world.cities) {
   const dry=['farmland','forest','plains','desert'];
-  for(const city of world.cities){
+  for(const city of selectedCities){
     const spec=city.development,rng=cityRandom(world.seed,city.id),axis=city.railAxis??{x:1,z:0};
     const normal={x:-axis.z,z:axis.x},width=spec.streetWidth,spacing=spec.streetSpacing;
     const local=(u,v,side)=>({x:city.x+axis.x*u+normal.x*v*side,z:city.z+axis.z*u+normal.z*v*side});
@@ -294,8 +300,8 @@ function placeCityDevelopment(world) {
       if(!fitsBiome(world,dry,p.x,p.z,r)||distanceToRoutes(world,p.x,p.z)<CLEARANCES.track+r)return false;
       if(distanceToRiver(world,p.x,p.z)<world.river.width/2+CLEARANCES.riverBank+r)return false;
       if(world.mountains.some(m=>distance(p,m)<m.radius+r+CLEARANCES.mountain))return false;
-      if(world.cities.some(c=>c.id!==city.id&&distance(p,c)<c.radius+r*.5))return false;
-      if(world.stations.some(s=>distanceToRectangle(s,p.x,p.z)<r))return false;
+      if(nearCircles(world.cities,{...p,radius:r},world.detailRegion?CLEARANCES.objects:0).some(c=>c.id!==city.id&&distance(p,c)<c.radius+(world.detailRegion?r+CLEARANCES.objects:r*.5)))return false;
+      if(nearCircles(world.stations,{...p,radius:r}).some(s=>distanceToRectangle(s,p.x,p.z)<r))return false;
       return true;
     };
     const edgeIsClear=points=>{
@@ -438,9 +444,10 @@ function placeCityDevelopment(world) {
 }
 
 function placeScenery(world,random,density) {
-  const add=item=>world.placements.push({id:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,biome:biomeAt(world,item.x,item.z),...item});
-  const scale=Math.sqrt(world.bounds.width*world.bounds.depth/(130*95));
-  const candidate=()=>({x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94});
+  const add=item=>world.placements.push({id:world.detailRegion?`asset-${world.detailRegion.minX}-${world.detailRegion.minZ}-${world.placements.length+1}`:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,biome:biomeAt(world,item.x,item.z),...item});
+  const region=world.detailRegion;
+  const scale=Math.sqrt((region?(region.maxX-region.minX)*(region.maxZ-region.minZ):world.bounds.width*world.bounds.depth)/(130*95));
+  const candidate=()=>region?{x:lerp(region.minX,region.maxX,random()),z:lerp(region.minZ,region.maxZ,random())}:{x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94};
   world.farmland=placeFarmland(world,{density,canPlace:item=>canPlace(world,item,{keepOutsideCities:true}),add});
   // The forest is a connected biome, with small open glades between groves.
   const groves=[];
@@ -564,13 +571,10 @@ function sharedAt(world,first,second,d1,d2,margin=.5){
 function buildJunctions(world) {
   const junctions=[];
   const cross=(ax,az,bx,bz)=>ax*bz-az*bx;
-  const segments=world.lines.map(line=>line.points.slice(1).map((b,i)=>{
-    const a=line.points[i];
-    return {a,b,index:i,minX:Math.min(a.x,b.x),maxX:Math.max(a.x,b.x),minZ:Math.min(a.z,b.z),maxZ:Math.max(a.z,b.z)};
-  }));
-  for(let li=0;li<world.lines.length;li++)for(let lj=li+1;lj<world.lines.length;lj++){
-    const first=world.lines[li],second=world.lines[lj];
-    for(const u of segments[li])for(const v of segments[lj]){
+  const tree=routeTree(world),segments=tree.items;
+  for(const u of segments)for(const v of tree.query({minX:u.minX-EPS,maxX:u.maxX+EPS,minZ:u.minZ-EPS,maxZ:u.maxZ+EPS})){
+    if(v.lineIndex<=u.lineIndex)continue;
+    const first=u.line,second=v.line;
       if(u.maxX<v.minX-EPS||v.maxX<u.minX-EPS||u.maxZ<v.minZ-EPS||v.maxZ<u.minZ-EPS)continue;
       if(sharedAt(world,first,second,(first.distances[u.index]+first.distances[u.index+1])/2,(second.distances[v.index]+second.distances[v.index+1])/2))continue;
       const rx=u.b.x-u.a.x,rz=u.b.z-u.a.z,sx=v.b.x-v.a.x,sz=v.b.z-v.a.z;
@@ -594,13 +598,12 @@ function buildJunctions(world) {
       let junction=junctions.find(j=>Math.hypot(j.x-x,j.z-z)<.05);
       if(!junction){junction={id:`junction-${junctions.length+1}`,x,y:WORLD_DEFAULTS.railY,z,lines:[]};junctions.push(junction);}
       for(const [line,distance] of [[first,d1],[second,d2]])if(!junction.lines.some(entry=>entry.lineId===line.id))junction.lines.push({lineId:line.id,distance});
-    }
   }
   world.junctions=junctions;
 }
 
 /** Invalid topology or non-finite input throws; crowded optional scenery is skipped. */
-export function generateWorld(input = {}) {
+export function generateWorld(input = {}, options = {}) {
   const seed=input.seed??WORLD_DEFAULTS.seed,random=seededRandom(seed);
   const bounds={width:Number(input.bounds?.width??WORLD_DEFAULTS.width),depth:Number(input.bounds?.depth??WORLD_DEFAULTS.depth)};
   assert(Number.isFinite(bounds.width)&&Number.isFinite(bounds.depth)&&bounds.width>=35&&bounds.depth>=30,'bounds must be finite and at least 35 × 30');
@@ -621,7 +624,7 @@ export function generateWorld(input = {}) {
   assert(Object.values(trainOwners).every(id=>playerIds.has(id)),'trainOwners references an unknown player');
   const outline=input.outline?input.outline.map(p=>[Number(p[0]),Number(p[1])]):makeOutline(bounds.width,bounds.depth);
   assert(outline.length>=3&&outline.every(p=>p.every(Number.isFinite)),'outline requires at least three finite points');
-  const world={version:2,seed,bounds,outline,players,trainOwners,cities,lines:[],stations:[],placements:[],cityStreets:[],junctions:[]};
+  const world={version:2,seed,bounds,outline,players,trainOwners,traffic:structuredClone(input.traffic??{}),density:clamp(Number(input.density??1)||0,0,3),detailMode:options.detail??'full',cities,lines:[],stations:[],placements:[],cityStreets:[],junctions:[]};
   assert(cities.every(c=>inWorld(world,c.x,c.z,.5)),'cities must be inside the world outline');
   const riverNodes=input.river?.points??[[-.64,.015],[-.42,-.025],[-.20,.035],[.02,.00],[.22,.075],[.43,.055],[.64,.015]]
     .map(([x,z])=>[x*bounds.width,z*bounds.depth]);
@@ -681,6 +684,7 @@ export function generateWorld(input = {}) {
       'entire railway corridors must stay inside the world outline');
     line.bridges=intervalsFor(line,p=>distanceToRiver(world,p.x,p.z)-riverWidth/2-CLEARANCES.bridgeBank);
     for(const mountain of world.mountains){
+      if(distanceToLine(line,mountain.x,mountain.z)>mountain.radius+CLEARANCES.cuttingHalfWidth)continue;
       const cuts=intervalsFor(line,p=>distance(p,mountain)-mountain.radius-CLEARANCES.cuttingHalfWidth);
       line.cuts.push(...cuts.map(cut=>({...cut,mountainId:mountain.id}))); 
       // A portal is possible only when the entire masonry arch is backed by
@@ -714,9 +718,25 @@ export function generateWorld(input = {}) {
   world.biomes=createBiomes(world,input.biomes);
   placeStations(world);
   world.placements=[];
-  placeCityDevelopment(world);
-  placeScenery(world,random,clamp(Number(input.density??1)||0,0,3));
+  if(options.detail!=='network'){placeCityDevelopment(world);placeScenery(world,random,world.density);}
   return world;
+}
+
+/** Deterministic bounded detail. The coarse world is never mutated or cached here. */
+export function generateWorldRegion(network,{x=0,z=0,size=192}={}){
+  assert([x,z,size].every(Number.isFinite)&&size>0,'region requires finite coordinates and positive size');
+  const cellX=Math.floor(x/size),cellZ=Math.floor(z/size),key=`${size}:${cellX}:${cellZ}`;
+  const bounds={minX:cellX*size,minZ:cellZ*size,maxX:(cellX+1)*size,maxZ:(cellZ+1)*size};
+  const owns=p=>p.x>=bounds.minX&&p.x<bounds.maxX&&p.z>=bounds.minZ&&p.z<bounds.maxZ;
+  const cities=network.cities.map(c=>({...c,stationIds:[...c.stationIds],development:{...c.development,placedBuildings:0,streetCount:0,placedFeatures:[]}}));
+  const owned=cities.filter(owns),working={...network,cities,placements:[],cityStreets:[],detailRegion:bounds};
+  placeCityDevelopment(working,owned);
+  placeScenery(working,seededRandom(`${network.seed}:region:${key}`),network.density??1);
+  const mountains=network.mountains.filter(owns),stations=network.stations.filter(owns);
+  const lines=network.lines.filter(line=>boxesOverlap(bounds,lineTree(line).box));
+  const margin=Math.max(0,...owned.map(c=>c.radius),...mountains.map(m=>m.radius),...stations.map(s=>s.radius));
+  return{key,bounds,cullBounds:{minX:bounds.minX-margin,minZ:bounds.minZ-margin,maxX:bounds.maxX+margin,maxZ:bounds.maxZ+margin},
+    cities:owned,placements:working.placements,cityStreets:working.cityStreets,stations,lines,mountains,farmland:working.farmland};
 }
 
 /** Machine-readable geometric violations; an empty array is a clean plan. */
@@ -782,7 +802,7 @@ export function validateWorld(world) {
   }
   for(const station of world.stations){
     if(station.ownerId!==world.cities.find(c=>c.id===station.cityId)?.ownerId)add('station-owner',station.id,'Station must belong to its city owner');
-    for(const line of world.lines)if(rectangleToLine(station,line)<CLEARANCES.trackHalfWidth+.25-.001)add('station-track',station.id,`Platform overlaps ${line.id}`);
+    for(const line of world.lines)if(boxesOverlap(pointBox(station.x,station.z,station.radius+CLEARANCES.trackHalfWidth+.25),lineTree(line).box)&&rectangleToLine(station,line)<CLEARANCES.trackHalfWidth+.25-.001)add('station-track',station.id,`Platform overlaps ${line.id}`);
     if(rectangleToLine(station,world.river)<world.river.width/2+CLEARANCES.riverBank-.001)add('station-water',station.id,'Platform enters river bank');
   }
   for(let i=0;i<world.placements.length;i++){
