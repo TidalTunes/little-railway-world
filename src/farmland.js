@@ -1,5 +1,6 @@
 import { biomeDistance, fitsBiome } from './biomes.js';
-import {surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceChartRadius} from './world-surface.js';
+import {surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceChartRadius,surfaceHeading,chartHeadingForSurface} from './world-surface.js';
+import {farmFootprintsOverlap} from './farm-footprints.js';
 
 function randomFor(seed){
   let state=2166136261;
@@ -29,36 +30,49 @@ function clip(polygon,nx,nz,limit){
   return result;
 }
 
-function parcelsFor(width,depth,seed,dominant){
-  const random=randomFor(seed),w=width/2-.12,d=depth/2-.12;
-  const notch=()=>.28+random()*Math.min(width,depth)*.12;
-  const fields=[[[-w+notch(),-d],[w-notch(),-d],[w,-d+notch()],[w,d-notch()],
-    [w-notch(),d],[-w+notch(),d],[-w,d-notch()],[-w,-d+notch()]]];
-  const target=Math.max(3,Math.min(8,Math.round(width*depth/(23+random()*11))));
+const cropFamilies=[['wheat','fallow','pasture'],['pasture','wheat','orchard'],
+  ['orchard','pasture','wheat'],['vegetables','wheat','pasture']];
+
+function outlineFor(width,depth,seed){
+  const random=randomFor(`${seed}:boundary`),w=width/2-.12,d=depth/2-.12;
+  const notch=()=>.25+random()*Math.min(width,depth)*.16;
+  return[[-w+notch(),-d],[w-notch(),-d],[w,-d+notch()],[w,d-notch()],
+    [w-notch(),d],[-w+notch(),d],[-w,d-notch()],[-w,-d+notch()]];
+}
+
+function parcelsFor(width,depth,seed,family,footprint){
+  const random=randomFor(seed),fields=[footprint];
+  // Acreage, rather than a minimum garden count, decides the subdivision.
+  // Small edge plots stay one field; broad estates have a few working parcels.
+  const target=Math.max(1,Math.min(6,Math.round(width*depth/(100+random()*65))));
   for(let attempt=0;fields.length<target&&attempt<target*5;attempt++){
     const index=fields.reduce((best,p,i)=>ringArea(p)>ringArea(fields[best])?i:best,0),p=fields[index],b=boundsOf(p);
-    const alongX=(b.maxX-b.minX)*(random()*.35+.85)>(b.maxZ-b.minZ),skew=(random()-.5)*.32;
+    const alongX=(b.maxX-b.minX)*(random()*.45+.8)>(b.maxZ-b.minZ),skew=(random()-.5)*.65;
     const nx=alongX?1:skew,nz=alongX?skew:1,values=p.map(([x,z])=>x*nx+z*nz);
-    const low=Math.min(...values),high=Math.max(...values),split=low+(high-low)*(.32+random()*.36),gap=.20+random()*.10;
+    const low=Math.min(...values),high=Math.max(...values),split=low+(high-low)*(.28+random()*.44),gap=.24+random()*.16;
     const a=clip(p,nx,nz,split-gap/2),c=clip(p,-nx,-nz,-split-gap/2);
-    if(a.length<3||c.length<3||Math.min(ringArea(a),ringArea(c))<7)continue;
+    if(a.length<3||c.length<3||Math.min(ringArea(a),ringArea(c))<26)continue;
     fields.splice(index,1,a,c);
   }
-  const crops=['wheat','pasture','wheat','fallow','orchard','pasture','vegetables'];
   return fields.map((polygon,index)=>{
     const b=boundsOf(polygon),x=(b.minX+b.maxX)/2,z=(b.minZ+b.maxZ)/2;
-    const crop=random()<.38?dominant:crops[Math.floor(random()*crops.length)],detailSeed=Math.floor(random()*1e8);
+    const crop=random()<.72?family[0]:family[1+Math.floor(random()*2)],detailSeed=Math.floor(random()*1e8);
+    const center=polygon.reduce((p,q)=>[p[0]+q[0]/polygon.length,p[1]+q[1]/polygon.length],[0,0]);
+    const edge=Math.floor(random()*polygon.length),a=polygon[edge],c=polygon[(edge+1)%polygon.length];
+    const featurePosition=[center[0]*.5+(a[0]+c[0])*.25-x,center[1]*.5+(a[1]+c[1])*.25-z];
     return{x,z,width:b.maxX-b.minX,depth:b.maxZ-b.minZ,polygon:polygon.map(([px,pz])=>[px-x,pz-z]),
-      crop,variant:Math.floor(random()*3),rowsAlong:random()<.18?'x':'z',detailSeed,
+      crop,variant:Math.floor(random()*3),rowsAngle:(random()<.2?0:Math.PI/2)+(random()-.5)*.12,
+      rowPitch:.72+random()*.38,tone:.25+random()*.5,detailSeed,featurePosition,
       // A few hedged edges and farm features punctuate open fields; every
       // district deliberately retains quiet parcels with no little objects.
-      hedgeEdges:polygon.map((_,edge)=>edge).filter(()=>random()<.20),
-      feature:index===0&&random()<.42?'barn':crop==='wheat'&&random()<.3?'bales':crop==='pasture'&&random()<.5?'trough':null};
+      hedgeEdges:polygon.map((_,edge)=>edge).filter(()=>random()<.16),
+      feature:index===0&&ringArea(polygon)>85&&random()<.2?'barn':crop==='wheat'&&random()<.17?'bales':crop==='pasture'&&random()<.12?'trough':null};
   });
 }
 
-/** Plan neighboring field groups while preserving the complete circular
- * reservations used by the world. Regional requests use global cluster IDs
+/** Plan adjoining agricultural estates. Circular reservations protect all
+ * non-farm obstacles; neighboring farms compare their actual field hulls.
+ * Regional requests use global cluster IDs
  * and seeds, so the same region is independent of worker request order. */
 export function placeFarmland(world,{density=1,canPlace,add}={}){
   if(typeof canPlace!=='function'||typeof add!=='function')throw new TypeError('Farmland requires canPlace and add callbacks');
@@ -71,7 +85,7 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
   const candidates=[];
   for(const region of regions){
     const random=randomFor(`${world.seed}:farmland:${region.id}`),bearing=(random()-.5)*Math.PI/3;
-    const cos=Math.cos(bearing),sin=Math.sin(bearing),step=48,reach=34,phaseX=random()*step,phaseZ=random()*step;
+    const cos=Math.cos(bearing),sin=Math.sin(bearing),step=56,reach=38,phaseX=random()*step,phaseZ=random()*step;
     const corners=region.polygons.flatMap(rings=>rings[0]),b=boundsOf(corners);
     if(regionBounds){b.minX=Math.max(b.minX,regionBounds.minX);b.maxX=Math.min(b.maxX,regionBounds.maxX);
       b.minZ=Math.max(b.minZ,regionBounds.minZ);b.maxZ=Math.min(b.maxZ,regionBounds.maxZ);}
@@ -83,16 +97,16 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
         const clusterId=`${region.id}-${column}-${row}`,rng=randomFor(`${world.seed}:farm-cluster:${clusterId}`);
         const u=column*step+phaseX+(rng()-.5)*12,v=row*step+phaseZ+(rng()-.5)*12;
         const cx=u*cos+v*sin,cz=-u*sin+v*cos,rotation=bearing+(rng()-.5)*.22,phase=rng()*Math.PI*2;
-        const dominant=['wheat','pasture','wheat','orchard'][Math.floor(rng()*4)],priority=rng()*4;
+        const family=cropFamilies[Math.floor(rng()*cropFamilies.length)],priority=rng()*4;
         if(cx<b.minX-reach||cx>b.maxX+reach||cz<b.minZ-reach||cz>b.maxZ+reach)continue;
-        for(let index=0;index<42;index++){
-          const angle=phase+index*2.399963229728653,r=4.9*Math.sqrt(index),x=cx+Math.cos(angle)*r,z=cz+Math.sin(angle)*r;
+        for(let index=0;index<28;index++){
+          const angle=phase+index*2.399963229728653,r=6.2*Math.sqrt(index),x=cx+Math.cos(angle)*r,z=cz+Math.sin(angle)*r;
           if(x<b.minX||x>b.maxX||z<b.minZ||z>b.maxZ)continue;
           const clearance=biomeDistance(world,'farmland',x,z);
           if(clearance<4.1)continue;
           const shape=randomFor(`${world.seed}:${clusterId}:${index}`);
-          candidates.push({x,z,rotation,clusterId,dominant,clearance,seed:`${world.seed}:${clusterId}:${index}`,
-            width:12.6+shape()*5.4,depth:9.6+shape()*4.4,score:priority+Math.min(clearance,14)*.18-r*.21});
+          candidates.push({x,z,rotation:chartHeadingForSurface(world,x,z,rotation),clusterId,family,clearance,seed:`${world.seed}:${clusterId}:${index}`,
+            width:22+shape()*8,depth:16+shape()*8,score:priority+Math.min(clearance,18)*.18-r*.21});
         }
       }
     }
@@ -100,10 +114,11 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
   candidates.sort((a,b)=>b.score-a.score||a.x-b.x||a.z-b.z);
   // Compact estates are tried first; smaller edge plots fill the remaining
   // space around their neighbors instead of sprinkling identical stamps.
-  for(const scale of [1,.76,.56])for(const candidate of candidates){
+  for(const scale of [1,.7,.46])for(const candidate of candidates){
     if(result.area>=result.targetArea)return result;
     if(candidate.used)continue;
     const width=candidate.width*scale,depth=candidate.depth*scale,radius=Math.hypot(width,depth)/2;
+    const footprint=outlineFor(width,depth,candidate.seed);
     let nearest=null,nearestDistance=Infinity;
     for(const district of result.districts){
       const distance=surfaceDistance(world,candidate,district);
@@ -111,27 +126,34 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
     }
     const positions=[];
     if(nearest){
-      const displacement=surfaceDisplacement(world,nearest,candidate),angle=Math.atan2(displacement.z,displacement.x),distance=radius+nearest.radius+.45;
-      // At most three tangent placements make an estate grow beside existing
-      // fields. This packs the reserved circles themselves, not only their art.
-      for(const offset of [0,.24,-.24])positions.push({...surfaceOffset(world,nearest.x,nearest.z,Math.cos(angle+offset)*distance,Math.sin(angle+offset)*distance),
-        rotation:nearest.rotation,clusterId:nearest.clusterId});
+      const displacement=surfaceDisplacement(world,nearest,candidate),heading=surfaceHeading(world,nearest.x,nearest.z,nearest.rotation);
+      const cs=Math.cos(heading),sn=Math.sin(heading),dx=displacement.x*cs-displacement.z*sn,dz=displacement.x*sn+displacement.z*cs;
+      const gap=world.surface?.type==='sphere'?.65:.44;
+      const clamp=(value,span)=>Math.max(-span,Math.min(span,value));
+      const options=[[(width+nearest.width)/2+gap,clamp(dz,nearest.depth*.3)],[-(width+nearest.width)/2-gap,clamp(dz,nearest.depth*.3)],
+        [clamp(dx,nearest.width*.3),(depth+nearest.depth)/2+gap],[clamp(dx,nearest.width*.3),-(depth+nearest.depth)/2-gap]];
+      options.sort((a,b)=>Math.hypot(a[0]-dx,a[1]-dz)-Math.hypot(b[0]-dx,b[1]-dz));
+      for(const [u,v]of options){
+        const position=surfaceOffset(world,nearest.x,nearest.z,u*cs+v*sn,-u*sn+v*cs);
+        positions.push({...position,rotation:chartHeadingForSurface(world,position.x,position.z,heading),clusterId:nearest.clusterId,family:nearest.family});
+      }
     }
     positions.push(candidate);
     let item;
     for(const position of positions){
-      if(result.districts.some(d=>surfaceDistance(world,position,d)<radius+d.radius+.32))continue;
-      if(!fitsBiome(world,'farmland',position.x,position.z,surfaceChartRadius(world,position.x,position.z,radius)))continue;
       const districtId=`farm-${candidate.clusterId}-${candidate.seed.split(':').at(-1)}`;
       const proposal={kind:'farm',x:position.x,y:0,z:position.z,width,depth,radius,scale:1,rotation:position.rotation,
-        variant:0,districtId,clusterId:position.clusterId};
+        variant:0,districtId,clusterId:position.clusterId,footprint};
+      if(result.districts.some(d=>farmFootprintsOverlap(world,proposal,d,.32)))continue;
+      if(!fitsBiome(world,'farmland',position.x,position.z,surfaceChartRadius(world,position.x,position.z,radius)))continue;
       if(canPlace(proposal)){
-        proposal.parcels=parcelsFor(width,depth,candidate.seed,candidate.dominant);item=proposal;break;
+        proposal.family=position.family??candidate.family;
+        proposal.parcels=parcelsFor(width,depth,candidate.seed,proposal.family,footprint);item=proposal;break;
       }
     }
     if(!item)continue;
     add(item);candidate.used=true;
-    result.districts.push({id:item.districtId,clusterId:item.clusterId,x:item.x,z:item.z,width,depth,radius,
+    result.districts.push({kind:'farm',id:item.districtId,clusterId:item.clusterId,x:item.x,z:item.z,width,depth,radius,footprint,family:item.family,
       rotation:item.rotation,parcelCount:item.parcels.length});
     result.area+=width*depth;
     result.cultivatedArea+=item.parcels.reduce((sum,p)=>sum+ringArea(p.polygon),0);

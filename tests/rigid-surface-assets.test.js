@@ -41,7 +41,7 @@ test('rigid scenery keeps dimensions and right angles across latitude and headin
   }
 });
 
-test('nested passengers move with their station and farm parcels keep one physical frame',()=>{
+test('nested passengers move with their station and farm parcels keep one estate root',()=>{
   const p=surfaceChartCoordinates(world,-12,68),chart=new THREE.Group(),physical=new THREE.Group();
   const building=station(chart,{x:p.x,z:p.z,rotation:.7});
   const passenger=person(building,{x:2,y:.21,z:.83,rotation:Math.PI});
@@ -52,11 +52,62 @@ test('nested passengers move with their station and farm parcels keep one physic
   extractRigidSurfaceAssets(chart,physical,world);
   assert.equal(physical.children.length,2,'nested passengers are not independently projected');
   assert.equal(passenger.parent,building);assert.equal(passenger.matrixAutoUpdate,true);
-  const reference=farmPatch(new THREE.Group(),{width:12,depth:10,parcels:[
-    {x:-3,z:0,width:6,depth:10,feature:'barn',crop:'pasture'},
-    {x:3,z:0,width:6,depth:10,crop:'orchard'},
-  ]});
-  closeBounds(localBounds(farm,rigidSurfacePoseMatrix(world,p.x+30,0,p.z,.4).invert()),localBounds(reference));
+  const bounds=localBounds(farm,rigidSurfacePoseMatrix(world,p.x+30,0,p.z,.4).invert());
+  assert.ok(Math.abs(bounds.min.x+6)<.001&&Math.abs(bounds.max.x-6)<.001);
+  assert.ok(Math.abs(bounds.min.z+5)<.001&&Math.abs(bounds.max.z-5)<.001);
+  assert.ok(bounds.min.y<.05,'ground bends below the original estate tangent plane');
+});
+
+test('large farm ground follows the sphere while trees and farm buildings remain rigid and grounded',()=>{
+  for(const latitude of [0,72])for(const yaw of [0,.7])for(const scale of [.7,1.4]){
+    const p=surfaceChartCoordinates(world,35,latitude),chart=new THREE.Group(),physical=new THREE.Group(),elevation=.2;
+    const farm=farmPatch(chart,{x:p.x,y:elevation,z:p.z,rotation:yaw,scale,width:30,depth:24,parcels:[
+      {x:-8,z:0,width:14,depth:24,crop:'wheat',feature:'barn',featurePosition:[-4,8],rowsAngle:.3,hedgeEdges:[0,1,2]},
+      {x:7,z:0,width:16,depth:24,crop:'orchard',rowsAngle:.3,hedgeEdges:[2,3]},
+    ]});
+    chart.updateMatrixWorld(true);
+    const inverse=farm.matrixWorld.clone().invert(),grounds=new Map(),anchors=[];
+    farm.traverse(node=>{
+      if(node.userData.surfaceAnchor)anchors.push(node);
+      if(node.isMesh&&node.userData.surfaceGround){
+        const matrix=inverse.clone().multiply(node.matrixWorld),positions=node.geometry.attributes.position,heights=[];
+        for(let i=0;i<positions.count;i++)heights.push(point.fromBufferAttribute(positions,i).applyMatrix4(matrix).y);
+        grounds.set(node,{low:elevation+Math.min(...heights)*scale,high:elevation+Math.max(...heights)*scale,material:node.material});
+      }
+    });
+    extractRigidSurfaceAssets(chart,physical,world);physical.updateMatrixWorld(true);
+    assert.ok(grounds.size>8&&anchors.length>8,'exercise crops, hedges, an offset barn, and orchard trees');
+    const radial=point=>Math.hypot(point.x,point.y+world.surface.radius,point.z)-world.surface.radius;
+    let triangles=0;
+    for(const [mesh,{low,high,material}]of grounds){
+      assert.equal(mesh.material,material,'draping adds no material batches');
+      const positions=mesh.geometry.attributes.position;triangles+=positions.count/3;
+      for(let i=0;i<positions.count;i++){
+        const height=radial(point.fromBufferAttribute(positions,i).applyMatrix4(mesh.matrixWorld));
+        assert.ok(height>=low-.00001&&height<=high+.00001,'vertices retain their authored radial height');
+      }
+      if(high-low<1e-6){
+        const a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3();
+        for(let i=0;i<positions.count;i+=3){
+          a.fromBufferAttribute(positions,i).applyMatrix4(mesh.matrixWorld);
+          b.fromBufferAttribute(positions,i+1).applyMatrix4(mesh.matrixWorld);
+          c.fromBufferAttribute(positions,i+2).applyMatrix4(mesh.matrixWorld);
+          const height=radial(a.add(b).add(c).multiplyScalar(1/3));
+          assert.ok(height>=low-.004,'the painted surface also follows the sphere between vertices');
+        }
+      }
+    }
+    assert.ok(triangles<1600,'one-time draping retains a bounded estate geometry budget');
+    for(const anchor of anchors){
+      const origin=new THREE.Vector3().setFromMatrixPosition(anchor.matrixWorld);
+      assert.ok(Math.abs(radial(origin)-elevation)<1e-8,'each complete detail is grounded at its own position');
+      const axes=[0,4,8].map(offset=>new THREE.Vector3().fromArray(anchor.matrixWorld.elements,offset));
+      for(const axis of axes)assert.ok(Math.abs(axis.length()-scale)<1e-10,'rigid detail dimensions stay unchanged');
+      for(let i=0;i<3;i++)for(let j=i+1;j<3;j++)assert.ok(Math.abs(axes[i].dot(axes[j]))<1e-10,'details never bend or shear');
+      const normal=origin.clone().add(new THREE.Vector3(0,world.surface.radius,0)).normalize();
+      assert.ok(axes[1].normalize().distanceTo(normal)<1e-10,'each detail stands along its own radial normal');
+    }
+  }
 });
 
 test('already-spherical meshes pass through extraction unchanged',()=>{
@@ -83,6 +134,21 @@ test('detail packet merges rigid houses only after the geographic warp',()=>{
     assert.ok(vertices>100);
     closeBounds(actual,localBounds(house(new THREE.Group())),.0003);
     for(const mesh of packet.meshes)assert.ok([...mesh.position,...mesh.normal].every(Number.isFinite));
+  }
+});
+
+test('worker packets retain draped farmland elevation and painted vertex colors',()=>{
+  const p=surfaceChartCoordinates(world,15,72),bounds={minX:p.x-20,maxX:p.x+20,minZ:p.z-20,maxZ:p.z+20};
+  const network={...world,outline:[[0,100],[4,100],[4,104],[0,104]],cities:[],players:[],lines:[],mountains:[],stations:[],placements:[]};
+  const packet=compileDetailPacket({bounds,placements:[{kind:'farm',x:p.x,z:p.z,width:30,depth:24,rotation:.4,
+    parcels:[{x:0,z:0,width:30,depth:24,crop:'wheat',rowsAngle:.3,tone:.35}]}]},network);
+  assert.ok(packet.meshes.length>0);
+  for(const mesh of packet.meshes){
+    assert.ok(mesh.color&&mesh.material.vertexColors,'painted crop colors survive batching');
+    for(let i=0;i<mesh.position.length;i+=3){
+      const elevation=Math.hypot(mesh.position[i],mesh.position[i+1]+world.surface.radius,mesh.position[i+2])-world.surface.radius;
+      assert.ok(Math.min(Math.abs(elevation-.055),Math.abs(elevation-.064))<.0004,'packet positions sit on the intended shell');
+    }
   }
 });
 

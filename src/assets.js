@@ -1,5 +1,6 @@
-import { box, cylinder, roof, group, ico, beam, v, polygon } from './geometry.js';
-import { M } from './palette.js';
+import { Float32BufferAttribute } from 'three';
+import { box, cylinder, roof, group, ico, beam, v, polygon, extrudedPolygon } from './geometry.js';
+import { C, M } from './palette.js';
 
 // Bounds include every roof, wheel and trim piece. Placement uses the footprint,
 // while detail stays inside it: an asset never silently occupies a neighbour.
@@ -284,41 +285,71 @@ function fieldContains(points,x,z,margin=0){
   }
   return true;
 }
-function fieldSpan(points,position,alongX){
-  const intersections=[],fixed=alongX?1:0,along=1-fixed;
+// Crop marks are flat clipped ribbons, not little raised slats. The shared
+// terrain material carries a quiet colour variation without another draw batch.
+function fieldPaint(parent,points,y,color){
+  if(points.length<3)return;
+  const surface=polygon(parent,points,y,M.terrainVertex),count=surface.geometry.attributes.position.count;
+  const colors=new Float32Array(count*3);
+  for(let i=0;i<count;i++)color.toArray(colors,i*3);
+  surface.geometry.setAttribute('color',new Float32BufferAttribute(colors,3));
+  surface.userData.surfaceGround=true;
+  return surface;
+}
+function fieldClip(points,nx,nz,limit){
+  const result=[];
   for(let i=0;i<points.length;i++){
-    const a=points[i],b=points[(i+1)%points.length];
-    if((a[fixed]<=position&&b[fixed]>position)||(b[fixed]<=position&&a[fixed]>position)){
-      const t=(position-a[fixed])/(b[fixed]-a[fixed]);intersections.push(a[along]+(b[along]-a[along])*t);
-    }
+    const a=points[i],b=points[(i+1)%points.length],da=a[0]*nx+a[1]*nz-limit,db=b[0]*nx+b[1]*nz-limit;
+    if(da<=0)result.push(a);
+    if((da<0)!==(db<0)){const t=da/(da-db);result.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);}
   }
-  return intersections.length<2?null:[Math.min(...intersections),Math.max(...intersections)];
+  return result;
 }
-function farmRows(parent,points,width,depth,alongX,material,pitch,height,feature){
-  const across=alongX?depth:width;if(across<=.4)return;
-  const count=Math.max(1,Math.floor((across-.35)/pitch));
-  const spacing=(across-.35)/count,thickness=Math.min(.17,spacing*.24);
+function fieldInset(points,margin){
+  let inset=points;
+  for(let i=0;i<points.length&&inset.length>=3;i++){
+    const a=points[i],b=points[(i+1)%points.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
+    if(length>1e-7)inset=fieldClip(inset,dz/length,-dx/length,(a[0]*dz-a[1]*dx)/length-margin);
+  }
+  return inset;
+}
+function fieldBand(points,nx,nz,from,to){
+  return fieldClip(fieldClip(points,nx,nz,to),-nx,-nz,-from);
+}
+function farmRows(parent,points,angle,color,pitch,feature,crop){
+  const ca=Math.cos(angle),sa=Math.sin(angle),inset=fieldInset(points,crop==='fallow'?.16:.25);
+  if(inset.length<3)return;
+  const values=inset.map(([x,z])=>-x*sa+z*ca),low=Math.min(...values),high=Math.max(...values),across=high-low;
+  if(across<.3)return;
+  const count=Math.max(1,Math.min(18,Math.round(across/pitch))),spacing=across/count;
+  const shade=color.clone().multiplyScalar(crop==='vegetables'?.83:crop==='fallow'?.90:.94);
+  const featureAcross=feature&&-feature.center[0]*sa+feature.center[1]*ca;
+  const featureAlong=feature&&feature.center[0]*ca+feature.center[1]*sa;
   for(let index=0;index<count;index++){
-    const offset=-across/2+.175+spacing*(index+.5);
-    const low=fieldSpan(points,offset-thickness/2,alongX),high=fieldSpan(points,offset+thickness/2,alongX);
-    if(!low||!high)continue;
-    const from=Math.max(low[0],high[0])+.17,to=Math.min(low[1],high[1])-.17;
-    const fixed=alongX?1:0,along=1-fixed;
-    const spans=feature&&Math.abs(offset-feature.center[fixed])<feature.radius+thickness/2
-      ?[[from,Math.min(to,feature.center[along]-feature.radius)],[Math.max(from,feature.center[along]+feature.radius),to]]:[[from,to]];
-    for(const [start,end]of spans){
-      if(end-start<.3)continue;
-      box(parent,alongX?(start+end)/2:offset,.07+height/2,alongX?offset:(start+end)/2,
-        alongX?end-start:thickness,height,alongX?thickness:end-start,material);
-    }
+    const middle=low+(index+.5)*spacing,half=spacing*(crop==='fallow'?.16:.25);
+    const band=fieldBand(inset,-sa,ca,middle-half,middle+half);
+    if(feature&&Math.abs(middle-featureAcross)<feature.radius+half){
+      fieldPaint(parent,fieldClip(band,ca,sa,featureAlong-feature.radius),.064,shade);
+      fieldPaint(parent,fieldClip(band,-ca,-sa,-featureAlong-feature.radius),.064,shade);
+    }else fieldPaint(parent,band,.064,shade);
   }
 }
-function fieldFeature(parent,points,feature){
+function fieldFeature(parent,points,feature,preferred,angle,rng){
   if(!feature)return null;
-  const center=points.reduce((p,q)=>[p[0]+q[0]/points.length,p[1]+q[1]/points.length],[0,0]);
-  const radius=feature==='barn'?1.42:.7;
-  if(!fieldContains(points,...center,radius))return null;
-  const f=group(parent,center[0],0,center[1]);
+  const centroid=points.reduce((p,q)=>[p[0]+q[0]/points.length,p[1]+q[1]/points.length],[0,0]);
+  const radius=feature==='barn'?1.42:feature==='bales'?.84:.7;
+  // A farmstead belongs beside a boundary, leaving the middle of its field open.
+  const candidates=Array.isArray(preferred)&&preferred.length===2&&preferred.every(Number.isFinite)?[preferred]:[];
+  const start=Math.floor(rng()*points.length);
+  for(const fraction of [.22,.38,.55,.72])for(let i=0;i<points.length;i++){
+    const corner=points[(start+i)%points.length];
+    candidates.push(corner.map((value,axis)=>value+(centroid[axis]-value)*fraction));
+  }
+  candidates.push(centroid);
+  const center=candidates.find(point=>fieldContains(points,...point,radius));
+  if(!center)return null;
+  const f=group(parent,center[0],0,center[1],-angle);
+  f.userData.surfaceAnchor=true;
   if(feature==='barn'){
     box(f,0,.075,0,1.96,.035,1.98,'soilLight');
     box(f,-.15,.53,0,1.05,.93,1.38,'plaster');
@@ -327,13 +358,31 @@ function fieldFeature(parent,points,feature){
     box(f,-.15,.76,.725,.62,.075,.035,'trim');
     for(const z of [-.4,0])box(f,.7,.23,z,.3,.31,.3,'gold');
   }else if(feature==='bales'){
-    for(const [x,z]of [[-.27,-.17],[.27,-.17],[0,.25]])cylinder(f,x,.25,z,.17,.17,.38,'gold',7).rotation.z=Math.PI/2;
+    const offsets=rng()<.5?[[-.4,-.17],[.12,-.17],[.35,.3]]:[[-.38,0],[.28,.12]];
+    for(const [x,z]of offsets)cylinder(f,x,.25,z,.17,.17,.38,'gold',7).rotation.z=Math.PI/2;
   }else if(feature==='trough'){
     box(f,0,.16,0,.82,.22,.42,'timber');box(f,0,.275,0,.69,.018,.29,'water');
     for(const x of [-.47,.47])box(f,x,.24,.39,.075,.38,.075,'timber');
     box(f,0,.34,.39,1.01,.06,.055,'timber');
   }
   return{center,radius};
+}
+
+function fieldHedges(parent,points,edges,rng){
+  const inner=fieldInset(points,.08);
+  for(const edge of edges??[]){
+    if(!Number.isInteger(edge)||edge<0||edge>=points.length)continue;
+    const a=points[edge],b=points[(edge+1)%points.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
+    if(length<1.5)continue;
+    const ux=dx/length,uz=dz/length,nx=-uz,nz=ux,offset=a[0]*nx+a[1]*nz,start=a[0]*ux+a[1]*uz;
+    const strip=fieldBand(fieldBand(inner,nx,nz,offset+.09,offset+.25),ux,uz,start+.25,start+length-.25);
+    const gate=rng()<.32?Math.min(.9,length*.17):0,middle=start+length*(.35+rng()*.3);
+    const segments=gate?[fieldClip(strip,ux,uz,middle-gate/2),fieldClip(strip,-ux,-uz,-middle-gate/2)]:[strip];
+    for(const segment of segments)if(segment.length>=3){
+      const hedge=extrudedPolygon(parent,segment,.30,.23,'pineLight');
+      hedge.userData.surfaceGround=true;
+    }
+  }
 }
 
 export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1,
@@ -358,44 +407,48 @@ export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant =
     return outline;
   });
   const g = asset(parent, 'farmPatch', { x, y, z, rotation, scale });
+  g.userData.surfaceFootprint=true;
   g.userData.footprint={width,depth,height:ASSET_BOUNDS.farmPatch.height,radius:Math.hypot(width,depth)/2};
+  const orchardArea=fields.reduce((sum,field)=>sum+(field.crop==='orchard'?field.width*field.depth:0),0);
   for(const [index,field]of fields.entries()){
     const type=variantOf(field.variant??variant,3),f=group(g,field.x,0,field.z),w=field.width,d=field.depth;
     const points=outlines[index];
-    const crop=field.feature==='barn'?'pasture':field.crop??['wheat','vegetables','lavender'][type];
-    const base={wheat:['wheat','gold','leafGold'][type],pasture:['meadow','grassLight','grass'][type],
-      orchard:['grass','grassDark','meadow'][type],fallow:['soilLight','field','soilLight'][type],vegetables:'leafLight',lavender:'lavender'}[crop]??'wheat';
-    polygon(f,points,.055,base);
-    const rng=farmRandom(field.detailSeed??(type+1)*7117),feature=fieldFeature(f,points,field.feature);
+    const crop=field.crop??['wheat','vegetables','lavender'][type],tone=Math.max(0,Math.min(1,Number.isFinite(field.tone)?field.tone:type/2));
+    const base={wheat:'wheat',pasture:'meadow',orchard:'grass',fallow:'soilLight',vegetables:'leafLight',lavender:'lavender'}[crop]??'wheat';
+    const color=C[base].clone().lerp(C[crop==='wheat'?'soilLight':crop==='fallow'?'field':'grassDark'],.07+tone*.20);
+    const angle=Number.isFinite(field.rowsAngle)?field.rowsAngle:field.rowsAlong==='x'?0:Math.PI/2;
+    fieldPaint(f,points,.055,color);
+    const rng=farmRandom(field.detailSeed??(type+1)*7117),feature=fieldFeature(f,points,field.feature,field.featurePosition,angle,rng);
     const available=(x,z,r)=>fieldContains(points,x,z,r)&&(!feature||Math.hypot(x-feature.center[0],z-feature.center[1])>feature.radius+r);
     if(crop==='wheat'||crop==='vegetables'||crop==='lavender'||crop==='fallow'){
-      farmRows(f,points,w,d,field.rowsAlong==='x',crop==='wheat'?'gold':crop==='fallow'?'field':crop==='lavender'?'lavender':'leaf',crop==='fallow'?.95:.63,crop==='fallow'?.025:.065,feature);
+      const pitch=Number.isFinite(field.rowPitch)&&field.rowPitch>0?Math.max(.4,field.rowPitch):crop==='fallow'?1.05:crop==='vegetables'?.8:1.35;
+      farmRows(f,points,angle,color,pitch,feature,crop);
     }else if(crop==='orchard'){
-      const columns=Math.min(4,Math.max(1,Math.floor(w/1.5))),rows=Math.min(3,Math.max(1,Math.floor(d/1.5)));
-      for(let column=0;column<columns;column++)for(let row=0;row<rows;row++){
-        const x=(column-(columns-1)/2)*Math.min(1.65,(w-.9)/columns),z=(row-(rows-1)/2)*Math.min(1.65,(d-.9)/rows);
-        if(!available(x,z,.40))continue;
-        box(f,x,.28,z,.065,.45,.065,'bark');
-        ico(f,x,.69+rng()*.12,z,.34,.38,.34,type===1?'leafGold':'leaf');
+      const ca=Math.cos(angle),sa=Math.sin(angle),uv=points.map(([x,z])=>[x*ca+z*sa,-x*sa+z*ca]);
+      const minU=Math.min(...uv.map(p=>p[0])),maxU=Math.max(...uv.map(p=>p[0])),minV=Math.min(...uv.map(p=>p[1])),maxV=Math.max(...uv.map(p=>p[1]));
+      const budget=Math.max(1,Math.min(24,Math.floor(36*w*d/Math.max(w*d,orchardArea))));
+      const pitch=Math.max(1.45,Math.sqrt((maxU-minU)*(maxV-minV)/budget),(maxU-minU)/budget,(maxV-minV)/budget);
+      const columns=Math.max(1,Math.floor((maxU-minU)/pitch)),rows=Math.max(1,Math.floor((maxV-minV)/pitch));
+      const stepU=(maxU-minU)/columns,stepV=(maxV-minV)/rows;
+      for(let row=0;row<rows;row++)for(let column=0;column<columns;column++){
+        const u=minU+(column+.5)*stepU,v=minV+(row+.5)*stepV,x=u*ca-v*sa,z=u*sa+v*ca;
+        if(!available(x,z,.43))continue;
+        const tree=group(f,x,0,z);tree.userData.surfaceAnchor=true;
+        box(tree,0,.28,0,.065,.45,.065,'bark');
+        ico(tree,0,.64+rng()*.12,0,.39,.38,.39,rng()<.22?'leafLight':'leaf');
       }
     }else{
       // Uncultivated grass between working plots gives the crops breathing
       // room. Sparse tufts remain subordinate to the field's broad silhouette.
       for(let index=0;index<3;index++){
         const x=(rng()-.5)*w*.8,z=(rng()-.5)*d*.8;
-        if(available(x,z,.18))ico(f,x,.12,z,.15,.075,.12,'grassDark');
+        if(available(x,z,.18)){
+          const tuft=group(f,x,0,z);tuft.userData.surfaceAnchor=true;
+          ico(tuft,0,.12,0,.15,.075,.12,'grassDark');
+        }
       }
     }
-    for(const edge of field.hedgeEdges??[]){
-      if(!Number.isInteger(edge)||edge<0||edge>=points.length)continue;
-      const a=points[edge],b=points[(edge+1)%points.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
-      if(length<1.5)continue;
-      const gate=Math.min(.72,length*.2),end=.28,segments=[[end,length*.5-gate/2],[length*.5+gate/2,length-end]];
-      for(const [from,to]of segments){
-        if(to-from<.3)continue;const t=(from+to)/2/length;
-        box(f,a[0]+dx*t-dz/length*.12,.21,a[1]+dz*t+dx/length*.12,to-from,.3,.15,'pineLight',-Math.atan2(dz,dx));
-      }
-    }
+    fieldHedges(f,points,field.hedgeEdges,rng);
   }
   return g;
 }

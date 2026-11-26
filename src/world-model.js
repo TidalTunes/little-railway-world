@@ -4,6 +4,7 @@ import { createAlignment, combineAlignments, straightSegment, sampleAlignment, s
 import { mountainSurfaceHeight, mountainFootprintDistance } from './mountain-shape.js';
 import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
 import { placeFarmland } from './farmland.js';
+import {farmFootprintsOverlap} from './farm-footprints.js';
 import {riversOf,riverBankDistance,riverCenterDistance,createHydrology} from './hydrology.js';
 import {normalizeSurface,surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceChartRadius,surfaceHeading,chartHeadingForSurface} from './world-surface.js';
 import {surfaceQueryBoxes,surfaceQuerySegments} from './surface-query.js';
@@ -354,7 +355,8 @@ function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   if(keepOutsideCities&&nearbyPhysical(world,world.cities,item,CLEARANCES.city).some(c=>surfaceDistance(world,item,c)<c.radius+r+CLEARANCES.city))return false;
   if(cityId&&nearbyPhysical(world,world.cities,item,world.detailRegion?CLEARANCES.objects:0).some(c=>c.id!==cityId&&surfaceDistance(world,item,c)<c.radius+(world.detailRegion?r+CLEARANCES.objects:r*.5)))return false;
   if(nearbyPhysical(world,world.stations,item,CLEARANCES.objects).some(s=>surfaceDistance(world,item,s)<r+s.radius+CLEARANCES.objects))return false;
-  if(nearbyPhysical(world,world.placements,item,CLEARANCES.objects).some(p=>surfaceDistance(world,item,p)<r+p.radius+CLEARANCES.objects))return false;
+  if(nearbyPhysical(world,world.placements,item,CLEARANCES.objects).some(p=>surfaceDistance(world,item,p)<r+p.radius+CLEARANCES.objects
+    &&(item.kind!=='farm'||p.kind!=='farm'||farmFootprintsOverlap(world,item,p,CLEARANCES.objects))))return false;
   if((world.cityStreets??[]).some(street=>placementLineDistance(world,street,item.x,item.z,r+street.width/2+CLEARANCES.street)<r+street.width/2+CLEARANCES.street))return false;
   return true;
 }
@@ -953,7 +955,9 @@ export function validateWorld(world) {
     if(riverBankDistance(world,item.x,item.z)<footprintRadius(world,item,r+CLEARANCES.riverBank)-.001)add('asset-water',item.id,'Footprint enters river bank');
     for(const mountain of world.mountains)if(mountainFootprintDistance(mountain,item.x,item.z)<footprintRadius(world,item,r+CLEARANCES.mountain)-.001)add('asset-mountain',item.id,`Footprint intersects ${mountain.id}`);
     for(const station of world.stations)if(distance(item,station)<r+station.radius+CLEARANCES.objects-.001)add('asset-station',item.id,`Footprint intersects ${station.id}`);
-    for(let j=0;j<i;j++)if(distance(item,world.placements[j])<r+world.placements[j].radius+CLEARANCES.objects-.001)add('asset-overlap',item.id,`Footprint intersects ${world.placements[j].id}`);
+    for(let j=0;j<i;j++)if(distance(item,world.placements[j])<r+world.placements[j].radius+CLEARANCES.objects-.001
+      &&(item.kind!=='farm'||world.placements[j].kind!=='farm'||farmFootprintsOverlap(world,item,world.placements[j],CLEARANCES.objects-.001)))
+      add('asset-overlap',item.id,`Footprint intersects ${world.placements[j].id}`);
   }
   return violations;
 }

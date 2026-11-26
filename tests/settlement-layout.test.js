@@ -79,9 +79,18 @@ function auditStreets(world){
     }
     for(const item of world.placements)assert.ok(pointLine(item,street.points)>=r+item.radius+CLEARANCES.street-.001,`${street.id} clears ${item.id}`);
   }
-  // Independent pairwise circles include every new dense city and farm asset.
+  // City/scenery circles remain conservative; adjoining farms use an
+  // independent polygon intersection and edge-distance check.
   for(let i=0;i<world.placements.length;i++)for(let j=0;j<i;j++){
     const a=world.placements[i],b=world.placements[j];
+    if(a.kind==='farm'&&b.kind==='farm'){
+      const outline=item=>item.footprint.map(([x,z])=>[item.x+x*Math.cos(item.rotation)+z*Math.sin(item.rotation),
+        item.z-x*Math.sin(item.rotation)+z*Math.cos(item.rotation)]);
+      const aa=outline(a),bb=outline(b);
+      assert.deepEqual(clipping.intersection([aa],[bb]),[],`${a.id} intersects ${b.id}`);
+      assert.ok(linePair(ringPoints(aa),ringPoints(bb))>=CLEARANCES.objects-.001,`${a.id} leaves a lane beside ${b.id}`);
+      continue;
+    }
     assert.ok(dist(a,b)>=a.radius+b.radius+CLEARANCES.objects-.001,`${a.id} overlaps ${b.id}`);
   }
 }
@@ -122,7 +131,7 @@ test('farm districts contain densely packed, connected crop parcels with shared 
   for(const farm of farms){
     assert.ok(farm.width>0&&farm.depth>0);
     assert.ok(farm.radius>=Math.hypot(farm.width,farm.depth)/2-.000001,'district reserves its full rectangular silhouette');
-    assert.ok(farm.parcels.length>=3,'a district groups adjacent fields');
+    assert.ok(farm.parcels.length>=1&&farm.parcels.length<=6,'small edge fields remain whole; larger estates subdivide');
     let area=0;
     const neighbors=farm.parcels.map(()=>[]);
     for(let i=0;i<farm.parcels.length;i++){
