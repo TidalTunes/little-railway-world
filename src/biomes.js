@@ -1,5 +1,6 @@
 import { polylineTree, BoundsTree, pointBox, pointsBox } from './spatial-index.js';
 import clipping from './polygon-ops.js';
+import {clipPolygonsToBounds} from './polygon-region.js';
 
 export const BIOME_TYPES = Object.freeze(['farmland', 'forest', 'plains', 'desert', 'ocean', 'mountain']);
 export const OCEAN_SHORE_WIDTH = .9;
@@ -330,8 +331,44 @@ function polygonsFor(world, types) {
   return cached.get(key);
 }
 
+const periodicChart=world=>world.surface?.complete&&world.surface.projection?.type==='equirectangular'?world.surface.projection:null;
+function wrapBiomeX(world,x){
+  const p=periodicChart(world);if(!p)return x;
+  const half=Math.PI*p.radius,period=half*2;
+  return x>=-half&&x<half?x:((x+half)%period+period)%period-half;
+}
+
+/** Join only the small pieces touched by a footprint crossing the date line.
+ * Geography is clipped at the chart seam, which is not a physical coast.
+ * Union removes that artificial edge while retaining real coastlines/holes on
+ * either side. The clipping helper caches immutable polygon and hole bounds.
+ */
+function periodicFootprintPolygons(world,polygons,x,z,radius){
+  const p=periodicChart(world);if(!p)return polygons;
+  const half=Math.PI*p.radius,period=half*2;
+  if(x-radius> -half&&x+radius<half)return polygons;
+  // No chart circle wider than the full longitude period can fit between the
+  // two poles. Bound even malformed huge-radius requests before copying pieces.
+  if(radius>=period)return [];
+  const padding=Math.max(1e-5,radius*1e-6),bounds=pointBox(x,z,radius+padding),pieces=[];
+  const first=Math.ceil((bounds.minX-half)/period),last=Math.floor((bounds.maxX+half)/period);
+  for(let index=first;index<=last;index++){
+    const shift=index*period;
+    const clipped=clipPolygonsToBounds(polygons,{...bounds,minX:bounds.minX-shift,maxX:bounds.maxX-shift});
+    if(!clipped.length)continue;
+    pieces.push(clipped.map(polygon=>polygon.map(ring=>ring.map(([px,pz])=>{
+      // Prepared biomes snap to a millionth-unit grid. Reunite both copies at
+      // the exact seam rather than leaving a sub-micrometre artificial crack.
+      const sx=Math.abs(px-half)<1e-6?half:Math.abs(px+half)<1e-6?-half:px;
+      return[sx+shift,pz];
+    }))));
+  }
+  return pieces.length?clipping.union(...pieces):[];
+}
+
 /** Returns one of the six biome types, 'shore', or null outside the island. */
 export function biomeAt(world, x, z) {
+  x=wrapBiomeX(world,x);
   const model = biomeModel(world);
   for (const region of model.regions) if (inPolygons(region.polygons, x, z)) return region.type;
   return inPolygons(model.oceanShore, x, z)||inPolygons(model.lakeShore??[],x,z) ? 'shore' : null;
@@ -340,13 +377,14 @@ export function biomeAt(world, x, z) {
 /** Positive inside the selected biome, negative outside; zero at its boundary.
  * 'ice' addresses the optional frozen-land mask without changing biome types. */
 export function biomeDistance(world, type, x, z) {
-  return signedDistance(polygonsFor(world, type), x, z);
+  return signedDistance(polygonsFor(world, type), wrapBiomeX(world,x), z);
 }
 
 /** Tests the complete circular footprint, including borders and shorelines. */
 export function fitsBiome(world, types, x, z, radius = 0) {
   if (!Number.isFinite(radius) || radius < 0) return false;
-  const polygons=polygonsFor(world,types),clearance=radius-EPS;
+  x=wrapBiomeX(world,x);
+  const polygons=periodicFootprintPolygons(world,polygonsFor(world,types),x,z,radius),clearance=radius-EPS;
   if(clearance<=0)return signedDistance(polygons,x,z)>=clearance;
   if(!inPolygons(polygons,x,z))return false;
   // A footprint needs a yes/no clearance answer, not the distance to a shore

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import geography from '../data/europe-geography.json' with {type:'json'};
 import {createViewController} from '../src/view-controller.js';
-import {EARTH_SURFACE_RADIUS,surfacePoint,surfaceNormal,surfaceFrame} from '../src/world-surface.js';
+import {EARTH_SURFACE_RADIUS,surfacePoint,surfaceNormal,surfaceFrame,surfaceDisplacement} from '../src/world-surface.js';
 import {makeTrains} from '../src/railway.js';
 import {createWorldRenderer} from '../src/world-renderer.js';
 
@@ -98,7 +98,7 @@ test('destination coverage follows the current scale without mutating the displa
   assert.equal(view.mode,'world');assert.equal(view.blend,0);assert.equal(f.camera.zoom,8);
   const position=f.camera.position.clone(),quaternion=f.camera.quaternion.clone();
   const coverage=view.coverageCamera,normal=surfaceNormal(f.world,-450,300);
-  assert.ok(localViewAngle(coverage,normal)>.8,'world detail is requested at the destination orbit, not the temporary map angle');
+  assert.ok(Math.abs(localViewAngle(coverage,normal)-Math.PI/4)<1e-8,'world detail uses the fixed local inclination before it is displayed');
   const target=surfacePoint(f.world,-450,view.controls.target.y,300).project(coverage);
   assert.ok(Math.hypot(target.x,target.y)<1e-10);near(f.camera.position,position);assert.ok(f.camera.quaternion.angleTo(quaternion)<1e-7);
   const localAngle=localViewAngle(coverage,normal);
@@ -110,7 +110,8 @@ test('destination coverage follows the current scale without mutating the displa
 test('chart panning and bounds remain finite far from the sphere origin, and replacement planar worlds regain flattening',t=>{
   const f=fixture(t),{view}=f;f.tap();f.update();f.key('Escape');f.update();
   const previous=view.controls.target.clone();f.key('ArrowUp');f.update();
-  assert.ok(view.controls.target.z<previous.z);assert.ok(Math.abs(view.controls.target.x-previous.x)<1e-7);
+  const displacement=surfaceDisplacement(f.world,previous,view.controls.target);
+  assert.ok(displacement.z<0);assert.ok(Math.abs(displacement.x)<1e-7,'arrow panning follows the physical tangent frame');
   assert.equal(view.controls.target.y,previous.y,'keyboard pan cannot accumulate spherical elevation');
   const offset=view.navigation.position.clone().sub(view.controls.target);
   view.controls.target.set(1e6,.75,-1e6);view.navigation.position.copy(view.controls.target).add(offset);f.update();
@@ -120,6 +121,21 @@ test('chart panning and bounds remain finite far from the sphere origin, and rep
   f.setWorld({outline:f.world.outline});view.reset();f.update();
   assert.equal(view.mode,'map');assert.equal(f.root.scale.y,.015000000000000013);
   near(f.camera.position,view.chartCamera.position);near(f.camera.up,new THREE.Vector3(0,1,0));
+});
+
+test('WASD on the continental chart uses physical tangent units in both screen directions',t=>{
+  const f=fixture(t),{view}=f;view.navigation.zoom=32;view.navigation.updateProjectionMatrix();f.update();
+  for(const [x,z] of [[-600,300],[800,-500]])for(const [key,axis,sign] of [['d','x',1],['a','x',-1],['w','z',-1],['s','z',1]]){
+    const start=new THREE.Vector3(x,1.3,z),offset=view.navigation.position.clone().sub(view.controls.target);
+    view.controls.target.copy(start);view.navigation.position.copy(start).add(offset);f.update();
+    const expected=Math.max(view.navigation.right-view.navigation.left,view.navigation.top-view.navigation.bottom)/32*.30/60;
+    f.key(key);f.update();f.canvas.dispatchEvent(input('keyup',{key}));
+    const displacement=surfaceDisplacement(f.world,start,view.controls.target);
+    assert.ok(Math.abs(displacement[axis]-sign*expected)<1e-8,'equal key travel means equal physical distance');
+    assert.ok(Math.abs(displacement[axis==='x'?'z':'x'])<1e-8,'the continental chart cannot skew keyboard motion');
+    const normal=surfaceNormal(f.world,view.controls.target.x,view.controls.target.z);
+    assert.ok(Math.abs(localViewAngle(f.camera,normal)-Math.PI/4)<1e-10);
+  }
 });
 
 test('real train instances are culled and picked in sphere coordinates at a distant chart location',t=>{

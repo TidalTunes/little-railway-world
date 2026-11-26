@@ -47,7 +47,7 @@ export function compileDetailPacket(region,network){
     if(lines.some(candidate=>candidate.id===line.id)||!line.cuts?.some(c=>mountainIds.has(c.mountainId)))continue;
     lines.push({...line,renderRanges:[],tunnels:line.tunnels.filter(t=>mountainIds.has(t.mountainId))});
   }
-  const root=new THREE.Group(),ownedMaterials=new Set();
+  const root=new THREE.Group(),surfaceRoot=network.surface?.type==='sphere'?new THREE.Group():null,ownedMaterials=new Set();
   const local={...network,...region,lines,terrainChunk:true,terrainSource:network,
     placements:region.placements??[],cityStreets:region.cityStreets??[],stations:region.stations??[],mountains:region.mountains??[]};
   if(network.biomes)local.biomes={...network.biomes,
@@ -55,17 +55,24 @@ export function compileDetailPacket(region,network){
     oceanShore:network.biomes.oceanShore?.length?clipPolygonsToBounds(network.biomes.oceanShore,bounds):[]};
   try{
     for(const island of islands)buildTerrain(root,{...local,outline:island[0]});
-    buildWorld(root,local,{terrain:false});
-    root.traverse(node=>{for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
-    bakeMaterialColors(consolidate(root));
-    root.userData.ownedMaterials.forEach(material=>ownedMaterials.add(material));
-    const renderBounds=new THREE.Box3();
-    const meshes=root.children.map(mesh=>{
-      if(network.surface?.type==='sphere'){
+    buildWorld(root,local,{terrain:false,rigidAssets:surfaceRoot});
+    for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
+    // Geographic terrain needs the exact chart-to-sphere mapping. Rigid
+    // assets and physical-width rails are already in surface coordinates:
+    // only combine them after this warp, so latitude cannot squeeze the art.
+    if(surfaceRoot){
+      consolidate(root);
+      for(const mesh of root.children){
         const chartGeometry=mesh.geometry;
         mesh.geometry=tessellateSurfaceGeometry(chartGeometry,SURFACE_MAX_SEGMENT);
         chartGeometry.dispose();warpGeometryToSurface(mesh.geometry,network);
       }
+      while(surfaceRoot.children.length)root.add(surfaceRoot.children[0]);
+    }
+    bakeMaterialColors(consolidate(root));
+    root.userData.ownedMaterials.forEach(material=>ownedMaterials.add(material));
+    const renderBounds=new THREE.Box3();
+    const meshes=root.children.map(mesh=>{
       const original=mesh.geometry,indexed=indexGeometryExact(original);
       if(geometryAttributeBytes(indexed)<geometryAttributeBytes(original)){mesh.geometry=indexed;original.dispose();}
       else indexed.dispose();
@@ -77,9 +84,9 @@ export function compileDetailPacket(region,network){
     });
     return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
-    root.traverse(node=>{if(node.geometry)node.geometry.dispose();
+    for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{if(node.geometry)node.geometry.dispose();
       for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
-    ownedMaterials.forEach(material=>material.dispose());root.clear();
+    ownedMaterials.forEach(material=>material.dispose());root.clear();surfaceRoot?.clear();
   }
 }
 

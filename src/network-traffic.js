@@ -1,6 +1,9 @@
 import { sampleLine } from './world-model.js';
 import { sampleAlignmentInto } from './alignments.js';
 import { createTraffic } from './traffic.js';
+import {Vector3} from 'three';
+import {surfaceFor,surfacePoint,surfaceNormal,surfaceTangent} from './world-surface.js';
+import {physicalLineMetric,physicalDistanceAtChart,chartDistanceAtPhysical} from './physical-route.js';
 
 const SPACING = 2.64;
 const HALF_LENGTH = 3.84;
@@ -40,22 +43,36 @@ export function sampleNetworkPath(path, distance, out=pose()) {
   const segments=path.segments;let lo=0,hi=segments.length-1;
   while(lo<hi){const mid=(lo+hi)>>1;if(s>=segments[mid].start+segments[mid].length-1e-9)lo=mid+1;else hi=mid;}
   const segment=segments[lo],local=Math.max(0,Math.min(segment.length,s-segment.start));
-  sampleLineInto(segment.line,segment.direction>0?local:segment.length-local,out);
+  sampleLineInto(segment.line,chartDistanceAtPhysical(segment.metric,segment.direction>0?local:segment.length-local),out);
   out.distance=s;out.tangent.x*=segment.direction;out.tangent.y*=segment.direction;out.tangent.z*=segment.direction;
   out.heading=Math.atan2(out.tangent.z,out.tangent.x);out.angle=Math.atan2(out.tangent.x,out.tangent.z);
   if(Number.isFinite(out.curvature))out.curvature*=segment.direction;
-  out.lineId=segment.lineId;return out;
+  out.lineId=segment.lineId;
+  if(path.surfaceWorld){
+    const p=out.physical??(out.physical={});
+    surfacePoint(path.surfaceWorld,out.x,out.y,out.z,physicalPoint);
+    surfaceTangent(path.surfaceWorld,out.x,out.y,out.z,out.tangent.x,0,out.tangent.z,physicalForward).normalize();
+    surfaceNormal(path.surfaceWorld,out.x,out.z,physicalUp);
+    physicalRight.crossVectors(physicalUp,physicalForward).normalize();
+    p.x=physicalPoint.x;p.y=physicalPoint.y;p.z=physicalPoint.z;
+    p.tx=physicalForward.x;p.ty=physicalForward.y;p.tz=physicalForward.z;
+    p.rx=physicalRight.x;p.ry=physicalRight.y;p.rz=physicalRight.z;
+  }
+  return out;
 }
 
-function makePath(states, index, closed = true) {
+const physicalPoint=new Vector3(),physicalForward=new Vector3(),physicalUp=new Vector3(),physicalRight=new Vector3();
+
+function makePath(states, index, closed = true, world) {
   let length = 0;
   const segments = states.map(state => {
-    const segment = { line: state.line, lineId: state.line.id, direction: state.direction,
-      start: length, length: state.line.length };
+    const metric=world?physicalLineMetric(world,state.line):null;
+    const segment = { line: state.line, lineId: state.line.id, direction: state.direction,metric,
+      start: length, length: metric?.length??state.line.length };
     length += segment.length;
     return segment;
   });
-  return { id: `circuit-${index + 1}`, segments, length, closed };
+  return { id: `circuit-${index + 1}`, segments, length, closed,...(surfaceFor(world)?{surfaceWorld:{surface:world.surface}}:{}) };
 }
 
 function mainCircuits(world) {
@@ -70,7 +87,7 @@ function mainCircuits(world) {
         if(!line||(direction!==1&&direction!==-1))throw new TypeError('Traffic circuit references an invalid line or direction');
         return{line,direction};
       });
-      const path=makePath(states,index);path.id=String(circuit.id??path.id);
+      const path=makePath(states,index,true,world);path.id=String(circuit.id??path.id);
       if(ids.has(path.id))throw new TypeError('Traffic circuit IDs must be unique');ids.add(path.id);
       for(let i=0;i<states.length;i++){
         const a=states[i],b=states[(i+1)%states.length],end=sampleLine(a.line,a.direction>0?a.line.length:0),start=sampleLine(b.line,b.direction>0?0:b.line.length);
@@ -124,7 +141,7 @@ function mainCircuits(world) {
             const cities=new Set();let area=0,length=0;
             for(const state of chain){cities.add(state.line.from);cities.add(state.line.to);area+=lineArea.get(state.line.id)*state.direction;length+=state.line.length;}
             const score=cities.size*1e7+Math.abs(area)*100+length;
-            const path=score>bestScore?makePath(chain,paths.length):null;
+            const path=score>bestScore?makePath(chain,paths.length,true,world):null;
             if (score > bestScore) { best = path; bestScore = score; }
           } else if (!used.has(next.line.id) && rank.get(next.line.id) >= rank.get(start.line.id)) {
             used.add(next.line.id); chain.push(next); visit(next, chain, used); chain.pop(); used.delete(next.line.id);
@@ -144,7 +161,8 @@ function conflictBlocks(paths) {
     const count=Math.ceil(path.length/1.2),list=[],p=pose();
     for(let i=0;i<count;i++){
       const distance=i/count*path.length;sampleNetworkPath(path,distance,p);
-      const sample={index:samples.length,path,distance,x:p.x,z:p.z,spacing:path.length/count};
+      const q=p.physical??p;
+      const sample={index:samples.length,path,distance,x:q.x,y:p.physical?q.y:0,z:q.z,spacing:path.length/count};
       samples.push(sample);list.push(sample);
     }
     byPath.set(path.id,list);
@@ -156,16 +174,17 @@ function conflictBlocks(paths) {
   // Broad phase visits only neighboring spatial cells instead of comparing
   // every sampled route point against the entire railway network.
   for(const a of samples){
-    const cx=Math.floor(a.x/cellSize),cz=Math.floor(a.z/cellSize);
-    for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++){
-      const bucket=cells.get(`${cx+dx},${cz+dz}`);if(!bucket)continue;
+    const cx=Math.floor(a.x/cellSize),cy=Math.floor(a.y/cellSize),cz=Math.floor(a.z/cellSize);
+    const sphere=!!a.path.surfaceWorld;
+    for(let dx=-1;dx<=1;dx++)for(let dy=sphere?-1:0;dy<=(sphere?1:0);dy++)for(let dz=-1;dz<=1;dz++){
+      const bucket=cells.get(`${cx+dx},${cy+dy},${cz+dz}`);if(!bucket)continue;
       for(const b of bucket){
         const along=Math.abs(a.distance-b.distance);
         if(a.path===b.path&&Math.min(along,a.path.length-along)<HALF_LENGTH*2+4)continue;
-        if((a.x-b.x)**2+(a.z-b.z)**2<cellSize*cellSize)union(a.index,b.index);
+        if((a.x-b.x)**2+(a.y-b.y)**2+(a.z-b.z)**2<cellSize*cellSize)union(a.index,b.index);
       }
     }
-    const id=`${cx},${cz}`;if(!cells.has(id))cells.set(id,[]);cells.get(id).push(a);
+    const id=`${cx},${cy},${cz}`;if(!cells.has(id))cells.set(id,[]);cells.get(id).push(a);
   }
   for(const list of byPath.values()){
     let first=null,previous=null;
@@ -207,6 +226,7 @@ function copyPose(source,target){
   target.x=source.x;target.y=source.y;target.z=source.z;target.distance=source.distance;
   target.tangent.x=source.tangent.x;target.tangent.y=source.tangent.y;target.tangent.z=source.tangent.z;
   target.angle=source.angle;target.heading=source.heading;target.curvature=source.curvature;target.lineId=source.lineId;
+  if(source.physical)Object.assign(target.physical??(target.physical={}),source.physical);
 }
 
 function preparePoseBuffer(trains,world){
@@ -240,6 +260,13 @@ function separated(a,b,x,z,dx,dz){
   return Math.abs(dx*x+dz*z)>=extent;
 }
 function overlap(a,b){
+  if(a.physical&&b.physical){
+    const p=a.physical,q=b.physical,dx=q.x-p.x,dy=q.y-p.y,dz=q.z-p.z;
+    if(dx*dx+dy*dy+dz*dz>2.7*2.7)return false;
+    const separated=(x,y,z)=>Math.abs(dx*x+dy*y+dz*z)>=HALF_CAR*(Math.abs(x*p.tx+y*p.ty+z*p.tz)+Math.abs(x*q.tx+y*q.ty+z*q.tz))
+      +HALF_WIDTH*(Math.abs(x*p.rx+y*p.ry+z*p.rz)+Math.abs(x*q.rx+y*q.ry+z*q.rz))+.06;
+    return !separated(p.tx,p.ty,p.tz)&&!separated(p.rx,p.ry,p.rz)&&!separated(q.tx,q.ty,q.tz)&&!separated(q.rx,q.ry,q.rz);
+  }
   const dx=b.x-a.x,dz=b.z-a.z;
   if(dx*dx+dz*dz>2.7*2.7)return false;
   const at=a.tangent,bt=b.tangent;
@@ -250,6 +277,7 @@ function overlap(a,b){
 /** Mutable car grid keeps broad-phase collision checks local. Car pose objects,
  * bucket arrays and their entries survive successive simulation frames. */
 function collisionIndex(paths,trains){
+  if(paths.some(path=>path.surfaceWorld))return surfaceCollisionIndex(trains);
   const size=4;let minX=Infinity,minZ=Infinity,maxX=-Infinity;
   for(const path of paths)for(const segment of path.segments)for(const p of segment.line.points){
     minX=Math.min(minX,p.x);minZ=Math.min(minZ,p.z);maxX=Math.max(maxX,p.x);
@@ -276,6 +304,41 @@ function collisionIndex(paths,trains){
     return false;
   };
   return{update,collides};
+}
+
+function surfaceCollisionIndex(trains){
+  const size=4,cells=new Map(),cell=p=>`${Math.floor(p.x/size)},${Math.floor(p.y/size)},${Math.floor(p.z/size)}`;
+  for(const train of trains)train._cars=train.carPoses.map(p=>({train,pose:p,cell:null,index:0}));
+  const update=train=>{
+    for(const car of train._cars){
+      const id=cell(car.pose.physical);if(car.cell===id)continue;
+      if(car.cell!==null){const bucket=cells.get(car.cell),last=bucket.pop();if(last!==car){bucket[car.index]=last;last.index=car.index;}}
+      let bucket=cells.get(id);if(!bucket){bucket=[];cells.set(id,bucket);}
+      car.cell=id;car.index=bucket.length;bucket.push(car);
+    }
+  };
+  const collides=(train,poses)=>{
+    for(const pose of poses){
+      const p=pose.physical,x=Math.floor(p.x/size),y=Math.floor(p.y/size),z=Math.floor(p.z/size);
+      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
+        const bucket=cells.get(`${x+dx},${y+dy},${z+dz}`);if(!bucket)continue;
+        for(const car of bucket)if(car.train!==train&&overlap(pose,car.pose))return true;
+      }
+    }
+    return false;
+  };
+  return{update,collides};
+}
+
+function physicalTrafficWorld(world){
+  if(!surfaceFor(world))return world;
+  const metrics=new Map(world.lines.map(line=>[line.id,physicalLineMetric(world,line)]));
+  return {...world,lines:world.lines.map(line=>{
+    const metric=metrics.get(line.id);
+    return {...line,alignment:null,length:metric.length,distances:line.distances.map(s=>physicalDistanceAtChart(metric,s)),
+      stops:line.stops?.map(stop=>({...stop,distance:physicalDistanceAtChart(metric,stop.distance)}))};
+  }),junctions:world.junctions?.map(junction=>({...junction,lines:junction.lines.map(branch=>({...branch,
+    distance:physicalDistanceAtChart(metrics.get(branch.lineId),branch.distance)}))}))};
 }
 
 function collectZones(zones,start,end,stamp,out){
@@ -323,9 +386,9 @@ function fleetCounts(world,paths){
 export function createNetworkTraffic(world) {
   const paths=mainCircuits(world);
   if(!paths.length){
-    const fallback=createTraffic(world),lines=new Map(world.lines.map(line=>[line.id,line]));
+    const fallback=createTraffic(physicalTrafficWorld(world)),lines=new Map(world.lines.map(line=>[line.id,line]));
     for(const train of fallback.trains){
-      const line=lines.get(train.lineId);train.color=line.color;train.path=makePath([{line,direction:1}],0,false);
+      const line=lines.get(train.lineId);train.color=line.color;train.path=makePath([{line,direction:1}],0,false,world);
       train.homeCityId=line.from;train.ownerId=trainOwner(world,train.id,line.from,line);
     }
     const poseBuffer=preparePoseBuffer(fallback.trains,world);

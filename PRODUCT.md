@@ -5,7 +5,7 @@
 brand
 
 ## Users and purpose
-A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with a complete Earth globe with cities and rail networks across the continents, reusable world generation, player ownership colors, and city development levels 1–10. Three camera distances offer a simplified network overview, an isometric world, and a close isometric view with train following. Earth remains spherical at every distance; the Europe section and planar presets remain available. There is no gameplay, editor UI, or visible text.
+A browser-based art prototype for an isometric train game. The current iteration is a self-running simulation with a complete Earth globe with cities and rail networks across the continents, reusable world generation, player ownership colors, and city development levels 1–10. Three camera distances offer a simplified network overview, an isometric world, and a close isometric view with train following. Detailed views hold a fixed 45° inclination above the local ground; dragging rotates heading around the focus and WASD moves that focus across the surface. Earth remains spherical at every distance; the Europe section and planar presets remain available. There is no gameplay, editor UI, or visible text.
 
 ## Direction from the brief
 Low-poly trains, isometric trees, miniature cities connected by working railway routes, and small details that make the landscape feel alive. Publish iterations to the existing GitHub Pages site. Support authored city and route layouts subject to geometric feasibility, automatic river bridges and mountain tunnels, and strict asset clearance. Let users zoom out to understand the network and select a train to follow it closely.

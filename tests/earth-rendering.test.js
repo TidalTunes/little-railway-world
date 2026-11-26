@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {createSurfaceShell} from '../src/surface-shell.js';
 import {createWorldRenderer} from '../src/world-renderer.js';
-import {surfacePoint,surfaceNormal,surfaceFrame} from '../src/world-surface.js';
+import {surfacePoint,surfaceNormal,surfaceFrame,surfaceOffset,surfaceDistance} from '../src/world-surface.js';
 import {compileMapTerrainGeometry} from '../src/map-terrain-geometry.js';
 import {terrainColor} from '../src/terrain-colors.js';
 
@@ -184,5 +184,36 @@ test('cold pan preparation retains visible detail while destination coverage cat
   assert.ok(renderer.root.children.some(chunk=>chunk.visible),'ready destination cells become visible immediately');
   renderer.update(destination,{target:new THREE.Vector3(394,0,0),retainVisible:true,budgetMs:10});
   assert.ok(visible.every(chunk=>chunk.parent===null),'old cells become evictable when the displayed camera advances');
+  renderer.dispose();
+});
+
+
+test('physical city footprints request their owner beyond the visible chart cells at high latitude and the date line',async()=>{
+  for(const longitude of [0,179.95]){
+    const {camera,target}=globeCamera(75,40,1,.01,longitude);
+    const city={id:'edge-city',...surfaceOffset(world,target.x,target.z,10,0),radius:8};
+    const globe={...world,cities:[city],biomes:{land:[],oceanShore:[]}},requests=[],size=16;
+    const renderer=createWorldRenderer(new THREE.Group(),globe,{size,maxChunks:1,maxPending:16,requestChunk:request=>{
+      requests.push(request);return emptyCell(request);
+    }});
+    for(let i=0;i<12&&!renderer.ready;i++){renderer.update(camera,{target,budgetMs:20});await tick();}
+    assert.equal(renderer.ready,true);
+    const owner={x:(Math.floor(city.x/size)+.5)*size,z:(Math.floor(city.z/size)+.5)*size};
+    assert.ok(requests.some(request=>request.x===owner.x&&request.z===owner.z),
+      `the physical city reaches view from its owner cell at longitude ${longitude}`);
+    assert.ok(requests.length<40,'a small physical city must not request a broad longitude band');
+    renderer.dispose();
+  }
+});
+
+test('polar detail request priority follows physical ground distance',async()=>{
+  const {camera,target}=globeCamera(80,1.6,1.8),requests=[];
+  const renderer=createWorldRenderer(new THREE.Group(),world,{maxChunks:1,maxPending:1000,requestChunk:request=>{
+    requests.push(request);return emptyCell(request);
+  }});
+  renderer.update(camera,{target,budgetMs:100});await tick();
+  assert.ok(requests.length>4);
+  const distances=requests.map(request=>surfaceDistance(world,target,{x:request.x,z:Math.max(-half/2,Math.min(half/2,request.z))}));
+  for(let i=1;i<distances.length;i++)assert.ok(distances[i]>=distances[i-1]-1e-8,'nearby physical scenery loads first');
   renderer.dispose();
 });

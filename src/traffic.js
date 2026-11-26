@@ -1,4 +1,14 @@
 import { sampleLine } from './world-model.js';
+import {Vector3} from 'three';
+import {surfaceFor,surfaceTangent} from './world-surface.js';
+const tangent=new Vector3();
+function sampleTrafficLine(world,line,distance){
+  const p=sampleLine(line,distance);
+  if(surfaceFor(world)){surfaceTangent(world,p.x,p.y,p.z,p.tangent.x,p.tangent.y,p.tangent.z,tangent).normalize();
+    p.tangent={x:tangent.x,y:tangent.y,z:tangent.z};}
+  return p;
+}
+const crossLength=(a,b)=>Math.hypot(a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x);
 
 const SPACING = 2.64;
 const CAR_HALF_LENGTH = 1.2;
@@ -25,9 +35,9 @@ function sharedApproaches(world, trainByLine) {
     if (!train) continue;
     for (const [cityId, distance, sign] of [[line.from, 0, 1], [line.to, line.length, -1]]) {
       if (cityId === undefined) continue;
-      const point = sampleLine(line, distance);
+      const point = sampleTrafficLine(world,line, distance);
       const branch = {lineId: line.id, distance, sign, train,
-        x: point.tangent.x * sign, z: point.tangent.z * sign,
+        x: point.tangent.x * sign,y:point.tangent.y*sign,z: point.tangent.z * sign,
         closest: sign === 1 ? train.start : line.length - train.end};
       if (!cities.has(cityId)) cities.set(cityId, []);
       cities.get(cityId).push(branch);
@@ -39,8 +49,8 @@ function sharedApproaches(world, trainByLine) {
       for (let j = i + 1; j < branches.length; j++) {
         const a = branches[i], b = branches[j];
         // Opposite approaches separate as the trains stop short of the city.
-        if (a.x * b.x + a.z * b.z <= 0) continue;
-        const sine = Math.abs(a.x * b.z - a.z * b.x);
+        if (a.x * b.x + a.y*b.y + a.z * b.z <= 0) continue;
+        const sine = crossLength(a,b);
         const radius = CROSSING_WIDTH / Math.max(sine, .01);
         if (a.closest - a.train.halfLength - STOP_GAP >= radius ||
             b.closest - b.train.halfLength - STOP_GAP >= radius) continue;
@@ -62,12 +72,12 @@ function crossingGroups(world, trains) {
       const a = junction.lines[i];
       const aLine = lines.get(a.lineId);
       if (!aLine) continue;
-      const aDirection = sampleLine(aLine, a.distance).tangent;
+      const aDirection = sampleTrafficLine(world,aLine, a.distance).tangent;
       for (const b of junction.lines.slice(i + 1)) {
         const bLine = lines.get(b.lineId);
         if (!bLine) continue;
-        const bDirection = sampleLine(bLine, b.distance).tangent;
-        const sine = Math.abs(aDirection.x * bDirection.z - aDirection.z * bDirection.x);
+        const bDirection = sampleTrafficLine(world,bLine, b.distance).tangent;
+        const sine = crossLength(aDirection,bDirection);
         // Acute crossings occupy a longer section of each track than a right
         // angle crossing. Both complete vehicle widths must fit outside it.
         radius = Math.max(radius, CROSSING_WIDTH / Math.max(sine, .01));

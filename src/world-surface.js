@@ -143,7 +143,8 @@ export function surfaceNormal(world,x,z,target=new Vector3()){
 }
 
 /** Exact Jacobian-vector product, not normalized. Includes radial y derivative.
- * Use this for transformed train axes, velocities, and terrain slope tangents.
+ * Use this for geographic route velocities and terrain slope tangents. Rigid
+ * object dimensions use rigidSurfacePoseMatrix instead.
  */
 export function surfaceTangent(world,x,y,z,dx,dy,dz,target=new Vector3()){
   const s=at(world,x,z);if(!s)return target.set(dx,dy,dz);
@@ -184,6 +185,89 @@ export function surfacePoseMatrix(world,x,y,z,angle,target=new Matrix4()){
     ex*s.ey+sx*s.sy,s.uy,ez*s.ey+sz*s.sy,r*s.uy-s.radius,
     ex*s.ez+sx*s.sz,s.uz,ez*s.ez+sz*s.sz,r*s.uz,
     0,0,0,1);
+}
+
+/** A rigid object's +Z follows its geographic heading, but its three axes
+ * remain unit length and perpendicular. Geographic chart scale belongs to
+ * terrain and route positions, never to the dimensions of a building or car. */
+export function rigidSurfacePoseMatrix(world,x,y,z,angle,target=new Matrix4()){
+  const s=at(world,x,z);
+  if(!s)return target.makeRotationY(angle).setPosition(x,y,z);
+  const east=s.eastScale*(s.cosTheta*Math.sin(angle)-s.sinTheta*Math.cos(angle));
+  const south=s.southScale*(s.sinTheta*Math.sin(angle)+s.cosTheta*Math.cos(angle));
+  const length=Math.hypot(east,south);
+  const e=length>1e-15?east/length:Math.sin(angle),n=length>1e-15?south/length:Math.cos(angle);
+  const zx=e*s.ex+n*s.sx,zy=e*s.ey+n*s.sy,zz=e*s.ez+n*s.sz;
+  const xx=s.uy*zz-s.uz*zy,xy=s.uz*zx-s.ux*zz,xz=s.ux*zy-s.uy*zx,r=radialDistance(s,y);
+  return target.set(xx,s.ux,zx,r*s.ux,xy,s.uy,zy,r*s.uy-s.radius,xz,s.uz,zz,r*s.uz,0,0,0,1);
+}
+
+const metricFrame=new Matrix4(),metricVector=new Vector3(),metricNormal=new Vector3();
+
+/** Move by physical tangent-plane units using the sphere's exponential map.
+ * dx/dz are along surfaceFrame's unit axes, not geographic chart units. */
+export function surfaceOffset(world,x,z,dx,dz,target={}){
+  if(!surfaceFor(world)){target.x=x+dx;target.z=z+dz;return target;}
+  const radius=surfaceFor(world).radius,length=Math.hypot(dx,dz);
+  if(length<1e-12){target.x=x;target.z=z;return target;}
+  const e=surfaceFrame(world,x,z,metricFrame).elements,angle=length/radius;
+  const a=Math.cos(angle)*radius,b=Math.sin(angle)*radius/length;
+  metricVector.set(e[4]*a+(e[0]*dx+e[8]*dz)*b,e[5]*a+(e[1]*dx+e[9]*dz)*b-radius,e[6]*a+(e[2]*dx+e[10]*dz)*b);
+  surfaceCoordinates(world,metricVector,target);delete target.elevation;return target;
+}
+
+/** Physical logarithmic-map displacement in the anchor's tangent frame. */
+export function surfaceDisplacement(world,a,b,target={}){
+  if(!surfaceFor(world)){target.x=b.x-a.x;target.z=b.z-a.z;return target;}
+  const e=surfaceFrame(world,a.x,a.z,metricFrame).elements;
+  surfaceNormal(world,b.x,b.z,metricNormal);
+  const x=metricNormal.x*e[0]+metricNormal.y*e[1]+metricNormal.z*e[2];
+  const z=metricNormal.x*e[8]+metricNormal.y*e[9]+metricNormal.z*e[10];
+  const up=metricNormal.x*e[4]+metricNormal.y*e[5]+metricNormal.z*e[6],sin=Math.hypot(x,z);
+  if(sin<=1e-12&&up<0){target.x=Math.PI*surfaceFor(world).radius;target.z=0;return target;}
+  const scale=sin>1e-12?surfaceFor(world).radius*Math.atan2(sin,up)/sin:surfaceFor(world).radius;
+  target.x=x*scale;target.z=z*scale;return target;
+}
+
+/** Great-circle ground distance, independent of latitude and heading. */
+export function surfaceDistance(world,a,b){
+  if(!surfaceFor(world))return Math.hypot(b.x-a.x,b.z-a.z);
+  const s=at(world,a.x,a.z),ux=s.ux,uy=s.uy,uz=s.uz,t=at(world,b.x,b.z);
+  return s.radius*Math.atan2(Math.hypot(uy*t.uz-uz*t.uy,uz*t.ux-ux*t.uz,ux*t.uy-uy*t.ux),ux*t.ux+uy*t.uy+uz*t.uz);
+}
+
+/** Physical yaw of a chart heading in surfaceFrame's orthonormal axes. */
+export function surfaceHeading(world,x,z,angle){
+  if(!surfaceFor(world))return angle;
+  const e=surfaceFrame(world,x,z,metricFrame).elements;
+  surfaceTangent(world,x,0,z,Math.sin(angle),0,Math.cos(angle),metricVector);
+  return Math.atan2(metricVector.x*e[0]+metricVector.y*e[1]+metricVector.z*e[2],metricVector.x*e[8]+metricVector.y*e[9]+metricVector.z*e[10]);
+}
+
+/** Inverse heading conversion, used when physical layouts store chart poses. */
+export function chartHeadingForSurface(world,x,z,angle){
+  if(!surfaceFor(world))return angle;
+  const e=surfaceFrame(world,x,z,metricFrame).elements,s=at(world,x,z),sa=Math.sin(angle),ca=Math.cos(angle);
+  const vx=e[0]*sa+e[8]*ca,vy=e[1]*sa+e[9]*ca,vz=e[2]*sa+e[10]*ca;
+  const east=(vx*s.ex+vy*s.ey+vz*s.ez)/Math.max(s.eastScale,1e-15),south=(vx*s.sx+vy*s.sy+vz*s.sz)/s.southScale;
+  return Math.atan2(s.cosTheta*east+s.sinTheta*south,-s.sinTheta*east+s.cosTheta*south);
+}
+
+/** Conservative chart-space disk enclosing a physical circular footprint.
+ * This is only a broad phase / geographic boundary reservation. Object-to-
+ * object spacing is measured with surfaceDistance, not this enlarged radius. */
+export function surfaceChartRadius(world,x,z,radius){
+  const s=at(world,x,z);if(!s||radius<=0)return radius;
+  if(s.p.type==='equirectangular'){
+    const angle=radius/s.radius,latitude=s.latitudeAt;
+    if(Math.abs(latitude)+angle>=halfPi)return Math.hypot(Math.PI*s.p.radius,angle*s.p.radius);
+    // The maximum inverse-chart singular value along any radius bounds the
+    // whole Euclidean chart disk, including diagonals (axis extents do not).
+    return angle*s.p.radius/Math.cos(Math.abs(latitude)+angle)*(1+1e-9);
+  }
+  // The conformal chart's local scale changes smoothly over a small asset.
+  // Bound that change over the footprint in addition to its two axis scales.
+  return radius/(s.radius*Math.min(Math.abs(s.eastScale),Math.abs(s.southScale)))*(1+4*radius/s.radius);
 }
 
 /** Inverse world-space sphere position -> chart {x,z,elevation}. Reuses target.

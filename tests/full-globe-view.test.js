@@ -133,11 +133,16 @@ test('high-latitude isometric WASD motion projects along the visible screen axes
     const camera=f.camera.clone(),before=surfacePoint(f.world,start.x,start.y,start.z).project(camera);
     f.key(key);f.update();f.key(key,'keyup');
     const delta=view.controls.target.clone().sub(start);
-    // A short symmetric displacement independently measures the physical
-    // tangent, without a curvature-sized chord error from the whole pan step.
-    const h=1e-4;
-    const after=surfacePoint(f.world,start.x+delta.x*h,start.y,start.z+delta.z*h).project(camera);
-    const opposite=surfacePoint(f.world,start.x-delta.x*h,start.y,start.z-delta.z*h).project(camera);
+    // A finite physical step crosses latitudes with different chart metrics.
+    // Measure its tangent at the midpoint, then bring that vector back to the
+    // original frame; this excludes genuine globe curvature from screen skew.
+    const midpoint=start.clone().addScaledVector(delta,.5);
+    const tangent=surfaceTangent(f.world,midpoint.x,midpoint.y,midpoint.z,delta.x,0,delta.z)
+      .applyMatrix4(surfaceFrame(f.world,midpoint.x,midpoint.z).invert())
+      .applyMatrix4(surfaceFrame(f.world,start.x,start.z));
+    const ground=surfacePoint(f.world,start.x,start.y,start.z),h=1e-4;
+    const after=ground.clone().addScaledVector(tangent,h).project(camera);
+    const opposite=ground.clone().addScaledVector(tangent,-h).project(camera);
     const screen=after.sub(opposite);
     assert.ok(screen[axis]*sign>0,`${key} at ${latitude}° moves in the requested screen direction`);
     assert.ok(Math.abs(screen[axis==='x'?'y':'x'])<Math.abs(screen[axis])*1e-5,
@@ -161,11 +166,11 @@ test('zoom tilts toward the far edge without changing heading and retains the lo
   for(const zoom of [12,24,40,80]){
     view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();check(Math.PI/4,0);
   }
-  // OrbitControls remains available in the core view; zoom/follow must not
-  // overwrite the chosen azimuth or elevation afterward.
+  // Drag changes heading in the core view. Zoom and follow preserve it while
+  // the inclination remains the same fixed 45 degrees above the surface.
   view.navigation.zoom=12;view.navigation.updateProjectionMatrix();f.update();
   f.pointer('pointerdown',400,350);f.pointer('pointermove',480,390);f.pointer('pointerup',480,390);f.update(360);
-  const chosen=angle();assert.ok(Math.abs(chosen.theta)>.01);
+  const chosen=angle();assert.ok(Math.abs(chosen.theta)>.01);assert.ok(Math.abs(chosen.phi-Math.PI/4)<1e-10);
   for(const zoom of [24,40,80]){
     view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();check(chosen.phi,chosen.theta);
   }
@@ -194,6 +199,82 @@ test('local camera keeps the same angle to the ground across both hemispheres',t
     assert.ok(north.y>center.y,'the northern far edge of the ground stays toward the top of the view');
     assert.ok(Math.abs(north.x-center.x)<1e-10,'north never rotates sideways during local zoom');
   }
+});
+
+test('strong vertical and diagonal drags retain a fixed local inclination and one ground pivot',t=>{
+  const f=fixture(t),{view}=f;
+  for(const [longitude,latitude] of [[0,0],[120,75],[-170,-70]])for(const zoom of [12,40,80]){
+    f.key('Home');
+    const focus=new THREE.Vector3(radius*longitude*radians,1.3,-radius*latitude*radians);
+    view.controls.target.copy(focus);
+    view.navigation.position.copy(focus).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/4,.35));
+    view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();
+    const normal=surfaceNormal(f.world,focus.x,focus.z),ground=surfacePoint(f.world,focus.x,focus.y,focus.z);
+    const check=()=>{
+      near(view.controls.target,focus);
+      const offset=f.camera.position.clone().sub(ground);
+      assert.ok(Math.abs(offset.angleTo(normal)-Math.PI/4)<1e-10,'vertical input cannot flatten the local view');
+      assert.ok(Math.abs(offset.length()-6000)<1e-7,'zoom and dragging retain the same orbit radius');
+      const projected=ground.clone().project(f.camera);
+      assert.ok(Math.hypot(projected.x,projected.y)<1e-9,'the ground focus remains at the screen center');
+    };
+    for(const dy of [-900,900]){
+      const before=f.camera.position.clone();
+      f.pointer('pointerdown',500,375);f.pointer('pointermove',500,375+dy);f.pointer('pointerup',500,375+dy);
+      f.update(240);check();near(f.camera.position,before);
+    }
+    const before=f.camera.position.clone();
+    f.pointer('pointerdown',500,375);f.pointer('pointermove',720,-300);f.pointer('pointerup',720,-300);
+    f.update(240);check();assert.ok(f.camera.position.distanceTo(before)>100,'the horizontal part of a diagonal drag rotates yaw');
+  }
+});
+
+test('physical WASD speed is independent of latitude and finite diagonal travel is independent of frame rate',t=>{
+  const f=fixture(t),{view}=f;
+  const begin=(latitude,heading=0)=>{
+    f.key('Home');view.controls.target.set(0,1.3,-radius*latitude*radians);
+    view.navigation.position.copy(view.controls.target).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/4,heading));
+    view.navigation.zoom=40;view.navigation.updateProjectionMatrix();f.update();
+  };
+  let reference;
+  for(const latitude of [0,60,84]){
+    begin(latitude);const start=view.controls.target.clone();f.key('d');f.update(60);f.key('d','keyup');
+    const distance=(view.controls.target.x-start.x)*Math.cos(latitude*radians)*(radius+start.y)/radius;
+    if(reference===undefined)reference=distance;
+    else assert.ok(Math.abs(distance-reference)<1e-8,'the same key hold traverses the same physical distance');
+  }
+  const run=hz=>{
+    begin(80,Math.PI/4);f.key('d');f.update(hz,1/hz);f.key('d','keyup');
+    return view.controls.target.clone();
+  };
+  const sixty=run(60);near(run(30),sixty,1e-7);near(run(144),sixty,1e-7);
+  const ground=surfacePoint(f.world,sixty.x,sixty.y,sixty.z).project(f.camera);
+  assert.ok(Math.hypot(ground.x,ground.y)<1e-9,'moving the focus preserves screen centering');
+});
+
+test('vertical arrows pan the core view, horizontal arrows orbit, and map or close arrows pan physically',t=>{
+  const f=fixture(t),{view}=f;
+  view.navigation.zoom=12;view.navigation.updateProjectionMatrix();f.update();
+  const focus=view.controls.target.clone(),before=view.navigation.position.clone().sub(focus);
+  f.key('ArrowUp');f.update();assert.ok(view.controls.target.z<focus.z,'vertical arrows remain useful with fixed pitch');
+  near(view.navigation.position.clone().sub(view.controls.target),before);
+  const panned=view.controls.target.clone();f.key('ArrowRight');f.update();near(view.controls.target,panned);
+  assert.ok(view.navigation.position.clone().sub(panned).angleTo(before)>.01,'horizontal core arrows rotate yaw');
+  for(const zoom of [1,40]){
+    f.key('Home');const latitude=80;
+    const start=new THREE.Vector3(0,1.3,-radius*latitude*radians);
+    view.controls.target.copy(start);view.navigation.position.copy(start).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/4,0));
+    view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();
+    const expected=(view.navigation.top-view.navigation.bottom)/zoom*.045;
+    f.key('ArrowRight');f.update();
+    const distance=(view.controls.target.x-start.x)*Math.cos(latitude*radians)*(radius+start.y)/radius;
+    assert.ok(Math.abs(distance-expected)<1e-8,'arrow movement respects the physical longitude metric');
+    const ground=surfacePoint(f.world,view.controls.target.x,view.controls.target.y,view.controls.target.z).project(f.camera);
+    assert.ok(Math.hypot(ground.x,ground.y)<1e-9);
+  }
+  f.key('Home');f.key(']');f.update();assert.equal(view.selected,'front');
+  const followed=view.controls.target.clone();f.key('ArrowRight');f.update();
+  assert.equal(view.selected,null);assert.ok(view.controls.target.x>followed.x,'an arrow takes control of the ground focus from follow');
 });
 
 test('back hemisphere trains cannot be selected through the globe and following crosses the date line the short way',t=>{

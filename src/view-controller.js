@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CAMERA_ZOOM,modeForZoom,mapBlendForZoom,shouldStopFollowing,fitZoomForSpan,smoothZoom } from './camera-modes.js';
 import { C } from './palette.js';
-import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent } from './world-surface.js';
+import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent,surfaceOffset as offsetOnSurface } from './world-surface.js';
 
 const ease=(rate,dt,reduced)=>reduced?1:1-Math.exp(-rate*dt);
 const centerOf=train=>train.parts[Math.floor(train.parts.length/2)];
@@ -10,19 +10,24 @@ const centerOf=train=>train.parts[Math.floor(train.parts.length/2)];
 // Keep this lightweight: importing that compiler here also loads tessellation.
 const SPHERICAL_MAP_TRAIN_HEIGHT=.123*16;
 const GLOBE_MAP_TILT=.48;
+// A local view is an orthographic diorama: orbit changes its heading, never
+// its ground inclination. Allowing pitch to approach the horizon visually
+// flattens streets and buildings even when the surface frame is orthonormal.
+const DETAIL_POLAR_ANGLE=Math.PI/4;
 const POLE_LIMIT=85*Math.PI/180;
 const wrappedLongitude=(value,radius)=>THREE.MathUtils.euclideanModulo(value+Math.PI*radius,2*Math.PI*radius)-Math.PI*radius;
 
 export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true}){
-  // Navigation keeps the user's orbit. The displayed camera can rise above it
-  // for the map or train view without feeding automatic motion into OrbitControls.
+  // Navigation stores a ground focus and yaw at a fixed local inclination.
+  // The overview can rise above that rig without changing its navigation pose.
   const navigation=camera.clone(),chartCamera=camera.clone(),coverageChart=camera.clone(),coverageView=camera.clone(),proposedChart=camera.clone(),proposedView=camera.clone(),presentation=camera.clone();
   const presentationTarget=new THREE.Vector3(0,1.3,0);
   let navigationDelta=0;
   const coverageViews=[coverageView,proposedView];
   const controls=new OrbitControls(navigation,canvas);
   Object.assign(controls,{enableDamping:true,dampingFactor:.075,panSpeed:.7,rotateSpeed:.45,
-    minZoom:CAMERA_ZOOM.min,maxZoom:CAMERA_ZOOM.max,minPolarAngle:Math.PI*.20,maxPolarAngle:Math.PI*.40});
+    minZoom:CAMERA_ZOOM.min,maxZoom:CAMERA_ZOOM.max,
+    minPolarAngle:DETAIL_POLAR_ANGLE,maxPolarAngle:DETAIL_POLAR_ANGLE});
   controls.target.set(0,1.3,0);controls.update();
   let mode='world',blend=0,selected=null,hovered=null,zoomGoal=null;
   let zoomScale=1;
@@ -37,6 +42,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   const surfaceUp=new THREE.Vector3(),viewDirection=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3();
   const keyboardRight=new THREE.Vector3(),keyboardUp=new THREE.Vector3();
   const keyboardVelocity=new THREE.Vector2(),keyboardIntent=new THREE.Vector2(),keyboardTravel=new THREE.Vector2();
+  const keyboardDestination={x:0,z:0};
   const stoppedPosition=new THREE.Vector3(),stoppedTarget=new THREE.Vector3();
   const chartBounds=new WeakMap();
   const domState={};
@@ -78,7 +84,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     destination.copy(source);
     spherical.setFromVector3(cameraOffset.copy(source.position).sub(target));
     const surface=surfaceFor(getWorld());
-    spherical.phi=THREE.MathUtils.lerp(spherical.phi,surface&&!surface.complete?GLOBE_MAP_TILT:.00001,map);
+    spherical.phi=THREE.MathUtils.lerp(DETAIL_POLAR_ANGLE,surface&&!surface.complete?GLOBE_MAP_TILT:.00001,map);
     // Only tilt toward the far edge of the current view. Keeping the same
     // azimuth avoids turning the world sideways while zooming into its surface.
     // Deliberate orbit changes keep their heading in the overview as well.
@@ -210,26 +216,35 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
     controls.touches.TWO=plan?THREE.TOUCH.DOLLY_PAN:THREE.TOUCH.DOLLY_ROTATE;
   }
-  function moveKeyboard(horizontal,verticalAmount){
+  function moveKeyboard(horizontal,verticalAmount,distance){
     if(!horizontal&&!verticalAmount)return;
     clearSelection();
     const surface=surfaceFor(getWorld());
     const span=Math.max(navigation.right-navigation.left,navigation.top-navigation.bottom)/presentation.zoom;
-    const speed=surface?.complete?Math.min(surface.radius*.95,span*.30):span*.30;
+    const speed=distance??(surface?.complete?Math.min(surface.radius*.95,span*.30):span*.30);
     // Project the displayed screen axes onto the ground chart at every zoom.
     // Translating both target and camera preserves the orbit instead of turning.
     keyboardRight.set(1,0,0).applyQuaternion(chartCamera.quaternion);keyboardRight.y=0;keyboardRight.normalize();
     keyboardUp.set(0,1,0).applyQuaternion(chartCamera.quaternion);keyboardUp.y=0;keyboardUp.normalize();
     delta.copy(keyboardRight).multiplyScalar(horizontal*speed).addScaledVector(keyboardUp,-verticalAmount*speed);
     if(surface?.complete&&surface.projection.type==='equirectangular'){
-      // The camera uses an orthonormal tangent frame, while chart longitude
-      // shrinks by cos(latitude) on the sphere. Invert that metric so a
-      // diagonal local orbit still pans along the visible screen axes.
+      // Integrate a constant physical bearing on the globe (a rhumb line).
+      // Dividing by cos(start latitude) only works for infinitesimal steps:
+      // at high latitude a finite diagonal step acquires sideways skew, and
+      // its path changes with frame rate. The latitude-integrated metric keeps
+      // screen-relative motion and distance consistent at every latitude.
       const projection=surface.projection;
       const latitude=projection.centralLatitude*Math.PI/180-controls.target.z/projection.radius;
-      const scale=projection.radius/(surface.radius+controls.target.y);
-      delta.x*=scale/Math.max(Math.cos(latitude),Math.cos(POLE_LIMIT));
-      delta.z*=scale;
+      const radius=surface.radius+controls.target.y;
+      const nextLatitude=THREE.MathUtils.clamp(latitude-delta.z/radius,-POLE_LIMIT,POLE_LIMIT);
+      const latitudeTravel=nextLatitude-latitude;
+      const meridianTravel=Math.log(Math.tan(Math.PI/4+nextLatitude/2)/Math.tan(Math.PI/4+latitude/2));
+      const eastScale=Math.abs(latitudeTravel)>1e-9?latitudeTravel/meridianTravel:Math.cos(latitude);
+      delta.x*=projection.radius/(radius*eastScale);
+      delta.z=-latitudeTravel*projection.radius;
+    }else if(surface){
+      offsetOnSurface(getWorld(),controls.target.x,controls.target.z,delta.x,delta.z,keyboardDestination);
+      delta.set(keyboardDestination.x-controls.target.x,0,keyboardDestination.z-controls.target.z);
     }
     controls.target.add(delta);navigation.position.add(delta);
     constrainTarget();
@@ -295,19 +310,15 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     else if(['+','=','-','_'].includes(event.key)){
       zoomGoal=null;navigation.zoom=zoomClamp(navigation.zoom*(event.key==='+'||event.key==='='?1.16:1/1.16));navigation.updateProjectionMatrix();
     }else if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){
-      if(mode==='world'&&!selected){
+      flushControls();
+      if(mode==='world'&&!selected&&(event.key==='ArrowLeft'||event.key==='ArrowRight')){
         const offset=navigation.position.clone().sub(controls.target),spherical=new THREE.Spherical().setFromVector3(offset);
         if(event.key==='ArrowLeft')spherical.theta-=.08;if(event.key==='ArrowRight')spherical.theta+=.08;
-        if(event.key==='ArrowUp')spherical.phi-=.05;if(event.key==='ArrowDown')spherical.phi+=.05;
-        spherical.phi=THREE.MathUtils.clamp(spherical.phi,controls.minPolarAngle,controls.maxPolarAngle);
         navigation.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
       }else{
-        clearSelection();
-        const right=new THREE.Vector3(1,0,0).applyQuaternion(chartCamera.quaternion),up=new THREE.Vector3(0,1,0).applyQuaternion(chartCamera.quaternion);
-        right.y=up.y=0;right.normalize();up.normalize();
-        const amount=(navigation.top-navigation.bottom)/navigation.zoom*.045;
-        const delta=(event.key==='ArrowLeft'?right.multiplyScalar(-amount):event.key==='ArrowRight'?right.multiplyScalar(amount):event.key==='ArrowUp'?up.multiplyScalar(amount):up.multiplyScalar(-amount));
-        controls.target.add(delta);navigation.position.add(delta);
+        const horizontal=Number(event.key==='ArrowRight')-Number(event.key==='ArrowLeft');
+        const vertical=Number(event.key==='ArrowDown')-Number(event.key==='ArrowUp');
+        moveKeyboard(horizontal,vertical,(navigation.top-navigation.bottom)/presentation.zoom*.045);
       }
       controls.update();constrainTarget();
     }else handled=false;

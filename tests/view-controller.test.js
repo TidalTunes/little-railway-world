@@ -241,7 +241,9 @@ test('saving a replacement world home does not inherit residual orbit damping', 
   f.pointer('pointerup', 510, 380);
   f.key('r'); f.settle();
   nearVector(f.view.controls.target, new THREE.Vector3(12, 1.3, -9));
-  nearVector(f.view.navigation.position, new THREE.Vector3(112, 121.3, 131));
+  const authored=new THREE.Vector3(100,120,140);
+  const expected=new THREE.Vector3().setFromSphericalCoords(authored.length(),Math.PI/4,Math.atan2(100,140));
+  nearVector(f.view.navigation.position,expected.add(new THREE.Vector3(12,1.3,-9)));
 });
 
 test('continental framing starts as a map and still reaches a train-scale follow view', t => {

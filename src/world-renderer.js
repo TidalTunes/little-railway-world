@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
-import {surfaceFor,surfaceCoordinates,surfacePoint} from './world-surface.js';
+import {surfaceFor,surfaceCoordinates,surfacePoint,surfaceChartRadius,surfaceDistance} from './world-surface.js';
 
 export {compileDetailPacket,detailPacketTransfers,clipRailRanges} from './detail-compiler.js';
 
@@ -21,6 +21,11 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   let frame=0,disposed=false,coverageChecked=false;
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
+  // City/station dimensions are physical; authored mountain radii are still
+  // geographic footprints. Owner cells must load before either enters view.
+  const geographicFeatures=new Set(world.mountains);
+  const featureRadii=new Map(features.map(feature=>[feature,geographicFeatures.has(feature)?feature.radius??4
+    :surfaceChartRadius(world,feature.x,feature.z,feature.radius??4)]));
   const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,bytes:0,errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0,revealingChunks:0};
   const materialFor=(description,job)=>{
     const key=JSON.stringify(description);let material=job.materials.get(key);
@@ -143,10 +148,14 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       return result;
     }):null;
   const occupiedBounds=terrainBounds?[...features.map(feature=>{
-    const radius=feature.radius??4;return {minX:feature.x-radius,maxX:feature.x+radius,minZ:feature.z-radius,maxZ:feature.z+radius};
+    const radius=featureRadii.get(feature);return {minX:feature.x-radius,maxX:feature.x+radius,minZ:feature.z-radius,maxZ:feature.z+radius};
   }),...(world.lines??[]).map(line=>{
     const bounds={minX:Infinity,minZ:Infinity,maxX:-Infinity,maxZ:-Infinity};
-    for(const point of line.points??[]){bounds.minX=Math.min(bounds.minX,point.x-4);bounds.maxX=Math.max(bounds.maxX,point.x+4);bounds.minZ=Math.min(bounds.minZ,point.z-4);bounds.maxZ=Math.max(bounds.maxZ,point.z+4);}
+    for(const point of line.points??[]){bounds.minX=Math.min(bounds.minX,point.x);bounds.maxX=Math.max(bounds.maxX,point.x);bounds.minZ=Math.min(bounds.minZ,point.z);bounds.maxZ=Math.max(bounds.maxZ,point.z);}
+    if(Number.isFinite(bounds.minX)){
+      const radius=Math.max(surfaceChartRadius(world,bounds.minX,bounds.minZ,4),surfaceChartRadius(world,bounds.maxX,bounds.maxZ,4));
+      bounds.minX-=radius;bounds.maxX+=radius;bounds.minZ-=radius;bounds.maxZ+=radius;
+    }
     return bounds;
   })]:[];
   const terrainCells=new Map();
@@ -154,8 +163,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     if(!terrainBounds)return true;
     if(!terrainCells.has(entry.key)){
       const left=entry.x-size/2,right=entry.x+size/2,top=entry.z-size/2,bottom=entry.z+size/2;
-      terrainCells.set(entry.key,[...terrainBounds,...occupiedBounds].some(bounds=>
-        bounds.minX<=right&&bounds.maxX>=left&&bounds.minZ<=bottom&&bounds.maxZ>=top));
+      const overlaps=(bounds,shift=0)=>bounds.minX+shift<=right&&bounds.maxX+shift>=left&&bounds.minZ<=bottom&&bounds.maxZ>=top;
+      terrainCells.set(entry.key,terrainBounds.some(bounds=>overlaps(bounds))
+        ||occupiedBounds.some(bounds=>overlaps(bounds)||period&&(overlaps(bounds,-period)||overlaps(bounds,period))));
     }
     return terrainCells.get(entry.key);
   }
@@ -252,7 +262,8 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     const footprints=[];
     if(target)targetPoint.copy(target);
     const candidate=(x,z)=>({key:`${x}:${z}`,x:x+size/2,z:z+size/2,size,
-      distance:longitudeDelta(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
+      distance:surface?surfaceDistance(world,targetPoint,{x:x+size/2,z:THREE.MathUtils.clamp(z+size/2,extent.minZ,extent.maxZ)})**2
+        :longitudeDelta(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
     required.clear();wanted.clear();
     // The transition can protect both its widest destination and the current
     // displayed footprint. Union cells, not chart rectangles: a date-line
@@ -269,7 +280,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       // Cities and mountains belong to their centre cell but may extend into a
       // neighbouring visible cell. Their owner region is therefore required too.
       for(const feature of features){
-        const radius=feature.radius??4;
+        const radius=featureRadii.get(feature);
         const x=period?targetPoint.x+longitudeDelta(feature.x-targetPoint.x):feature.x;
         if(x+radius<minX||x-radius>maxX||feature.z+radius<minZ||feature.z-radius>maxZ)continue;
         const entry=candidate(Math.floor(feature.x/size)*size,Math.floor(feature.z/size)*size);required.set(entry.key,entry);

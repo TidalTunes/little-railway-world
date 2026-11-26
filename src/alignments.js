@@ -85,7 +85,13 @@ export function sampleAlignmentInto(alignment,distanceAlong,out){
     angle=theta+Math.sign(segment.sweep)*Math.PI/2;
   }
   const tangent=out.tangent??(out.tangent={x:0,y:0,z:0});
-  tangent.x=Math.cos(angle);tangent.y=0;tangent.z=Math.sin(angle);
+  let tx=Math.cos(angle),tz=Math.sin(angle);out.chartSpeed=1;
+  if(segment.chartTransform){
+    const t=segment.chartTransform,cx=t.x+t.xx*x+t.xz*z,cz=t.z+t.zx*x+t.zz*z;
+    const dx=t.xx*tx+t.xz*tz,dz=t.zx*tx+t.zz*tz,speed=Math.hypot(dx,dz);
+    x=cx;z=cz;tx=dx/speed;tz=dz/speed;angle=Math.atan2(tz,tx);out.chartSpeed=speed;
+  }
+  tangent.x=tx;tangent.y=0;tangent.z=tz;
   out.x=x;out.y=segment.start.y;out.z=z;out.distance=s;out.heading=angle;
   out.angle=Math.atan2(tangent.x,tangent.z);out.curvature=segment.curvature;
   return out;

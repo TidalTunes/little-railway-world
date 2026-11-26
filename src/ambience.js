@@ -3,19 +3,22 @@ import { box,cylinder,ico,beam,v,group,mesh,consolidate } from './geometry.js';
 import { M } from './palette.js';
 import { biomeDistance,fitsBiome } from './biomes.js';
 import { seededRandom,sampleLine,inWorld,surfaceHeight } from './world-model.js';
-import {surfaceFor,surfacePoseMatrix,warpGeometryToSurface} from './world-surface.js';
+import {surfaceFor,surfacePoseMatrix,rigidSurfacePoseMatrix,warpGeometryToSurface} from './world-surface.js';
 
 export function ambience(parent,world){
   const root=group(parent),random=seededRandom(`${world.seed}-life`),dummy=new THREE.Object3D();
   root.name='ambience';
-  const curved=Boolean(surfaceFor(world)),attitude=new THREE.Matrix4();
+  const curved=Boolean(surfaceFor(world)),attitude=new THREE.Matrix4(),inverseYaw=new THREE.Matrix4();
   // Animation positions stay in the generation chart. Only the render matrix
   // changes, so repeated updates never feed curved coordinates back as input.
   const pose=object=>{
     if(!curved)return;
     object.matrixAutoUpdate=false;
-    surfacePoseMatrix(world,object.position.x,object.position.y,object.position.z,0,object.matrix);
-    attitude.makeRotationFromQuaternion(object.quaternion).scale(object.scale);
+    rigidSurfacePoseMatrix(world,object.position.x,object.position.y,object.position.z,object.rotation.y,object.matrix);
+    // Chart yaw determines the physical heading. Roll, pitch and animation
+    // scale remain local to that rigid frame rather than inheriting map shear.
+    attitude.makeRotationFromQuaternion(object.quaternion)
+      .premultiply(inverseYaw.makeRotationY(-object.rotation.y)).scale(object.scale);
     object.matrix.multiply(attitude);object.matrixWorldNeedsUpdate=true;
   };
   const ripples=new THREE.InstancedMesh(new THREE.BoxGeometry(1,.015,.055),M.foam,64);

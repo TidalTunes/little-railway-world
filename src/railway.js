@@ -6,25 +6,34 @@ import { sampleLine } from './world-model.js';
 import { createNetworkTraffic } from './network-traffic.js';
 import { createPlayerPalette } from './player-palette.js';
 import { bakeMaterialColors } from './color-batches.js';
-import {surfaceFor,surfacePoint,surfacePoseMatrix} from './world-surface.js';
+import {surfaceFor,surfacePoint,rigidSurfacePoseMatrix} from './world-surface.js';
+
+import {physicalLineMetric,physicalDistanceAtChart,chartDistanceAtPhysical} from './physical-route.js';
+import {physicalRailBox,physicalRailRibbon} from './physical-rail-geometry.js';
 
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 
 
-export function buildRailways(parent,world){
+export function buildRailways(parent,world,{surfaceRoot}={}){
+  const physical=!!surfaceRoot&&!!surfaceFor(world),target=physical?surfaceRoot:parent;
   for(const line of world.lines){
+    const metric=physical?physicalLineMetric(world,line):null;
     for(const range of line.renderRanges??[{start:0,end:line.length}]){
-      const steps=Math.max(1,Math.ceil((range.end-range.start)/.30));
-      const points=Array.from({length:steps+1},(_,i)=>sampleLine(line,range.start+(range.end-range.start)*i/steps));
-      solidRibbon(parent,points,1.88,-.42,-.19,'gravel');
+      const start=physicalDistanceAtChart(metric,range.start),end=physicalDistanceAtChart(metric,range.end);
+      const steps=Math.max(1,Math.ceil((end-start)/.30));
+      const points=Array.from({length:steps+1},(_,i)=>sampleLine(line,chartDistanceAtPhysical(metric,start+(end-start)*i/steps)));
+      if(physical)physicalRailRibbon(target,world,points,1.88,-.42,-.19,'gravel');
+      else solidRibbon(parent,points,1.88,-.42,-.19,'gravel');
       // Keep one arc-length phase across streamed cells, so a cell boundary
       // cannot restart the sleeper pattern or create a doubled/empty gap.
-      const firstSleeper=.4+Math.ceil((range.start-.4)/.85-1e-9)*.85;
-      for(let s=firstSleeper;s<Math.min(range.end,line.length-.2)-1e-9;s+=.85){
-        const p=sampleLine(line,s);
-        box(parent,p.x,p.y-.14,p.z,1.56,.10,.23,'timber',p.angle);
+      const firstSleeper=.4+Math.ceil((start-.4)/.85-1e-9)*.85;
+      for(let s=firstSleeper;s<Math.min(end,(metric?.length??line.length)-.2)-1e-9;s+=.85){
+        const p=sampleLine(line,chartDistanceAtPhysical(metric,s));
+        if(physical)physicalRailBox(target,world,p,0,-.14,1.56,.10,.23,'timber');
+        else box(parent,p.x,p.y-.14,p.z,1.56,.10,.23,'timber',p.angle);
       }
       for(const side of [-1,1]){
+        if(physical){physicalRailRibbon(target,world,points,.095,-.09,0,'rail',side*.46);continue;}
         const rail=points.map(p=>({x:p.x+p.tangent.z*side*.46,y:p.y,z:p.z-p.tangent.x*side*.46,tangent:p.tangent}));
         solidRibbon(parent,rail,.095,-.09,0,'rail');
       }
@@ -34,7 +43,7 @@ export function buildRailways(parent,world){
       if(end-start<1e-6)continue;
       buildBridge(parent,line,{...span,start,end,
         startAbutment:Math.abs(start-span.start)<1e-6,
-        endAbutment:Math.abs(end-span.end)<1e-6},world.river.y,world);
+        endAbutment:Math.abs(end-span.end)<1e-6},world.river.y,world,{surfaceRoot});
     }
   }
 }
@@ -121,7 +130,7 @@ export function makeTrains(parent,world,options={}){
       }
       for(let index=0;index<entry.cars.length;index++){
         const {train,part}=entry.cars[index];position.copy(part.position);quaternion.setFromAxisAngle(up,part.rotation.y);
-        if(curved)surfacePoseMatrix(world,position.x,position.y,position.z,part.rotation.y,matrix);
+        if(curved)rigidSurfacePoseMatrix(world,position.x,position.y,position.z,part.rotation.y,matrix);
         else matrix.compose(position,quaternion,unit);
         for(const mesh of batch.meshes){mesh.setMatrixAt(index,matrix);mesh.userData.instanceTrainIds[index]=train.state.id;}
       }

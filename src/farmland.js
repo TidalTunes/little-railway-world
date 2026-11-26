@@ -1,4 +1,5 @@
 import { biomeDistance, fitsBiome } from './biomes.js';
+import {surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceChartRadius} from './world-surface.js';
 
 function randomFor(seed){
   let state=2166136261;
@@ -105,22 +106,22 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
     const width=candidate.width*scale,depth=candidate.depth*scale,radius=Math.hypot(width,depth)/2;
     let nearest=null,nearestDistance=Infinity;
     for(const district of result.districts){
-      const distance=Math.hypot(candidate.x-district.x,candidate.z-district.z);
+      const distance=surfaceDistance(world,candidate,district);
       if(distance<nearestDistance&&distance<radius+district.radius+10){nearest=district;nearestDistance=distance;}
     }
     const positions=[];
     if(nearest){
-      const angle=Math.atan2(candidate.z-nearest.z,candidate.x-nearest.x),distance=radius+nearest.radius+.45;
+      const displacement=surfaceDisplacement(world,nearest,candidate),angle=Math.atan2(displacement.z,displacement.x),distance=radius+nearest.radius+.45;
       // At most three tangent placements make an estate grow beside existing
       // fields. This packs the reserved circles themselves, not only their art.
-      for(const offset of [0,.24,-.24])positions.push({x:nearest.x+Math.cos(angle+offset)*distance,z:nearest.z+Math.sin(angle+offset)*distance,
+      for(const offset of [0,.24,-.24])positions.push({...surfaceOffset(world,nearest.x,nearest.z,Math.cos(angle+offset)*distance,Math.sin(angle+offset)*distance),
         rotation:nearest.rotation,clusterId:nearest.clusterId});
     }
     positions.push(candidate);
     let item;
     for(const position of positions){
-      if(result.districts.some(d=>Math.hypot(position.x-d.x,position.z-d.z)<radius+d.radius+.32))continue;
-      if(!fitsBiome(world,'farmland',position.x,position.z,radius))continue;
+      if(result.districts.some(d=>surfaceDistance(world,position,d)<radius+d.radius+.32))continue;
+      if(!fitsBiome(world,'farmland',position.x,position.z,surfaceChartRadius(world,position.x,position.z,radius)))continue;
       const districtId=`farm-${candidate.clusterId}-${candidate.seed.split(':').at(-1)}`;
       const proposal={kind:'farm',x:position.x,y:0,z:position.z,width,depth,radius,scale:1,rotation:position.rotation,
         variant:0,districtId,clusterId:position.clusterId};

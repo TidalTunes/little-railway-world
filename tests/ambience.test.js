@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {Group,Matrix4,Vector3} from 'three';
 import {ambience} from '../src/ambience.js';
 import {generateWorld} from '../src/world-model.js';
-import {EARTH_SURFACE_RADIUS,surfacePoint,surfacePoseMatrix} from '../src/world-surface.js';
+import {EARTH_SURFACE_RADIUS,surfacePoint,surfacePoseMatrix,rigidSurfacePoseMatrix} from '../src/world-surface.js';
 import geography from '../data/europe-geography.json' with {type:'json'};
 
 const planar=generateWorld({density:0},{detail:'network'});
@@ -28,8 +28,8 @@ test('boats, birds and balloon keep chart animation state while their render mat
       assert.deepEqual(b.position.toArray(),a.position.toArray(),`${name}: animation state remains chart coordinates`);
       assert.deepEqual(b.quaternion.toArray(),a.quaternion.toArray());assert.equal(b.visible,a.visible);
       assert.equal(a.matrixAutoUpdate,true);assert.equal(b.matrixAutoUpdate,false);
-      const attitude=a.matrix.clone().setPosition(0,0,0);
-      const expected=surfacePoseMatrix(sphere,a.position.x,a.position.y,a.position.z,0).multiply(attitude);
+      const attitude=a.matrix.clone().setPosition(0,0,0).premultiply(new Matrix4().makeRotationY(-a.rotation.y));
+      const expected=rigidSurfacePoseMatrix(sphere,a.position.x,a.position.y,a.position.z,a.rotation.y).multiply(attitude);
       closeMatrix(b.matrix,expected);
       assert.ok(b.getWorldPosition(new Vector3()).distanceTo(surfacePoint(sphere,a.position.x,a.position.y,a.position.z))<1e-8);
       if(name.startsWith('bird'))for(let i=0;i<2;i++){
@@ -74,4 +74,21 @@ test('static ocean ripples are warped exactly once and remain unchanged during a
   for(const time of [0,4,200])curved.update(time);
   assert.deepEqual(b.children.map(child=>[...child.geometry.attributes.position.array]),before);
   cleanup(flat.root);cleanup(curved.root);
+});
+
+
+test('high-latitude boats, birds and balloons preserve rigid dimensions through animation',()=>{
+  const globe={...planar,surface:{type:'sphere',radius:1600,origin:{longitude:0,latitude:0},complete:true,
+    projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:65}}};
+  const curved=ambience(new Group(),globe);
+  const names=['river-boat','sailboat','balloon',...Array.from({length:5},(_,i)=>`bird-${i+1}`)];
+  for(const time of [0,37,100]){
+    curved.update(time);
+    for(const name of names){
+      const object=curved.root.getObjectByName(name),axes=[0,4,8].map(offset=>new Vector3().fromArray(object.matrix.elements,offset));
+      for(const axis of axes)assert.ok(Math.abs(axis.length()-1)<1e-12,`${name}: dimensions remain constant`);
+      for(let i=0;i<3;i++)for(let j=i+1;j<3;j++)assert.ok(Math.abs(axes[i].dot(axes[j]))<1e-12,`${name}: no latitude shear`);
+    }
+  }
+  cleanup(curved.root);
 });

@@ -26,6 +26,7 @@ function asset(parent, name, { x = 0, y = 0, z = 0, rotation = 0, scale = 1 } = 
   g.name = name;
   g.scale.setScalar(scale);
   g.userData.footprint = { ...ASSET_BOUNDS[name] };
+  g.userData.rigidSurfaceAsset = true;
   return g;
 }
 

@@ -5,6 +5,7 @@ import {createEarthWorld,projectEarth,EARTH_RADIUS,EARTH_CIRCUITS} from '../src/
 import {generateWorld,generateWorldRegion,validateWorld} from '../src/world-model.js';
 import {biomeDistance} from '../src/biomes.js';
 import {createNetworkTraffic} from '../src/network-traffic.js';
+import {surfaceDistance} from '../src/world-surface.js';
 
 const masks={biomes:{ice:geography.ice,regions:['land','landInterior','ocean','oceanShore','lakes'].map(type=>({type,polygons:geography[type]}))}};
 const distance=(kind,lon,lat)=>{const p=projectEarth(lon,lat);return biomeDistance(masks,kind,p.x,p.z);};
@@ -30,7 +31,7 @@ test('Earth cities form substantial residential neighborhoods with regional boun
   const sources=new Map(factory().cities.map(c=>[c.id,c]));
   for(const city of cities){
     assert.equal(city.x,sources.get(city.id).x);assert.equal(city.z,sources.get(city.id).z);
-    assert.ok(placements.filter(p=>p.cityId===city.id).every(p=>Math.hypot(p.x-city.x,p.z-city.z)+p.radius<=city.radius+1e-6));
+    assert.ok(placements.filter(p=>p.cityId===city.id).every(p=>surfaceDistance(model,p,city)+p.radius<=city.radius+1e-6));
   }
   // Combining separately generated regions detects cross-cell overlaps as
   // well as coastal, track, station, street, and mountain clipping.

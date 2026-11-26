@@ -6,7 +6,7 @@ A text-free isometric railway simulation built with Three.js. Compact towns, sim
 
 Zoom between three views: a simplified network overview from far away, the isometric miniature at the middle distance, and a close isometric view. The overview keeps broad terrain, railways, moving trains, and one city symbol per settlement. Click or tap a train to move closer and follow its journey. Both representations show the same running simulation.
 
-The default map is a complete Earth globe with 96 selected cities and 250 trains on ten continental and island circuits. Real coastlines, rivers, lakes, and city coordinates come from Natural Earth. Greenland and Antarctica have permanent ice; broad climate regions and continuous mountain ranges suggest the actual geography. Tropical woodland, temperate forest, taiga, tundra, savanna, and dry country blend gradually across the continents. Deep blue water has quiet broad currents and turquoise coastal shelves; wet sand blends into the neighboring ground. The globe is about 25% smaller in radius than the earlier Europe section. Terrain, tracks, buildings, and trains all curve around the same center, and elevations point radially outward. Longitude wraps continuously, so you can rotate all the way around the planet. The [Earth source notes](data/earth-geography-sources.md) document the data and deliberate simplifications.
+The default map is a complete Earth globe with 96 selected cities and 250 trains on ten continental and island circuits. Real coastlines, rivers, lakes, and city coordinates come from Natural Earth. Greenland and Antarctica have permanent ice; broad climate regions and continuous mountain ranges suggest the actual geography. Tropical woodland, temperate forest, taiga, tundra, savanna, and dry country blend gradually across the continents. Deep blue water has quiet broad currents and turquoise coastal shelves; wet sand blends into the neighboring ground. The globe is about 25% smaller in radius than the earlier Europe section. Terrain and route positions follow the sphere, and elevations point radially outward. Buildings and trains retain their dimensions in local tangent frames; rail gauge, carriage spacing and city clearances use physical surface units. Longitude wraps continuously, so you can rotate all the way around the planet. The [Earth source notes](data/earth-geography-sources.md) document the data and deliberate simplifications.
 
 The fifty-city Europe map remains available at `?layout=europe`, from Iceland to western Russia and Scandinavia to northern Africa. Its cities follow the UN World Urbanization Prospects 2025 harmonized urban-centre ranking within that extent; see the [European city notes](data/europe-cities-sources.md). Both geographic presets use simplified railway corridors with generated bridges and mountain tunnels. City development reflects relative source population, and ownership colors are arbitrary.
 
@@ -41,7 +41,7 @@ The deploy script builds and publishes `dist/` to this repository's `gh-pages` b
 
 ## Inspect and author
 
-Scroll or pinch to move through all three views. Drag to orbit around the ground focus in both the isometric and close views; WASD moves that focus across the ground. Dragging while following a train orbits around the train. Two-finger gestures rotate and pinch to zoom in detailed views. The fully zoomed-out map uses dragging to pan. Click or tap a visible train to follow it; click empty ground, press Escape, or zoom out to leave follow mode. Double-click resets to the fitted world view.
+Scroll or pinch to move through all three views. Detailed views hold a fixed 45° angle above the local ground. Drag to rotate the heading around the ground focus; WASD moves that focus smoothly in screen-relative directions at a consistent physical speed. Zoom changes magnification without flattening the view. Dragging while following a train rotates around the train, while train bends leave the camera heading unchanged. Two-finger gestures rotate and pinch to zoom in detailed views. The fully zoomed-out map uses dragging to pan. Click or tap a visible train to follow it; click empty ground, press Escape, or zoom out to leave follow mode. Double-click resets to the fitted world view.
 
 The canvas receives keyboard focus on startup. Click it again if focus has moved elsewhere:
 
@@ -49,7 +49,7 @@ The canvas receives keyboard focus on startup. Click it again if focus has moved
 | --- | --- |
 | + / − | Zoom between map, world, and close views. |
 | W / A / S / D | Pan up / left / down / right at every zoom level, with smooth acceleration and braking. |
-| Arrow keys | Orbit the isometric world; pan map and close views. Panning releases a followed train. |
+| Arrow keys | Left/right rotate the regional view; up/down pan. All four pan in map and close views. Panning releases a followed train. |
 | F | Follow the visible train nearest the view centre. |
 | [ / ] | Follow the previous or next active train. |
 | Escape | Stop following while retaining the current view. |

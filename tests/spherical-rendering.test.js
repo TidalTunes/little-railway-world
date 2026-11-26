@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import geography from '../data/europe-geography.json' with {type:'json'};
 import {generateWorld} from '../src/world-model.js';
-import {makeTrains} from '../src/railway.js';
+import {makeTrains,buildRailways} from '../src/railway.js';
 import {createWorldRenderer} from '../src/world-renderer.js';
 import {createSurfaceShell} from '../src/surface-shell.js';
 import {createViewCompositor} from '../src/view-compositor.js';
+import {M} from '../src/palette.js';
 import {surfacePoint,surfaceNormal,surfaceFrame,warpGeometryToSurface,EARTH_SURFACE_RADIUS} from '../src/world-surface.js';
 
 const surface={type:'sphere',radius:EARTH_SURFACE_RADIUS,projection:geography.projection,
@@ -48,14 +49,29 @@ test('detailed train instances sit on the sphere and wheels share the transforme
   assert.ok(new THREE.Vector3().setFromMatrixPosition(matrix).distanceTo(surfacePoint(world,x,.42,z))<.0001);
   const actualUp=new THREE.Vector3().setFromMatrixColumn(matrix,1).normalize();
   assert.ok(actualUp.dot(surfaceNormal(world,x,z))>.999999);
-  // First carriage cab faces the opposite direction. Compare four wheel-contact
-  // positions with exact curved chart points, not with the pose helper itself.
-  const heading=angle+Math.PI;
+  // Geographic chart displacements no longer describe an asset's dimensions.
+  // Derive an independent unit forward axis from finite differences on the
+  // sphere, then verify the actual rendered rail tops beneath all four wheels.
+  const heading=angle+Math.PI,epsilon=.01,origin=surfacePoint(world,x,.42,z),up=surfaceNormal(world,x,z);
+  const forward=surfacePoint(world,x+Math.sin(heading)*epsilon,.42,z+Math.cos(heading)*epsilon)
+    .sub(surfacePoint(world,x-Math.sin(heading)*epsilon,.42,z-Math.cos(heading)*epsilon)).normalize();
+  const right=new THREE.Vector3().crossVectors(up,forward).normalize();
+  for(let axis=0;axis<3;axis++)assert.ok(Math.abs(new THREE.Vector3().setFromMatrixColumn(matrix,axis).length()-1)<1e-6,
+    'instanced car dimensions are independent of chart scale');
+  const line={id:'wheel-contact-line',length:8,distances:[0,8],bridges:[],points:[-4,4].map(s=>({
+    x:x+Math.sin(angle)*s,y:.42,z:z+Math.cos(angle)*s}))};
+  const trackRoot=new THREE.Group();buildRailways(new THREE.Group(),{...world,lines:[line]},{surfaceRoot:trackRoot});
+  trackRoot.updateMatrixWorld(true);const rails=trackRoot.children.filter(mesh=>mesh.material===M.rail);
+  assert.equal(rails.length,2);
   for(const side of [-.46,.46])for(const along of [-.72,.72]){
-    const local=new THREE.Vector3(side,0,along).applyMatrix4(matrix);
-    const dx=Math.cos(heading)*side+Math.sin(heading)*along,dz=-Math.sin(heading)*side+Math.cos(heading)*along;
-    assert.ok(local.distanceTo(surfacePoint(world,x+dx,.42,z+dz))<.001,'wheel and rail differ by less than a millimeter in miniature units');
+    const wheel=new THREE.Vector3(side,0,along).applyMatrix4(matrix);
+    const expected=origin.clone().addScaledVector(right,side).addScaledVector(forward,along);
+    assert.ok(wheel.distanceTo(expected)<.0001,'wheel offsets retain rigid physical dimensions and right angles');
+    const hits=new THREE.Raycaster(wheel.clone().addScaledVector(up,.2),up.clone().negate(),0,.4).intersectObjects(rails,false);
+    assert.ok(hits.length>0&&Math.abs(hits[0].distance-.2)<.001,
+      'each wheel contacts the actual constant-gauge rail within a millimeter in miniature units');
   }
+  for(const railMesh of rails)railMesh.geometry.dispose();
   assert.equal(rail.trains[0].parts[0].position.x,poseBuffer[0],'simulation pose stays in the generation chart');
   rail.dispose();
 });
