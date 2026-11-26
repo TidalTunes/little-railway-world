@@ -85,6 +85,11 @@ export function station(parent, { x = 0, y = 0, z = 0, rotation = 0, color = 'pl
   box(g, 1.42, .75, -.74, 1.25, .39, .07, dark);
   for (const xx of [1.00, 1.84]) box(g, xx, .33, -.56, .08, .24, .30, 'metal');
   box(g, 2.88, .43, -.70, .30, .46, .30, palette?.body??'teal');
+  // Warm platform lanterns remain inside the reserved shelter footprint.
+  for(const xx of [.20,2.65]){
+    box(g,xx,1.61,.35,.13,.20,.13,'lamp');
+    box(g,xx,1.73,.35,.20,.055,.20,dark);
+  }
   return g;
 }
 
@@ -437,7 +442,7 @@ export function buildTrainCar(parent, { color = 'red', cab = false, palette } = 
   }
   if (cab) {
     box(g, 0, .77, 1.085, .86, .25, .12, body);
-    for (const xx of [-.31, .31]) box(g, xx, .79, 1.151, .14, .13, .03, palette?.accent??'gold');
+    for (const xx of [-.31, .31]) box(g, xx, .79, 1.151, .14, .13, .03, 'lamp');
     box(g, 0, 1.515, -.35, .48, .06, .45, palette?.body??color);
   }
   return g;

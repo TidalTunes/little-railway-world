@@ -10,7 +10,7 @@ import {surfaceDisplacement,chartHeadingForSurface} from './world-surface.js';
 
 const WALLS=['plaster','peach','sage','blush','plaster','blue'];
 
-export function buildWorld(parent,world,{terrain=true,rigidAssets=null}={}){
+export function buildWorld(parent,world,{terrain=true,rigidAssets=null,animatedLife=false}={}){
   const root=group(parent);root.name='landscape';
   const palettes=new Map((world.players??[]).map(player=>[player.id,createPlayerPalette(player)]));
   const cities=new Map(world.cities.map(city=>[city.id,city]));
@@ -45,7 +45,7 @@ export function buildWorld(parent,world,{terrain=true,rigidAssets=null}={}){
     else if(p.kind==='plaza')plaza(root,{...p,palette});
     else if(p.kind==='tower')tower(root,{...p,palette});
     else if(p.kind==='farm')farmPatch(root,p);
-    else if(p.kind==='sheep')sheep(root,p);
+    else if(p.kind==='sheep'&&!animatedLife)sheep(root,p);
     else if(p.kind==='cactus')cactus(root,p);
     else if(p.kind==='tree')tree(root,{...p,variant:{pine:Math.floor(p.scale*7)%3,round:3,gold:4}[p.variant]??0});
     else if(p.kind==='rock')ico(root,p.x,.30*p.scale,p.z,.60*p.scale,.5*p.scale,.58*p.scale,p.biome==='desert'?'desertRock':p.variant%2?'rockLight':'rock').userData.rigidSurfaceAsset=true;

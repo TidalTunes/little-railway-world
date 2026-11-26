@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {applySceneStyle} from './scene-style.js';
 
 // The borrowed overview geometry uses deliberately exaggerated radial layers.
 // Replace those heights in the shader, keeping a quiet continuous surface just
@@ -37,7 +38,7 @@ function baseMaterial(source,geometry,height,radius){
       :'vec3 transformed = vec3(position.x, detailBaseHeight, position.z);');
   };
   material.customProgramCacheKey=()=>`detail-base-${radius>0?'sphere':'plane'}-v1`;
-  return material;
+  return applySceneStyle(material,{kind:/water|ocean/.test(source.name)?'water':'terrain'});
 }
 
 /** Immediate coarse scenery for a region whose detailed chunks are streaming.

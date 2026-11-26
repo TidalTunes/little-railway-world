@@ -6,6 +6,7 @@ import {makeTrains,buildRailways} from '../src/railway.js';
 import {M} from '../src/palette.js';
 import {buildMapWorld} from '../src/map-world.js';
 import {createWorldRenderer,compileDetailPacket,detailPacketTransfers,clipRailRanges} from '../src/world-renderer.js';
+import {styleUniforms} from '../src/scene-style.js';
 
 function cameraAt(x=0,z=0,span=40){
   const camera=new THREE.OrthographicCamera(-span,span,span,-span,.1,10000);
@@ -44,6 +45,9 @@ test('thousands of trains allocate detailed geometry only for visible owner temp
   const matrix=new THREE.Matrix4();
   for(const mesh of rail.root.children){
     assert.ok(mesh.isInstancedMesh);assert.equal(mesh.material.vertexColors,true);
+    const shader={uniforms:{},vertexShader:THREE.ShaderLib.standard.vertexShader,fragmentShader:THREE.ShaderLib.standard.fragmentShader};
+    mesh.material.onBeforeCompile(shader);
+    assert.equal(shader.uniforms.worldNight,styleUniforms.night,'baking train colors also preserves their live night shader');
     assert.equal(mesh.userData.instanceTrainIds.length,mesh.count);
     mesh.getMatrixAt(0,matrix);assert.ok(Math.abs(matrix.elements[12])<1e-5);
     mesh.computeBoundingSphere();assert.ok(mesh.boundingSphere);
@@ -80,10 +84,14 @@ test('far maps batch city glyphs, skip hidden updates, and use one readable mark
 test('worker detail packets clip rail ownership, preserve color, and transfer independent buffers',()=>{
   const world=generateWorld({density:0}),region=generateWorldRegion(world,{x:0,z:0,size:48});
   const packet=compileDetailPacket(region,world);
-  assert.ok(packet.meshes.length>0&&packet.meshes.length<=5,'chunk colors merge by shading properties');
+  assert.ok(packet.meshes.length>0&&packet.meshes.length<=7,'terrain, water, surf and windows add bounded shading groups, never color-specific draws');
   assert.ok(packet.meshes.every(mesh=>mesh.color?.length===mesh.position.length&&mesh.material.vertexColors));
+  const styles=packet.meshes.map(mesh=>mesh.material.sceneStyle);
+  for(const expected of ['terrain','water','asset','window'])assert.ok(styles.includes(expected),`${expected} behavior survives color batching`);
+  assert.ok(styles.every(style=>['terrain','water','surf','asset','window','lamp'].includes(style)));
   const transfer=detailPacketTransfers(packet);assert.equal(transfer.length,new Set(transfer).size);
   const cloned=structuredClone(packet,{transfer});assert.ok(cloned.meshes[0].position.length>0);
+  assert.deepEqual(cloned.meshes.map(mesh=>mesh.material.sceneStyle),styles,'worker transfer preserves shader classification');
   assert.equal(packet.meshes[0].position.length,0,'packet geometry owns transferable arrays');
   const line={points:[{x:-10,z:0},{x:10,z:0}],distances:[0,20],length:20,renderRanges:[{start:3,end:12}]};
   assert.deepEqual(clipRailRanges(line,{minX:-4,maxX:4,minZ:-1,maxZ:1}),[{start:6,end:12}]);
@@ -97,6 +105,35 @@ function flatPacket({x,z,size}){
     material:{name:'test',color:[1,1,1],roughness:1,metalness:0,side:0,vertexColors:true}}]};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('streamed night materials compose with opaque chunk reveals and retain stable shader cache keys',async()=>{
+  const world={outline:[[-10,-10],[10,-10],[10,10],[-10,10]],cities:[],mountains:[],stations:[]};
+  const renderer=createWorldRenderer(new THREE.Group(),world,{size:48,maxChunks:1,maxVisibleChunks:1,requestChunk:request=>{
+    const packet=flatPacket(request);
+    packet.meshes=['asset','window','water'].map(sceneStyle=>({...packet.meshes[0],material:{...packet.meshes[0].material,sceneStyle}}));
+    return packet;
+  }});
+  try{
+    const camera=cameraAt(5,5,2),options={target:new THREE.Vector3(5,0,5),budgetMs:10};
+    for(let i=0;i<20&&!renderer.ready;i++){renderer.update(camera,options);await flush();}
+    assert.equal(renderer.ready,true);
+    const materials=[];renderer.root.traverse(mesh=>{if(mesh.isMesh)materials.push(mesh.material);});
+    assert.equal(materials.length,3,'each behavior hydrates exactly one opaque draw');
+    for(const material of materials){
+      const shader={uniforms:{},vertexShader:THREE.ShaderLib.standard.vertexShader,fragmentShader:THREE.ShaderLib.standard.fragmentShader};
+      const key=material.customProgramCacheKey();material.onBeforeCompile(shader);
+      assert.ok(shader.uniforms.detailReveal,'the earlier reveal hook remains installed');
+      assert.equal(shader.uniforms.worldNight,styleUniforms.night);
+      assert.equal(shader.uniforms.worldTime,styleUniforms.time);
+      assert.match(shader.fragmentShader,/if \(detailReveal <= threshold\) discard/);
+      assert.match(shader.vertexShader,/paintedPosition = \(modelMatrix \* paintPosition\)/);
+      assert.match(key,/streamed-detail-reveal-v1.*painted-world/);
+      assert.equal(material.customProgramCacheKey(),key,'compiling or changing uniforms does not create new shader variants');
+      assert.equal(material.transparent,false);assert.equal(material.opacity,1);assert.equal(material.depthWrite,true);
+    }
+    assert.equal(new Set(materials.map(material=>material.customProgramCacheKey())).size,3,'different shader behaviors have distinct cache keys');
+  }finally{renderer.dispose();}
+});
 
 test('local detail readiness covers every required cell and loading remains bounded',async()=>{
   const world=generateWorld({density:0}),parent=new THREE.Group(),requests=[];

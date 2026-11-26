@@ -9,17 +9,19 @@ import { generateWorld,validateWorld } from './world-model.js';
 import { createStressWorld } from './stress-world.js';
 import { createWorldWorker } from './world-worker-client.js';
 import { createGeometryUploader } from './geometry-uploader.js';
-import { ambience } from './ambience.js';
+import { localAmbience } from './ambience.js';
 import { C,color } from './palette.js';
 import {surfaceFor,surfacePoint,surfaceFrame,surfaceChartCoordinates} from './world-surface.js';
 import {createSurfaceShell} from './surface-shell.js';
+import {createDaylight,styleUniforms} from './scene-style.js';
+import {createNightSky} from './night-sky.js';
 import './style.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
 scene.background=mapScene.background=C.backdrop;
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));
-renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;
 renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.info.autoReset=false;
 const camera=new THREE.OrthographicCamera(-60,60,45,-45,.1,500);
@@ -37,6 +39,9 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;sc
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer,reducedMotion,
+  initialNight:new URLSearchParams(location.search).get('time')==='night'});
+const nightSky=createNightSky(scene,mapScene);
 let paused=reducedMotion.matches;
 reducedMotion.addEventListener('change',event=>{paused=event.matches;});
 const compositor=createViewCompositor(renderer);
@@ -54,11 +59,15 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
 });
 const {navigation,controls}=view;
 let frameWidth=170,frameHeight=112,time=0;
-const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3(-65,110,65);
+const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3(-72,94,54);
 const lightFrame=new THREE.Matrix4(),localSun=new THREE.Vector3();
+canvas.addEventListener('keydown',event=>{
+  if(event.key.toLowerCase()!=='n'||event.repeat||event.ctrlKey||event.metaKey||event.altKey)return;
+  event.preventDefault();daylight.toggle();
+});
 function disposeLife(){
   if(!life)return;
-  life.root.traverse(node=>node.geometry?.dispose());life.root.removeFromParent();life=null;
+  life.dispose();life=null;
 }
 function fitWorld(){
   view.reset();
@@ -195,12 +204,14 @@ function metrics(now,interval,cpu){
     trafficCpu:trafficCpu.toFixed(2),detailCpu:detailCpu.toFixed(2),viewCpu:viewCpu.toFixed(2),renderCpu:renderCpu.toFixed(2),
     simulationSeconds:time.toFixed(1),
     simulationCpu:(railway.stats.simulationMs??0).toFixed(2),poseCpu:(railway.stats.poseMs??0).toFixed(2),
-    generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0)});
+    generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),
+    lifeInstances:String(life?.stats?.instances??life?.stats?.active??0)});
 }
 function frame(now){
   const start=performance.now(),interval=now-last,dt=THREE.MathUtils.clamp(interval/1000,0,.05);last=now;
   if(model){
     if(!paused)time+=dt;
+    daylight.update(dt,time);nightSky.update();
     let stamp=performance.now();
     railway.update(paused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
@@ -210,7 +221,7 @@ function frame(now){
     if(!shaderReady&&!shaderJob){
       const version=loadingVersion;
       renderer.shadowMap.enabled=true;
-      if(!life&&model.cities.length<=32){life=ambience(worldRoot,model);life.update(time);}
+      if(!life)life=localAmbience(worldRoot,model);
       shaderJob=compositor.prepare(scene,mapScene,camera)
         .then(()=>{if(version===loadingVersion)shaderReady=true;})
         .catch(error=>{if(version===loadingVersion){shaderJob=null;reportError(error);}});
@@ -222,10 +233,12 @@ function frame(now){
     railway.updateView(camera,{mapBlend:view.blend,focus:view.renderTarget});
     if(view.blend<.999){
       fitShadows();
-      if(!life&&model.cities.length<=32)life=ambience(worldRoot,model);
-      life?.update(time);
+      if(!life)life=localAmbience(worldRoot,model);
+      life.update(time,{focus:view.renderTarget,placements:detail.lifePlacements,revision:detail.lifeRevision,
+        detailBlend:1-view.blend,reducedMotion:reducedMotion.matches,night:styleUniforms.night.value});
     }
-    mapWorld.update(trains,{visible:view.blend>.001,camera,viewportHeight:innerHeight,poseBuffer:railway.poseBuffer});
+    if(life)life.root.visible=view.blend<.999;
+    mapWorld.update(trains,{visible:view.blend>.001,camera,viewportHeight:innerHeight,poseBuffer:railway.poseBuffer,dt,reducedMotion:reducedMotion.matches});
     viewCpu=performance.now()-stamp;stamp=performance.now();
     renderer.info.reset();renderer.shadowMap.enabled=view.blend<.999;
     compositor.render(scene,mapScene,camera,view.blend);
@@ -249,6 +262,7 @@ window.__railway={
   get camera(){return {zoom:camera.zoom,width:innerWidth,height:innerHeight,mode:view.mode,mapBlend:view.blend,following:view.selected};},
 };
 window.railway=Object.freeze({
+  setNight:enabled=>daylight.setNight(enabled),
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),generateWorld,validateWorld,createStressWorld,
 });

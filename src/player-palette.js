@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { color } from './palette.js';
+import {applySceneStyle} from './scene-style.js';
 
 // Ownership uses one hue family across roofs, walls, city marks and trains.
 // Geometry and development never depend on the color a player chooses.
@@ -19,7 +20,7 @@ export function playerColors(player){
 /** Caller owns these materials; dispose them with the world that uses them. */
 export function createPlayerPalette(player){
   return Object.fromEntries(Object.entries(playerColors(player)).map(([role,value])=>[
-    role,new THREE.MeshStandardMaterial({name:`player-${player?.id??'neutral'}-${role}`,
-      color:value,roughness:1,metalness:0,flatShading:true}),
+    role,applySceneStyle(new THREE.MeshStandardMaterial({name:`player-${player?.id??'neutral'}-${role}`,
+      color:value,roughness:1,metalness:0,flatShading:true})),
   ]));
 }

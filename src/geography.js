@@ -11,6 +11,7 @@ import {mountainSurfaceColor,mountainTrees} from './mountain-cover.js';
 import {tree} from './assets.js';
 import {colorTerrainGeometry} from './terrain-colors.js';
 import {oceanColor,shoreColor} from './ocean-colors.js';
+import {coastalSurfGeometry} from './coastal-surf.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {surfaceFor,rigidSurfacePoseMatrix,surfaceTangent} from './world-surface.js';
 import {physicalLineMetric,physicalDistanceAtChart,chartDistanceAtPhysical} from './physical-route.js';
@@ -19,6 +20,14 @@ import {physicalRailRibbon,physicalRailBox,physicalRailPoint,physicalRailChartPo
 const TUNNEL_RADIUS = 1.08;
 const TUNNEL_SPRING = 1.80;
 const BASE = -3.4;
+// Separate surface families survive color batching, so ripples never animate
+// grass and night shading can retain a quiet blue sea without extra draws.
+const oceanVertex=new THREE.MeshStandardMaterial({name:'ocean-vertex',color:0xffffff,
+  vertexColors:true,roughness:.52,metalness:0,flatShading:false});
+oceanVertex.userData.sceneStyle='water';
+const surfVertex=new THREE.MeshStandardMaterial({name:'coastal-surf',color:0xffffff,
+  vertexColors:true,roughness:.64,metalness:0,flatShading:false});
+surfVertex.userData.sceneStyle='surf';
 
 function polygonShape(rings) {
   const shape=new THREE.Shape(rings[0].map(([x,z])=>new THREE.Vector2(x,-z)));
@@ -87,8 +96,10 @@ export function buildTerrain(parent,world){
         oceanColor(world,position.getX(i),position.getZ(i),color);color.toArray(colors,i*3);
       }
       geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));geometry.computeVertexNormals();
-      mesh(parent,geometry,M.terrainVertex,0,waterY+.035,0);
+      mesh(parent,geometry,oceanVertex,0,waterY+.035,0);
     }else surface(parent,ocean,waterY+.035,'ocean');
+    const surf=coastalSurfGeometry(world,world.bounds,waterY+.055);
+    if(surf){const foam=mesh(parent,surf,surfVertex);foam.name='coastal-surf';foam.castShadow=false;}
   }
   // Only the actual island edge gets trim and spillways. Clip those original
   // edges into a local cell, rather than decorating artificial chunk borders.

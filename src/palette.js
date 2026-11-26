@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {applySceneStyle} from './scene-style.js';
 
 // Art colors are authored in OKLCH, then converted to linear sRGB for lighting.
 export function color(l, c, h) {
@@ -42,6 +43,12 @@ M.rail.metalness = .35;
 M.rail.roughness = .6;
 M.water.roughness = .45;
 M.window.roughness = .35;
+M.lamp=M.window.clone();M.lamp.color.copy(C.gold);M.lamp.name='station-lamp';
+for(const [name,material]of Object.entries(M)){
+  const kind=['lamp','window'].includes(name)?'window':['water','waterLight','ocean','oceanLight'].includes(name)?'water'
+    :['terrainVertex','grass','grassLight','grassDark','sand','soil','soilLight','meadow','farmland','forestFloor','mountainFloor','desert'].includes(name)?'terrain':'asset';
+  applySceneStyle(material,{kind});
+}
 
 export function random(seed = 13) {
   let a = seed;

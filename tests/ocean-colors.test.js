@@ -60,3 +60,16 @@ test('both ocean representations share opaque closed shells and identical color 
     }
   }finally{shell.dispose();}
 });
+
+test('the atmosphere is a single bounded map-only rim with shared night shading and owned disposal',()=>{
+  const shell=createSurfaceShell(globe()),rim=shell.map.children.find(mesh=>mesh.name==='earth-atmosphere');
+  assert.ok(rim);
+  assert.equal(shell.detail.children.some(mesh=>mesh.name==='earth-atmosphere'),false);
+  assert.equal(rim.material.side,THREE.BackSide);
+  assert.equal(rim.material.depthWrite,false);
+  assert.ok(rim.geometry.index.count/3<17000);
+  const shaders={vertexShader:rim.material.vertexShader,fragmentShader:rim.material.fragmentShader};
+  assert.ok(shaders.fragmentShader.includes('worldNight'));
+  let disposed=0;rim.geometry.addEventListener('dispose',()=>disposed++);rim.material.addEventListener('dispose',()=>disposed++);
+  shell.dispose();shell.dispose();assert.equal(disposed,2);
+});

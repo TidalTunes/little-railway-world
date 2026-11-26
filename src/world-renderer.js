@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
 import {surfaceFor,surfaceCoordinates,surfacePoint,surfaceChartRadius,surfaceDistance} from './world-surface.js';
+import {applySceneStyle} from './scene-style.js';
 
 export {compileDetailPacket,detailPacketTransfers,clipRailRanges} from './detail-compiler.js';
 
@@ -19,6 +20,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const shell=surface?new THREE.Sphere(new THREE.Vector3(0,-surface.radius,0),surface.radius):null;
   const patchBounds=new THREE.Box3(),cellSphere=new THREE.Sphere(),pole=new THREE.Vector3();
   let frame=0,disposed=false,coverageChecked=false;
+  let lifePlacements=[],lifeSignature='',lifeRevision=0;
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
   // City/station dimensions are physical; authored mountain radii are still
@@ -33,6 +35,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       material=applyDetailReveal(new THREE.MeshStandardMaterial({name:description.name,
         color:new THREE.Color().fromArray(description.color),roughness:description.roughness,
         metalness:description.metalness,side:description.side,flatShading:true,vertexColors:description.vertexColors}),job.reveal);
+      applySceneStyle(material,{kind:description.sceneStyle??'asset'});
       job.materials.set(key,material);
     }
     return material;
@@ -83,7 +86,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         ?new THREE.Box3(new THREE.Vector3().fromArray(rendered.min),new THREE.Vector3().fromArray(rendered.max))
         :new THREE.Box3(new THREE.Vector3(b.minX,-4,b.minZ),new THREE.Vector3(b.maxX,maxHeight,b.maxZ)),
         last:frame,bytes:job.bytes,triangles:job.triangles,reveal:job.reveal,progress:0,
-        materials:job.materials,depthMaterial:job.depthMaterial};
+        materials:job.materials,depthMaterial:job.depthMaterial,lifePlacements:job.packet.lifePlacements??[]};
       root.add(job.root);cache.set(key,chunk);incoming.delete(key);
       stats.bytes+=job.bytes;stats.triangles+=job.triangles;stats.loadedChunks=cache.size;
     }
@@ -244,6 +247,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     parent.updateWorldMatrix(true,false);camera.updateMatrixWorld();
     projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(projection);
     stats.visibleChunks=stats.revealingChunks=0;
+    const lifeChunks=[];
     for(const chunk of cache.values()){
       box.copy(chunk.bounds).applyMatrix4(parent.matrixWorld);chunk.root.visible=frustum.intersectsBox(box);
       if(chunk.root.visible){
@@ -253,8 +257,11 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
           chunk.reveal.value=chunk.progress*chunk.progress*(3-2*chunk.progress);
         }
         if(chunk.progress<1)stats.revealingChunks++;
+        else lifeChunks.push(chunk);
       }
     }
+    const signature=lifeChunks.map(chunk=>chunk.key).join('|');
+    if(signature!==lifeSignature){lifeSignature=signature;lifePlacements=lifeChunks.flatMap(chunk=>chunk.lifePlacements);lifeRevision++;}
   }
   function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false}={}){
     if(disposed)return;frame++;root.visible=mapBlend<.999;
@@ -333,8 +340,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     for(const job of incoming.values())releaseIncoming(job);
     for(const task of pending.values())task.controller.abort();
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
+    lifePlacements=[];lifeSignature='';lifeRevision++;
   }
   function ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}
-  return {root,update,updateVisibility,stats,dispose,get ready(){return ready();},
+  return {root,update,updateVisibility,stats,dispose,get lifePlacements(){return lifePlacements;},get lifeRevision(){return lifeRevision;},get ready(){return ready();},
     get settled(){return ready()&&[...required.keys()].every(key=>{const chunk=cache.get(key);return !chunk.root.visible||chunk.progress>=1;});}};
 }

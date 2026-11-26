@@ -4,6 +4,24 @@ import { M } from './palette.js';
 import { biomeDistance,fitsBiome } from './biomes.js';
 import { seededRandom,sampleLine,inWorld,surfaceHeight } from './world-model.js';
 import {surfaceFor,surfacePoseMatrix,rigidSurfacePoseMatrix,warpGeometryToSurface} from './world-surface.js';
+import {createLocalLife} from './local-life.js';
+
+export function localAmbience(parent,world){
+  const local=createLocalLife(parent,world);
+  // Keep the authored island's boats and balloon. A planetary world gets its
+  // life from streamed neighborhoods, not a single offscreen global diorama.
+  const legacy=world.cities?.length<=32?ambience(local.root,world):null;
+  let lastTime=NaN,frozenTime=null;
+  return {...local,update(time,options={}){
+    local.update(time,options);
+    if(!legacy||!local.root.visible)return;
+    if(options.reducedMotion){if(frozenTime===null)frozenTime=time;time=frozenTime;}else frozenTime=null;
+    if(time!==lastTime){legacy.update(time);lastTime=time;}
+  },dispose(){
+    if(legacy){const geometries=new Set();legacy.root.traverse(node=>{if(node.geometry)geometries.add(node.geometry);});geometries.forEach(geometry=>geometry.dispose());}
+    local.dispose();
+  }};
+}
 
 export function ambience(parent,world){
   const root=group(parent),random=seededRandom(`${world.seed}-life`),dummy=new THREE.Object3D();

@@ -17,7 +17,7 @@ test('complete Earth ocean closes every hemisphere below the land, with bounded 
   const shell=createSurfaceShell(world),center=new THREE.Vector3(0,-radius,0),vertex=new THREE.Vector3();
   const resources=new Set();
   for(const group of [shell.map,shell.detail]){
-    assert.equal(group.children.length,1,'no cut edge or bottom cap on a full planet');
+    assert.equal(group.children.filter(child=>child.name!=='earth-atmosphere').length,1,'no cut edge or bottom cap on a full planet');
     const mesh=group.children[0],positions=mesh.geometry.attributes.position;
     resources.add(mesh.geometry);resources.add(mesh.material);
     assert.ok(mesh.geometry.index.count/3<70000,'ocean is an efficient closed sphere');

@@ -55,7 +55,7 @@ export function compileDetailPacket(region,network){
     oceanShore:network.biomes.oceanShore?.length?clipPolygonsToBounds(network.biomes.oceanShore,bounds):[]};
   try{
     for(const island of islands)buildTerrain(root,{...local,outline:island[0]});
-    buildWorld(root,local,{terrain:false,rigidAssets:surfaceRoot});
+    buildWorld(root,local,{terrain:false,rigidAssets:surfaceRoot,animatedLife:true});
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
     // Geographic terrain needs the exact chart-to-sphere mapping. Rigid
     // assets and physical-width rails are already in surface coordinates:
@@ -80,9 +80,12 @@ export function compileDetailPacket(region,network){
       geometry.computeBoundingBox();renderBounds.union(geometry.boundingBox);
       return {position:geometry.attributes.position.array,normal:geometry.attributes.normal?.array,color:geometry.attributes.color?.array,
         index:geometry.index?.array,bvh:serializeGeometryBVH(geometry),material:{name:material.name,color:material.color.toArray(),
-          roughness:material.roughness??1,metalness:material.metalness??0,side:material.side,flatShading:true,vertexColors:material.vertexColors}};
+          roughness:material.roughness??1,metalness:material.metalness??0,side:material.side,flatShading:true,vertexColors:material.vertexColors,sceneStyle:material.userData.sceneStyle??'asset'}};
     });
-    return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
+    const lifeKinds=new Set(['sheep','tree','farmPatch','house','apartment','civic','tower','plaza']);
+    const lifePlacements=(region.placements??[]).filter(p=>lifeKinds.has(p.kind)).map(p=>({kind:p.kind,id:p.id,x:p.x,y:p.y??0,z:p.z,
+      rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1}));
+    return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,lifePlacements,renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{if(node.geometry)node.geometry.dispose();
       for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
@@ -93,4 +96,3 @@ export function compileDetailPacket(region,network){
 export function detailPacketTransfers(packet){
   return [...new Set(packet.meshes.flatMap(mesh=>[mesh.position?.buffer,mesh.normal?.buffer,mesh.color?.buffer,mesh.index?.buffer,...geometryBVHTransfers(mesh.bvh)]).filter(Boolean))];
 }
-

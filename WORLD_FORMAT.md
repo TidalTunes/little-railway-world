@@ -19,6 +19,7 @@ await railway.loadWorld({ seed: 42, cityCount: 12 });
 // Export the small authoring configuration or inspect the full generated plan.
 const configuration = railway.exportWorld();
 const plan = railway.inspectWorld();
+railway.setNight(true); // Lighting only; preserves the world and simulation.
 
 // Generate and validate without replacing the displayed scene.
 const candidate = railway.generateWorld(configuration);

@@ -101,7 +101,10 @@ test('globe map routes, cities and live markers stay registered and tangent whil
     for(let i=0;i<route.geometry.attributes.position.count;i++){
       position.fromBufferAttribute(route.geometry.attributes.position,i);surfaceCoordinates(world,position,chart);
       assert.ok(Math.abs(chart.elevation-.078*MAP_SURFACE_HEIGHT_SCALE)<.0001);
-      assert.ok(Math.abs(chart.z-440)<=.211,'route keeps its original chart alignment');
+      const offset=new THREE.Vector3().fromBufferAttribute(route.geometry.attributes.routeOffset,i);
+      assert.ok(Math.abs(offset.length()-.21)<1e-5,'route casing has a physical width independent of map projection');
+      const center=surfaceCoordinates(world,position.clone().sub(offset));
+      assert.ok(Math.abs(center.z-440)<.0001,'stroke center keeps its original chart alignment');
     }
     const city=map.root.getObjectByName('map-city-city');
     assert.ok(new THREE.Vector3().setFromMatrixPosition(city.matrix).distanceTo(surfacePoint(world,640,0,440))<1e-9);

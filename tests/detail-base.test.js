@@ -83,7 +83,9 @@ test('planar shaders lower the same borrowed surface and give it an upward light
       const shader=shaderFor(mesh.material);assert.equal(shader.uniforms.detailBaseRadius.value,0);
       assert.match(shader.vertexShader,/vec3 detailBaseNormal = vec3\(0.0, 1.0, 0.0\)/);
       assert.match(shader.vertexShader,/vec3 transformed = vec3\(position.x, detailBaseHeight, position.z\)/);
-      assert.equal(mesh.material.customProgramCacheKey(),'detail-base-plane-v1');
+      assert.ok(mesh.material.customProgramCacheKey().startsWith('detail-base-plane-v1|painted-world-'));
+      assert.ok(shader.uniforms.worldNight,'streaming fallback shares the day/night state');
+      assert.ok(shader.fragmentShader.includes('paintedPosition'),'height correction composes with surface paint');
     }
   }finally{f.dispose();}
 });

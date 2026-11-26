@@ -4,6 +4,7 @@ import {surfaceFor,surfacePoint,surfaceCoordinates,warpGeometryToSurface} from '
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {globeMapLighting} from './globe-lighting.js';
 import {oceanColor} from './ocean-colors.js';
+import {applySceneStyle,styleUniforms} from './scene-style.js';
 
 function createPlanet(world){
   const radius=world.surface.radius,detail=new THREE.Group(),map=new THREE.Group(),resources=[];
@@ -23,9 +24,35 @@ function createPlanet(world){
       }
     }
     geometry.setAttribute('color',new THREE.BufferAttribute(oceanColors,3));
-    const material=globeMapLighting(new THREE.MeshBasicMaterial({color:0xffffff,vertexColors:true,toneMapped:group===detail}),radius);
+    const material=applySceneStyle(globeMapLighting(new THREE.MeshBasicMaterial({color:0xffffff,vertexColors:true,toneMapped:group===detail}),radius),{kind:'water'});
     resources.push(geometry,material);group.add(new THREE.Mesh(geometry,material));
   }
+  // One inexpensive back-face shell draws only the narrow atmospheric limb.
+  // Interior fragments sit behind the opaque globe: no fullscreen blur, extra
+  // render target, or transparent layer over the terrain is required.
+  const atmosphereGeometry=new THREE.SphereGeometry(radius+12,128,64);
+  atmosphereGeometry.translate(0,-radius,0);
+  const atmosphereMaterial=new THREE.ShaderMaterial({name:'earth-atmosphere',
+    uniforms:{worldNight:styleUniforms.night},side:THREE.BackSide,transparent:true,
+    depthWrite:false,depthTest:true,blending:THREE.AdditiveBlending,toneMapped:false,
+    vertexShader:`varying vec3 rimNormal;
+      void main(){
+        vec4 viewPosition=modelViewMatrix*vec4(position,1.0);
+        rimNormal=normalMatrix*normal;
+        gl_Position=projectionMatrix*viewPosition;
+      }`,
+    fragmentShader:`uniform float worldNight; varying vec3 rimNormal;
+      void main(){
+        float tangent=1.0-abs(normalize(rimNormal).z);
+        float rim=pow(tangent,3.0);
+        vec3 tint=mix(vec3(0.24,0.64,0.71),vec3(0.055,0.19,0.39),worldNight);
+        gl_FragColor=vec4(tint,rim*mix(0.27,0.42,worldNight));
+        #include <colorspace_fragment>
+      }`,
+  });
+  const atmosphere=new THREE.Mesh(atmosphereGeometry,atmosphereMaterial);atmosphere.name='earth-atmosphere';
+  atmosphere.castShadow=false;atmosphere.receiveShadow=false;map.add(atmosphere);
+  resources.push(atmosphereGeometry,atmosphereMaterial);
   let disposed=false;
   return {detail,map,dispose(){if(disposed)return;disposed=true;
     detail.removeFromParent();map.removeFromParent();resources.forEach(resource=>resource.dispose());}};

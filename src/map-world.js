@@ -7,6 +7,8 @@ import {prepareMapTerrain} from './map-terrain.js';
 import {compileMapTerrainGeometry,MAP_SURFACE_HEIGHT_SCALE} from './map-terrain-geometry.js';
 import {surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent,surfaceCoordinates,SURFACE_MAX_SEGMENT} from './world-surface.js';
 import {globeMapLighting} from './globe-lighting.js';
+import {applySceneStyle} from './scene-style.js';
+import {mapSymbolMetrics,mapCityRadius,declutterMapCities,MAP_CITY_DOT_DIAMETER} from './map-symbols.js';
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 const PALETTE = {
   grass:C.grass.clone().lerp(C.trim,.10), farmland:C.farmland.clone().lerp(C.trim,.08),
@@ -46,9 +48,14 @@ function cityGlyph(city,player,material,sizeScale=1,heightScale=1){
     for(let i=0;i<values.length;i+=3){values[i]=color.r;values[i+1]=color.g;values[i+2]=color.b;}
     geometry.setAttribute('color',new THREE.BufferAttribute(values,3));return geometry;
   };
-  const halo=tinted(Array.from({length:20},(_,i)=>[Math.cos(i*Math.PI/10)*radius,Math.sin(i*Math.PI/10)*radius]),colors.trim,.094);
+  const disc=(scale,color,y)=>tinted(Array.from({length:12},(_,i)=>[Math.cos(i*Math.PI/6)*radius*scale,Math.sin(i*Math.PI/6)*radius*scale]),color,y);
+  const rim=disc(1,PALETTE.ink,.091),halo=disc(.89,colors.trim,.094);
   const body=tinted(silhouette.map(([x,z])=>[x*radius,z*radius]),colors.body,.097);
-  const geometry=mergeGeometries([halo,body],false);halo.dispose();body.dispose();
+  const geometry=mergeGeometries([rim,halo,body],false);rim.dispose();halo.dispose();body.dispose();
+  const count=geometry.attributes.position.count,dotColors=new Float32Array(count*3);
+  for(let i=0;i<count;i++)colors.body.toArray(dotColors,i*3);
+  geometry.setAttribute('cityDotColor',new THREE.BufferAttribute(dotColors,3));
+  geometry.setAttribute('cityCompactScale',new THREE.BufferAttribute(new Float32Array(count).fill(MAP_CITY_DOT_DIAMETER/(2*mapCityRadius(level))),1));
   const glyph=new THREE.Mesh(geometry,material);glyph.name=`map-city-${city.id}`;
   glyph.position.set(city.x,0,city.z);glyph.userData={cityId:city.id,ownerId:city.ownerId??null,level};
   return glyph;
@@ -66,16 +73,15 @@ export function buildMapWorld(parent,world){
   const trainColor=train=>players.has(train.state?.ownerId)?`player:${train.state.ownerId}:body`
     :LIVERY[train.state?.color]??train.state?.color??'redLight';
   const symbolScale=THREE.MathUtils.clamp(Math.sqrt((world.bounds?.width??130)*(world.bounds?.depth??95)/(130*95)),1,2.6);
-  const materials=new Map(),batches=new Map(),ownedGeometries=new Set(),cityInstances=[],instanceCities=new WeakMap();
-  const cityById=new Map((world.cities??[]).map(city=>[city.id,city]));
+  const materials=new Map(),batches=new Map(),ownedGeometries=new Set(),cityInstances=[],cityEntries=[];
   const surfacePosition=new THREE.Vector3(),surfaceCorner=new THREE.Vector3(),surfaceCenter=new THREE.Vector3();
-  const cityTransform=(city,scale,target)=>{
+  const routeUp=new THREE.Vector3(),routeForward=new THREE.Vector3(),routeRight=new THREE.Vector3();
+  const cityTransform=(city,target)=>{
     surfaceFrame(world,city.x,city.z,target);
-    for(const offset of [0,8])for(let axis=0;axis<3;axis++)target.elements[offset+axis]*=scale;
     target.setPosition(surfacePoint(world,city.x,0,city.z,surfacePosition));return target;
   };
-  const stats={cityBatches:0,trainBatches:0,updatedCars:0,staticVertices:0,farTrains:false};
-  const routeScale={value:1};
+  const stats={cityBatches:0,trainBatches:0,updatedCars:0,staticVertices:0,farTrains:false,declutterPasses:0,cityAttributeUpdates:0};
+  const routeScale={value:1},cityScale={value:1};
   let disposed=false;
   const material=(name,vertexColors=false)=>{
     if(!materials.has(name))materials.set(name,new THREE.MeshBasicMaterial({
@@ -108,6 +114,12 @@ export function buildMapWorld(parent,world){
       result.customProgramCacheKey=()=> 'map-surface-light';
       if(world.surface.complete)globeMapLighting(result,world.surface.radius);
     }
+    if(!result.userData.mapStyle){
+      result.userData.mapStyle=true;
+      const symbol=name.startsWith('route-')||name==='paper'||name.startsWith('player:')||Object.values(LIVERY).includes(name);
+      applySceneStyle(result,{kind:symbol?'map-symbol':['ocean','waterLight'].includes(name)?'water':'map',
+        role:name.endsWith('paper')?'paper':name.endsWith('ink')?'ink':'owner'});
+    }
     return result;
   };
   const add=(geometry,color,y=0,x=0,z=0,rotation=0)=>{
@@ -126,10 +138,26 @@ export function buildMapWorld(parent,world){
       const na=normal(a),nb=normal(b);
       const corners=[{x:a.x-na.x*width/2,z:a.z-na.z*width/2},{x:a.x+na.x*width/2,z:a.z+na.z*width/2},
         {x:b.x-nb.x*width/2,z:b.z-nb.z*width/2},{x:b.x+nb.x*width/2,z:b.z+nb.z*width/2}];
+      const sphericalCorners=spherical?[a,b].flatMap((center,index)=>{
+        const normal=index?nb:na;
+        surfacePoint(world,center.x,y*heightScale,center.z,surfaceCenter);
+        surfaceNormal(world,center.x,center.z,routeUp);
+        surfaceTangent(world,center.x,y*heightScale,center.z,-normal.z,0,normal.x,routeForward).normalize();
+        routeRight.crossVectors(routeUp,routeForward).normalize();
+        // The map stroke is a physical ribbon before screen-size scaling,
+        // so longitude compression never thins polar connections.
+        return [-1,1].map(sign=>{
+          surfaceCorner.copy(surfaceCenter).addScaledVector(routeRight,sign*width/2);
+          surfaceCorner.y+=world.surface.radius;
+          surfaceCorner.setLength(world.surface.radius+y*heightScale);
+          surfaceCorner.y-=world.surface.radius;
+          return surfaceCorner.clone();
+        });
+      }):null;
       for(const index of [0,2,1,1,2,3]){
         const center=index<2?a:b,corner=corners[index];
         if(spherical){
-          surfacePoint(world,corner.x,y*heightScale,corner.z,surfaceCorner);
+          surfaceCorner.copy(sphericalCorners[index]);
           surfacePoint(world,center.x,y*heightScale,center.z,surfaceCenter);
           vertices.push(surfaceCorner.x,surfaceCorner.y,surfaceCorner.z);
           offsets.push(surfaceCorner.x-surfaceCenter.x,surfaceCorner.y-surfaceCenter.y,surfaceCorner.z-surfaceCenter.z);
@@ -171,17 +199,35 @@ export function buildMapWorld(parent,world){
   for(const [color,geometries] of batches){
     const geometry=mergeGeometries(geometries,false);ownedGeometries.add(geometry);
     const mesh=new THREE.Mesh(geometry,material(color,!!geometry.attributes.color));mesh.name=`map-${color.replace('route-','')}`;staticRoot.add(mesh);
+    if(color.startsWith('route-'))mesh.frustumCulled=false;
     stats.staticVertices+=geometry.attributes.position.count;
     geometries.forEach(geometry=>geometry.dispose());
   }
   batches.clear();
 
   const cityMaterial=new THREE.MeshBasicMaterial({name:'map-city',vertexColors:true,side:THREE.DoubleSide,toneMapped:false});
+  cityMaterial.onBeforeCompile=shader=>{
+    shader.uniforms.mapCityScale=cityScale;
+    shader.vertexShader='uniform float mapCityScale; attribute float cityDetail; attribute float cityCompactScale; attribute vec3 cityDotColor;\n'+shader.vertexShader;
+    shader.vertexShader=shader.vertexShader.replace('#include <color_vertex>',`#include <color_vertex>
+      #ifdef USE_COLOR
+        vColor.xyz=mix(cityDotColor,vColor.xyz,cityDetail);
+      #endif`);
+    shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',
+      'float citySize=mapCityScale*mix(cityCompactScale,1.0,cityDetail); vec3 transformed = vec3(position.x * citySize, position.y, position.z * citySize);');
+  };
+  cityMaterial.customProgramCacheKey=()=> 'map-city-screen-size-v2';
+  applySceneStyle(cityMaterial,{kind:'map-symbol',role:'owner'});
   materials.set('city-glyph',cityMaterial);
+  const cityEntry=(city,attribute,index=0,instanced=false)=>cityEntries.push({city,attribute,index,instanced,detail:1,target:1,
+    anchor:surfacePoint(world,city.x,0,city.z),normal:spherical?surfaceNormal(world,city.x,city.z):null});
   if((world.cities?.length??0)<=32){
     for(const city of world.cities??[]){
       const glyph=cityGlyph(city,players.get(city.ownerId),cityMaterial,symbolScale,heightScale);
-      if(spherical){glyph.matrixAutoUpdate=false;cityTransform(city,1,glyph.matrix);}
+      const detailAttribute=new THREE.BufferAttribute(new Float32Array(glyph.geometry.attributes.position.count).fill(1),1);
+      detailAttribute.setUsage(THREE.DynamicDrawUsage);glyph.geometry.setAttribute('cityDetail',detailAttribute);cityEntry(city,detailAttribute);
+      if(spherical){glyph.matrixAutoUpdate=false;cityTransform(city,glyph.matrix);}
+      glyph.frustumCulled=false;
       ownedGeometries.add(glyph.geometry);cityRoot.add(glyph);
     }
   }else{
@@ -192,15 +238,53 @@ export function buildMapWorld(parent,world){
     }
     for(const [key,cities]of groups){
       const glyph=cityGlyph(cities[0],players.get(cities[0].ownerId),cityMaterial,symbolScale,heightScale);
+      const detailAttribute=new THREE.InstancedBufferAttribute(new Float32Array(cities.length).fill(1),1);
+      detailAttribute.setUsage(THREE.DynamicDrawUsage);glyph.geometry.setAttribute('cityDetail',detailAttribute);
       ownedGeometries.add(glyph.geometry);
       const mesh=new THREE.InstancedMesh(glyph.geometry,cityMaterial,cities.length);
+      // Zoom only changes a shared shader uniform. A few bounded symbol
+      // batches are cheaper than uploading every city transform each frame.
+      mesh.frustumCulled=false;
       mesh.name=`map-city-batch-${key}`;mesh.userData.instanceCityIds=cities.map(city=>city.id);
-      cities.forEach((city,index)=>{cityTransform(city,1,matrix);mesh.setMatrixAt(index,matrix);});
-      instanceCities.set(mesh,cities);
+      cities.forEach((city,index)=>{cityTransform(city,matrix);mesh.setMatrixAt(index,matrix);cityEntry(city,detailAttribute,index,true);});
       mesh.computeBoundingSphere();cityRoot.add(mesh);cityInstances.push(mesh);
     }
   }
   stats.cityBatches=cityRoot.children.length;
+  cityEntries.sort((a,b)=>(b.city.level??1)-(a.city.level??1)||String(a.city.id).localeCompare(String(b.city.id)));
+  const cityCameraPosition=new THREE.Vector3(Infinity,0,0),cityCameraQuaternion=new THREE.Quaternion();
+  const cityProjection=new THREE.Vector3(),cityNormal=new THREE.Vector3(),cityViewDirection=new THREE.Vector3();
+  let cityUnits=NaN,cityViewport=NaN,cityAspect=NaN,declutterClock=Infinity;
+  function updateCityDetails(camera,unitsPerPixel,viewportHeight,dt,reducedMotion){
+    if(!camera?.isOrthographicCamera||!cityEntries.length)return;
+    const aspect=(camera.right-camera.left)/(camera.top-camera.bottom),viewportWidth=viewportHeight*aspect;
+    declutterClock+=dt;
+    const changed=Math.abs(Math.log(unitsPerPixel/cityUnits))>.015||cityViewport!==viewportHeight||cityAspect!==aspect
+      ||camera.position.distanceToSquared(cityCameraPosition)>(unitsPerPixel*2)**2
+      ||camera.quaternion.angleTo(cityCameraQuaternion)>.003;
+    if(changed&&declutterClock>=.075){
+      root.updateWorldMatrix(true,false);camera.getWorldDirection(cityViewDirection);
+      const projected=cityEntries.map(entry=>{
+        cityProjection.copy(entry.anchor).applyMatrix4(root.matrixWorld).project(camera);
+        const front=!entry.normal||cityNormal.copy(entry.normal).transformDirection(root.matrixWorld).dot(cityViewDirection)<-.035;
+        return {id:entry.city.id,x:cityProjection.x*viewportWidth/2,y:cityProjection.y*viewportHeight/2,
+          radius:mapCityRadius(entry.city.level),previous:entry.target,
+          visible:front&&Math.abs(cityProjection.x)<1+24/viewportWidth&&Math.abs(cityProjection.y)<1+24/viewportHeight&&Math.abs(cityProjection.z)<=1};
+      });
+      const targets=declutterMapCities(projected,unitsPerPixel);
+      for(const entry of cityEntries)entry.target=targets.get(entry.city.id);
+      cityCameraPosition.copy(camera.position);cityCameraQuaternion.copy(camera.quaternion);
+      cityUnits=unitsPerPixel;cityViewport=viewportHeight;cityAspect=aspect;declutterClock=0;stats.declutterPasses++;
+    }
+    const easing=reducedMotion?1:1-Math.exp(-12*Math.min(.1,Math.max(0,dt))),dirty=new Set();
+    for(const entry of cityEntries){
+      const next=Math.abs(entry.detail-entry.target)<.002?entry.target:entry.detail+(entry.target-entry.detail)*easing;
+      if(next===entry.detail)continue;entry.detail=next;
+      if(entry.instanced)entry.attribute.setX(entry.index,next);else entry.attribute.array.fill(next);
+      dirty.add(entry.attribute);
+    }
+    for(const attribute of dirty){attribute.needsUpdate=true;stats.cityAttributeUpdates++;}
+  }
 
   // Large worlds need wider color marks, while longitudinal size and every
   // carriage centre remain unchanged so adjacent cars keep their real spacing.
@@ -208,8 +292,8 @@ export function buildMapWorld(parent,world){
   const outline=pillGeometry(1.22*trainWidthScale,2.45),body=pillGeometry(.92*trainWidthScale,2.13);
   for(const geometry of [outline,body])ownedGeometries.add(geometry);
   const position=new THREE.Vector3(),forward=new THREE.Vector3(),quaternion=new THREE.Quaternion();
-  let sourceTrains=null,instances=[],cachedOwners=[],cachedLiveries=[],cachedParts=[],farMode=false,cityScale=1;
-  const cityMatrix=new THREE.Matrix4(),markerPoint=new THREE.Vector3(),markerUp=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3(),chartPoint={},chartForward={};
+  let sourceTrains=null,instances=[],cachedOwners=[],cachedLiveries=[],cachedParts=[],farMode=false;
+  const markerPoint=new THREE.Vector3(),markerUp=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3(),chartPoint={},chartForward={};
   let markerX=NaN,markerZ=NaN;
   const addInstances=(geometry,color,count,name)=>{
     const mesh=new THREE.InstancedMesh(geometry,material(color),count);mesh.name=name;
@@ -239,24 +323,13 @@ export function buildMapWorld(parent,world){
     }
     values[start+3]=0;values[start+7]=0;values[start+11]=0;values[start+15]=1;
   };
-  function update(trains=[],{visible=true,camera,viewportHeight=900,poseBuffer=trains.poseBuffer}={}){
+  function update(trains=[],{visible=true,camera,viewportHeight=900,poseBuffer=trains.poseBuffer,dt=1/60,reducedMotion=false}={}){
     stats.updatedCars=0;
     if(disposed||!visible)return;
     const unitsPerPixel=camera?.isOrthographicCamera?(camera.top-camera.bottom)/camera.zoom/Math.max(1,viewportHeight):0;
-    routeScale.value=Math.max(1,unitsPerPixel*.65/.42);
-    const nextCityScale=Math.max(1,unitsPerPixel*4.5/(2.5*symbolScale));
-    if(Math.abs(nextCityScale-cityScale)>1e-4){
-      cityScale=nextCityScale;
-      for(const glyph of cityRoot.children){
-        if(glyph.isInstancedMesh){
-          for(let index=0;index<glyph.count;index++){
-            cityTransform(instanceCities.get(glyph)[index],cityScale,cityMatrix);glyph.setMatrixAt(index,cityMatrix);
-          }
-          glyph.instanceMatrix.needsUpdate=true;glyph.boundingSphere=null;
-        }else if(spherical)cityTransform(cityById.get(glyph.userData.cityId),cityScale,glyph.matrix);
-        else glyph.scale.set(cityScale,1,cityScale);
-      }
-    }
+    const metrics=mapSymbolMetrics(unitsPerPixel,symbolScale,trainWidthScale);
+    routeScale.value=metrics.routeScale;cityScale.value=metrics.cityScale;
+    updateCityDetails(camera,unitsPerPixel,viewportHeight,dt,reducedMotion);
     const nextFar=unitsPerPixel>.8;
     let changed=sourceTrains!==trains||cachedOwners.length!==trains.length||farMode!==nextFar;
     farMode=nextFar;stats.farTrains=farMode;
@@ -278,8 +351,8 @@ export function buildMapWorld(parent,world){
       stats.trainBatches=trainRoot.children.length;
     }
     root.updateWorldMatrix(true,false);
-    const scaleX=farMode?Math.max(1,unitsPerPixel*1.2/(1.22*trainWidthScale)):1;
-    const scaleZ=farMode?Math.max(1,unitsPerPixel*2.8/2.45):1;
+    const scaleX=farMode?metrics.trainScaleX:1;
+    const scaleZ=farMode?metrics.trainScaleZ:1;
     for(const instance of instances){
       const {train,part}=instance;let x,z,angle,active;
       if(poseBuffer&&part.userData.poseOnly){

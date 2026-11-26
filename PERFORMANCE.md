@@ -80,3 +80,11 @@ The residential-density iteration removes the Earth preset’s fixed eight-unit 
 - Shadows cover the local camera region. Far maps render directly without shadow passes or drawing into transition framebuffers; those targets are allocated ahead of time for the first zoom. Animation suspends in hidden tabs.
 
 The stress preset uses separated regional circuits to demonstrate a large moving fleet. Dense shared junctions intentionally reduce throughput through reservations; arbitrary authored networks still have finite train capacity. The prototype has no economy or pathfinding game loop. Mobile hardware, unusual display resolutions, and very dense imported city layouts require their own profiling.
+
+## Painted day and night iteration
+
+Lighting and material finishes use shared night/time uniforms and a fixed three-light rig. Windows emit within their existing material batch; there are no per-building lights, bloom passes, downloaded textures, or per-frame walks over material collections. Surface grain fades when smaller than a pixel. The night sky is one 420-point batch, and the globe rim adds one small shell only to the map.
+
+Local animals and insects use seven fixed-capacity instanced batches. Selection runs only when visible chunk membership changes or the camera travels six physical units. Animation pauses without matrix uploads. A full-cap local benchmark with 6,000 candidates measured 3.46 ms for selection and 0.046 ms median / 0.087 ms p95 for animation; these are CPU timings, not end-to-end frame rates. Coast breakers are built in workers from bounded coast-index queries, clipped to water and cached with each detail cell. The representative detail packet now has six shading groups, with a test ceiling of seven.
+
+In the browser, the 512-city / 4,096-train night overview retained all trains, with 35 draw calls, 6.8 ms CPU p95 and 9.3 ms frame interval p95 on this development machine. Timings depend on hardware, viewport, and worker activity.

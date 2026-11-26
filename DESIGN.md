@@ -2,7 +2,7 @@
 
 ## Physical scene
 
-A sunlit miniature railway. The viewport is entirely the world: no typography, labels, HUD, or gameplay controls.
+A painted miniature railway under warm afternoon light or clear blue moonlight. The viewport is entirely the world: no typography, labels, HUD, or gameplay controls.
 
 ## Composition
 
@@ -20,7 +20,7 @@ Ownership has one hue family per player, shared by city buildings, station detai
 
 Small, consistent silhouettes: two-tier pines, faceted broadleaf crowns, pitched houses, a few taller civic landmarks, compact station platforms, cacti, and double-ended railcars. Mountains use irregular ridges and secondary peaks. Their lower slopes blend into neighboring meadows and woodland, with sparse pine groups on gentle ground, exposed stone on steep faces, and snow on high upward-facing surfaces. The exact heightfield and excavated tunnel clearances remain shared by art and simulation. Details remain inside each asset's declared footprint. Passengers, benches, crop rows, hay bales, sheep, and roof trim reward a closer look without overwhelming the wide view.
 
-City development adds apartments, plazas, civic buildings, and towers as levels rise. Compact groups of buildings follow gently winding lanes and irregular branches, with seeded variation in their arrangement and forms. Small villages gather around a short lane; larger towns develop interconnected neighborhoods rather than repeated rectangular blocks. Residential frontages and small rear groups keep houses numerous, with civic buildings and towers punctuating the neighborhoods. Earth settlements use the same level-based footprints, allowing development to extend beyond the station. The map compresses that development into a single house, civic-hall, or stepped-tower silhouette, increasing its size at every level. A pale halo separates each owner-colored city mark from the railway beneath it.
+City development adds apartments, plazas, civic buildings, and towers as levels rise. Compact groups of buildings follow gently winding lanes and irregular branches, with seeded variation in their arrangement and forms. Small villages gather around a short lane; larger towns develop interconnected neighborhoods rather than repeated rectangular blocks. Residential frontages and small rear groups keep houses numerous, with civic buildings and towers punctuating the neighborhoods. Earth settlements use the same level-based footprints, allowing development to extend beyond the station. The map compresses that development into a single house, civic-hall, or stepped-tower silhouette, increasing its size at every level. A pale halo and dark rim separate each owner-colored city stamp from the railway beneath it. Ivory-cased rails and city stamps use bounded screen sizes. Dense distant groups keep higher-level stamps and collapse secondary cities into small owner dots without moving their geographic anchors.
 
 Farmland reads as cultivated countryside: nearby estates share a local bearing, while their sizes and oblique parcel divisions vary. Wheat, pasture, orchards, vegetables, and fallow earth form quiet clusters separated by meadow. Low hedges, gates, troughs, hay bales, and occasional small barns reward a closer look. Their complete footprints stay clear of towns, railways, and water; individual details remain inside each irregular field.
 
@@ -36,7 +36,7 @@ City approaches share a straight axis. Tracks leave those approaches through tan
 
 Trains follow continuous circuits through cities when the graph permits them. Each carriage follows the exact route distance, including transitions between connections. Whole-train reservations and following gaps keep traffic apart. Networks with no continuous circuit use shuttles that dwell and reverse at terminal stops. Double-ended trains reverse velocity without turning around or jumping along the track.
 
-A small boat, water ripples, birds, and a balloon provide quieter background movement. Space pauses motion; reduced-motion preferences start paused.
+Local sheep graze and step inside their reserved footprints; swallows circle above roofs, butterflies flutter over fields, and fireflies glow at night. Nearby life uses fixed-capacity instance batches independent of the total map size. Small authored worlds retain a boat and balloon. Water glints and coastal breakers animate through shared shader time. Space pauses all simulation motion; reduced-motion preferences start paused.
 
 Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions retain the globe’s curvature and simplify the art. The camera moves around the globe as the user pans, wrapping continuously across the date line; closer views orient to the local ground. Reduced-motion preferences make camera transitions immediate.
 
@@ -45,3 +45,9 @@ Selecting a train brings the camera closer and follows its movement without rota
 Scroll, pinch, and + / − move through the three views. Drag orbits the ground focus in both detailed views, including while following a train. WASD moves that focus across the surface. The fully zoomed-out map uses dragging to pan; two-finger detailed gestures rotate and pinch to zoom. Click or tap a visible train to follow it; F selects the visible train nearest the centre, and [ / ] cycle active trains. Escape, an empty click, or zooming out releases follow. Home and double-click restore the fitted overview. WASD pans in four screen-relative directions, easing into motion and braking smoothly on release. Diagonal travel has the same speed as a single direction. Blur and hidden tabs clear keyboard motion immediately; reduced-motion preferences use direct movement. Arrow keys orbit or pan, Space pauses, and R generates another seed.
 
 A JSON authoring API loads and validates layouts, but there is no editor UI or playable economy in this iteration. The canvas has a screen-reader description and a focus outline during keyboard use. Tab moves focus normally, and train selection has keyboard equivalents.
+
+## Light and surface finish
+
+The afternoon palette uses a warm directional key, cool fill, and soft shadows. Night keeps terrain readable in blue moonlight while windows and station lanterns emit amber. N fades between modes; reduced motion switches immediately. A sparse star field sits behind the world and a narrow atmospheric limb frames the planet. All lighting uses the same fixed light count; windows use shared emission shaders, never individual lights or bloom.
+
+Subtle, derivative-filtered paint grain follows physical surface positions. Water carries broken, low-contrast glints rather than a repeating tile. Rounded breaker strips are clipped to authoritative ocean masks, leaving every land reservation intact. Material styling composes with chunk reveals, globe transforms, and map glyph scaling; no texture downloads or new fullscreen effects are required.
