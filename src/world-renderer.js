@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
+import {surfaceFor,surfaceCoordinates} from './world-surface.js';
 
 export {compileDetailPacket,detailPacketTransfers,clipRailRanges} from './detail-compiler.js';
 
@@ -11,6 +12,8 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const cache=new Map(),pending=new Map(),incoming=new Map(),materials=new Map(),wanted=new Map(),required=new Map(),failures=new Map();
   const frustum=new THREE.Frustum(),projection=new THREE.Matrix4(),direction=new THREE.Vector3();
   const point=new THREE.Vector3(),box=new THREE.Box3(),targetPoint=new THREE.Vector3();
+  const surface=surfaceFor(world),ray=new THREE.Ray(),hit=new THREE.Vector3(),chart={};
+  const shell=surface?new THREE.Sphere(new THREE.Vector3(0,-surface.radius,0),surface.radius):null;
   let frame=0,disposed=false;
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
@@ -40,8 +43,11 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         if(data.color){geometry.setAttribute('color',new THREE.BufferAttribute(data.color,3));}
         // Worker already owns the expensive vertex traversal. A conservative
         // cell bound is enough for culling these material batches.
-        const b=job.packet.bounds;
-        geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3((b.minX+b.maxX)/2,maxHeight/2,(b.minZ+b.maxZ)/2),
+        const b=job.packet.bounds,renderBounds=job.packet.renderBounds;
+        if(renderBounds){
+          geometry.boundingBox=new THREE.Box3(new THREE.Vector3().fromArray(renderBounds.min),new THREE.Vector3().fromArray(renderBounds.max));
+          geometry.boundingSphere=geometry.boundingBox.getBoundingSphere(new THREE.Sphere());
+        }else geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3((b.minX+b.maxX)/2,maxHeight/2,(b.minZ+b.maxZ)/2),
           Math.hypot(b.maxX-b.minX,maxHeight+8,b.maxZ-b.minZ)/2);
         job.triangles+=(data.index?.length??data.position.length/3)/3;
         const material=materialFor(data.material),mesh=new THREE.Mesh(geometry,material.material);
@@ -58,8 +64,11 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     for(const [key,job]of incoming){
       if(job.next<job.packet.meshes.length||(uploadMesh&&job.uploaded<job.next))continue;
       const b=job.packet.bounds;
-      const chunk={key,root:job.root,bounds:new THREE.Box3(new THREE.Vector3(b.minX,-4,b.minZ),
-        new THREE.Vector3(b.maxX,maxHeight,b.maxZ)),last:frame,bytes:job.bytes,triangles:job.triangles};
+      const rendered=job.packet.renderBounds;
+      const chunk={key,root:job.root,bounds:rendered
+        ?new THREE.Box3(new THREE.Vector3().fromArray(rendered.min),new THREE.Vector3().fromArray(rendered.max))
+        :new THREE.Box3(new THREE.Vector3(b.minX,-4,b.minZ),new THREE.Vector3(b.maxX,maxHeight,b.maxZ)),
+        last:frame,bytes:job.bytes,triangles:job.triangles};
       root.add(job.root);cache.set(key,chunk);incoming.delete(key);
       stats.bytes+=job.bytes;stats.triangles+=job.triangles;stats.loadedChunks=cache.size;
     }
@@ -112,7 +121,22 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     parent.updateWorldMatrix(true,false);camera.updateMatrixWorld();projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(projection);
     coverageCamera.updateMatrixWorld();coverageCamera.getWorldDirection(direction);
     let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
-    for(const x of [-1,1])for(const y of [-1,1]){
+    if(surface){
+      let missed=false;
+      // Both the ground and tallest scenery can enter the frustum. Sample its
+      // edges and centre against the real sphere, then request chart cells.
+      for(const height of [-4,maxHeight])for(const x of [-1,0,1])for(const y of [-1,0,1]){
+        ray.origin.set(x,y,-1).unproject(coverageCamera);ray.direction.copy(direction);shell.radius=surface.radius+height;
+        if(!ray.intersectSphere(shell,hit)){missed=true;continue;}
+        surfaceCoordinates(world,hit,chart);
+        minX=Math.min(minX,chart.x);maxX=Math.max(maxX,chart.x);minZ=Math.min(minZ,chart.z);maxZ=Math.max(maxZ,chart.z);
+      }
+      if(missed){minX=extent.minX;maxX=extent.maxX;minZ=extent.minZ;maxZ=extent.maxZ;}
+      else{
+        const padding=Math.max(4,((maxX-minX)**2+(maxZ-minZ)**2)/(8*surface.radius));
+        minX-=padding;maxX+=padding;minZ-=padding;maxZ+=padding;
+      }
+    }else for(const x of [-1,1])for(const y of [-1,1]){
       point.set(x,y,0).unproject(coverageCamera);
       const t=Math.abs(direction.y)>1e-5?-point.y/direction.y:0;point.addScaledVector(direction,t);
       minX=Math.min(minX,point.x);maxX=Math.max(maxX,point.x);minZ=Math.min(minZ,point.z);maxZ=Math.max(maxZ,point.z);

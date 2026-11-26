@@ -4,7 +4,8 @@ import { C } from './palette.js';
 import { sampleLine } from './world-model.js';
 import { playerColors } from './player-palette.js';
 import {prepareMapTerrain} from './map-terrain.js';
-import {compileMapTerrainGeometry} from './map-terrain-geometry.js';
+import {compileMapTerrainGeometry,MAP_SURFACE_HEIGHT_SCALE} from './map-terrain-geometry.js';
+import {surfacePoint,surfaceFrame,surfaceCoordinates,SURFACE_MAX_SEGMENT} from './world-surface.js';
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 const PALETTE = {
   grass:C.grass.clone().lerp(C.trim,.10), farmland:C.farmland.clone().lerp(C.trim,.08),
@@ -29,7 +30,7 @@ function pillGeometry(width,length){
 
 // One symbol per settlement: a house, a civic hall, or a stepped tower.
 // Overall size changes at every level; silhouette changes only at clear tiers.
-function cityGlyph(city,player,material,sizeScale=1){
+function cityGlyph(city,player,material,sizeScale=1,heightScale=1){
   const level=THREE.MathUtils.clamp(Math.round(Number(city.level)||1),1,10),radius=(1.75+level*.12)*sizeScale;
   const silhouette=level<=3
     ?[[-.61,.48],[.61,.48],[.61,-.10],[0,-.68],[-.61,-.10]]
@@ -39,7 +40,7 @@ function cityGlyph(city,player,material,sizeScale=1){
   const colors=player?playerColors(player):{body:C.roof,trim:C.trim};
   const tinted=(points,color,y)=>{
     const indexed=shapeGeometry([points]),geometry=indexed.toNonIndexed();indexed.dispose();
-    geometry.translate(0,y,0);
+    geometry.translate(0,y*heightScale,0);
     const values=new Float32Array(geometry.attributes.position.count*3);
     for(let i=0;i<values.length;i+=3){values[i]=color.r;values[i+1]=color.g;values[i+2]=color.b;}
     geometry.setAttribute('color',new THREE.BufferAttribute(values,3));return geometry;
@@ -52,8 +53,9 @@ function cityGlyph(city,player,material,sizeScale=1){
   return glyph;
 }
 
-/** A flat, unlit drawing of the existing world, with no independent simulation. */
+/** A geographic drawing of the existing world, with no independent simulation. */
 export function buildMapWorld(parent,world){
+  const spherical=world.surface?.type==='sphere',heightScale=spherical?MAP_SURFACE_HEIGHT_SCALE:1;
   const root=new THREE.Group();root.name='map-world';parent.add(root);
   const staticRoot=new THREE.Group();staticRoot.name='map-static';root.add(staticRoot);
   const cityRoot=new THREE.Group();cityRoot.name='map-cities';root.add(cityRoot);
@@ -63,7 +65,14 @@ export function buildMapWorld(parent,world){
   const trainColor=train=>players.has(train.state?.ownerId)?`player:${train.state.ownerId}:body`
     :LIVERY[train.state?.color]??train.state?.color??'redLight';
   const symbolScale=THREE.MathUtils.clamp(Math.sqrt((world.bounds?.width??130)*(world.bounds?.depth??95)/(130*95)),1,2.6);
-  const materials=new Map(),batches=new Map(),ownedGeometries=new Set(),cityInstances=[];
+  const materials=new Map(),batches=new Map(),ownedGeometries=new Set(),cityInstances=[],instanceCities=new WeakMap();
+  const cityById=new Map((world.cities??[]).map(city=>[city.id,city]));
+  const surfacePosition=new THREE.Vector3(),surfaceCorner=new THREE.Vector3(),surfaceCenter=new THREE.Vector3();
+  const cityTransform=(city,scale,target)=>{
+    surfaceFrame(world,city.x,city.z,target);
+    for(const offset of [0,8])for(let axis=0;axis<3;axis++)target.elements[offset+axis]*=scale;
+    target.setPosition(surfacePoint(world,city.x,0,city.z,surfacePosition));return target;
+  };
   const stats={cityBatches:0,trainBatches:0,updatedCars:0,staticVertices:0,farTrains:false};
   const routeScale={value:1};
   let disposed=false;
@@ -82,6 +91,20 @@ export function buildMapWorld(parent,world){
           'vec3 transformed = vec3(position) + routeOffset * (mapRouteScale - 1.0);');
       };
       result.customProgramCacheKey=()=> 'map-route-width';
+    }
+    if(spherical&&['terrain','sand','waterLight','ocean','contour0','contour1','snow'].includes(name)&&!result.userData.surfaceShader){
+      result.userData.surfaceShader=true;
+      result.onBeforeCompile=shader=>{
+        shader.uniforms.mapSurfaceRadius={value:world.surface.radius};
+        shader.vertexShader='uniform float mapSurfaceRadius; varying float surfaceLight;\n'+shader.vertexShader;
+        shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
+          vec3 radialNormal=normalize(position+vec3(0.0,mapSurfaceRadius,0.0));
+          surfaceLight=0.52+0.52*max(0.0,dot(radialNormal,normalize(vec3(-0.45,0.82,0.35))));`);
+        shader.fragmentShader='varying float surfaceLight;\n'+shader.fragmentShader;
+        shader.fragmentShader=shader.fragmentShader.replace('#include <opaque_fragment>',
+          'outgoingLight *= surfaceLight;\n#include <opaque_fragment>');
+      };
+      result.customProgramCacheKey=()=> 'map-surface-light';
     }
     return result;
   };
@@ -102,8 +125,15 @@ export function buildMapWorld(parent,world){
       const corners=[{x:a.x-na.x*width/2,z:a.z-na.z*width/2},{x:a.x+na.x*width/2,z:a.z+na.z*width/2},
         {x:b.x-nb.x*width/2,z:b.z-nb.z*width/2},{x:b.x+nb.x*width/2,z:b.z+nb.z*width/2}];
       for(const index of [0,2,1,1,2,3]){
-        const center=index<2?a:b;vertices.push(corners[index].x,y,corners[index].z);
-        offsets.push(corners[index].x-center.x,0,corners[index].z-center.z);
+        const center=index<2?a:b,corner=corners[index];
+        if(spherical){
+          surfacePoint(world,corner.x,y*heightScale,corner.z,surfaceCorner);
+          surfacePoint(world,center.x,y*heightScale,center.z,surfaceCenter);
+          vertices.push(surfaceCorner.x,surfaceCorner.y,surfaceCorner.z);
+          offsets.push(surfaceCorner.x-surfaceCenter.x,surfaceCorner.y-surfaceCenter.y,surfaceCorner.z-surfaceCenter.z);
+        }else{
+          vertices.push(corner.x,y,corner.z);offsets.push(corner.x-center.x,0,corner.z-center.z);
+        }
       }
     }
     const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
@@ -111,8 +141,9 @@ export function buildMapWorld(parent,world){
   };
 
   const terrain=world.mapTerrain??prepareMapTerrain(world);
-  for(const {color,position,vertexColor}of terrain.meshes??compileMapTerrainGeometry(terrain)){
+  for(const {color,position,vertexColor,index}of terrain.meshes??compileMapTerrainGeometry(terrain,world)){
     const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(position,3));
+    if(index)geometry.setIndex(new THREE.BufferAttribute(index,1));
     if(vertexColor)geometry.setAttribute('color',new THREE.BufferAttribute(vertexColor,3));
     batches.set(color,[geometry]);
   }
@@ -125,7 +156,8 @@ export function buildMapWorld(parent,world){
       for(const segment of line.alignment?.segments??[{startDistance:0,endDistance:line.length,type:'arc',radius:8}]){
         const start=Math.max(range.start,segment.startDistance),end=Math.min(range.end,segment.endDistance);
         if(end<=start)continue;
-        const step=segment.type==='line'?end-start:Math.max(.4,Math.sqrt(8*(segment.radius??8)*.025));
+        const chartStep=segment.type==='line'?end-start:Math.max(.4,Math.sqrt(8*(segment.radius??8)*.025));
+        const step=spherical?Math.min(SURFACE_MAX_SEGMENT,chartStep):chartStep;
         const count=Math.max(1,Math.ceil((end-start)/step));
         for(let i=1;i<=count;i++)distances.push(start+(end-start)*i/count);
       }
@@ -146,7 +178,8 @@ export function buildMapWorld(parent,world){
   materials.set('city-glyph',cityMaterial);
   if((world.cities?.length??0)<=32){
     for(const city of world.cities??[]){
-      const glyph=cityGlyph(city,players.get(city.ownerId),cityMaterial,symbolScale);
+      const glyph=cityGlyph(city,players.get(city.ownerId),cityMaterial,symbolScale,heightScale);
+      if(spherical){glyph.matrixAutoUpdate=false;cityTransform(city,1,glyph.matrix);}
       ownedGeometries.add(glyph.geometry);cityRoot.add(glyph);
     }
   }else{
@@ -156,11 +189,12 @@ export function buildMapWorld(parent,world){
       if(!groups.has(key))groups.set(key,[]);groups.get(key).push(city);
     }
     for(const [key,cities]of groups){
-      const glyph=cityGlyph(cities[0],players.get(cities[0].ownerId),cityMaterial,symbolScale);
+      const glyph=cityGlyph(cities[0],players.get(cities[0].ownerId),cityMaterial,symbolScale,heightScale);
       ownedGeometries.add(glyph.geometry);
       const mesh=new THREE.InstancedMesh(glyph.geometry,cityMaterial,cities.length);
       mesh.name=`map-city-batch-${key}`;mesh.userData.instanceCityIds=cities.map(city=>city.id);
-      cities.forEach((city,index)=>{matrix.makeTranslation(city.x,0,city.z);mesh.setMatrixAt(index,matrix);});
+      cities.forEach((city,index)=>{cityTransform(city,1,matrix);mesh.setMatrixAt(index,matrix);});
+      instanceCities.set(mesh,cities);
       mesh.computeBoundingSphere();cityRoot.add(mesh);cityInstances.push(mesh);
     }
   }
@@ -173,7 +207,8 @@ export function buildMapWorld(parent,world){
   for(const geometry of [outline,body])ownedGeometries.add(geometry);
   const position=new THREE.Vector3(),forward=new THREE.Vector3(),quaternion=new THREE.Quaternion();
   let sourceTrains=null,instances=[],cachedOwners=[],cachedLiveries=[],cachedParts=[],farMode=false,cityScale=1;
-  const cityMatrix=new THREE.Matrix4();
+  const cityMatrix=new THREE.Matrix4(),markerFrame=new THREE.Matrix4(),markerPoint=new THREE.Vector3(),chartPoint={},chartForward={};
+  let markerX=NaN,markerZ=NaN;
   const addInstances=(geometry,color,count,name)=>{
     const mesh=new THREE.InstancedMesh(geometry,material(color),count);mesh.name=name;
     mesh.frustumCulled=false;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);trainRoot.add(mesh);return mesh;
@@ -181,10 +216,22 @@ export function buildMapWorld(parent,world){
   // Direct writes avoid a quaternion, matrix, and scene-graph walk per map car.
   const writeMatrix=(mesh,index,x,z,angle,y,active,scaleX=1,scaleZ=1)=>{
     const values=mesh.instanceMatrix.array,start=index*16,c=Math.cos(angle)*active,s=Math.sin(angle)*active;
-    values[start]=c*scaleX;values[start+1]=0;values[start+2]=-s*scaleX;values[start+3]=0;
-    values[start+4]=0;values[start+5]=active;values[start+6]=0;values[start+7]=0;
-    values[start+8]=s*scaleZ;values[start+9]=0;values[start+10]=c*scaleZ;values[start+11]=0;
-    values[start+12]=x;values[start+13]=y;values[start+14]=z;values[start+15]=1;
+    if(spherical){
+      if(x!==markerX||z!==markerZ){surfaceFrame(world,x,z,markerFrame);markerX=x;markerZ=z;}
+      const e=markerFrame.elements;surfacePoint(world,x,y*heightScale,z,markerPoint);
+      for(let axis=0;axis<3;axis++){
+        values[start+axis]=(e[axis]*c-e[8+axis]*s)*scaleX;
+        values[start+4+axis]=e[4+axis]*active;
+        values[start+8+axis]=(e[axis]*s+e[8+axis]*c)*scaleZ;
+      }
+      values[start+12]=markerPoint.x;values[start+13]=markerPoint.y;values[start+14]=markerPoint.z;
+    }else{
+      values[start]=c*scaleX;values[start+1]=0;values[start+2]=-s*scaleX;
+      values[start+4]=0;values[start+5]=active;values[start+6]=0;
+      values[start+8]=s*scaleZ;values[start+9]=0;values[start+10]=c*scaleZ;
+      values[start+12]=x;values[start+13]=y;values[start+14]=z;
+    }
+    values[start+3]=0;values[start+7]=0;values[start+11]=0;values[start+15]=1;
   };
   function update(trains=[],{visible=true,camera,viewportHeight=900,poseBuffer=trains.poseBuffer}={}){
     stats.updatedCars=0;
@@ -197,11 +244,11 @@ export function buildMapWorld(parent,world){
       for(const glyph of cityRoot.children){
         if(glyph.isInstancedMesh){
           for(let index=0;index<glyph.count;index++){
-            glyph.getMatrixAt(index,cityMatrix);cityMatrix.elements[0]=cityScale;cityMatrix.elements[10]=cityScale;
-            glyph.setMatrixAt(index,cityMatrix);
+            cityTransform(instanceCities.get(glyph)[index],cityScale,cityMatrix);glyph.setMatrixAt(index,cityMatrix);
           }
           glyph.instanceMatrix.needsUpdate=true;glyph.boundingSphere=null;
-        }else glyph.scale.set(cityScale,1,cityScale);
+        }else if(spherical)cityTransform(cityById.get(glyph.userData.cityId),cityScale,glyph.matrix);
+        else glyph.scale.set(cityScale,1,cityScale);
       }
     }
     const nextFar=unitsPerPixel>.8;
@@ -238,7 +285,11 @@ export function buildMapWorld(parent,world){
         part.getWorldPosition(position);part.getWorldQuaternion(quaternion);
         forward.set(0,0,1).applyQuaternion(quaternion).add(position);
         root.worldToLocal(position);root.worldToLocal(forward);forward.sub(position);
-        x=position.x;z=position.z;angle=Math.atan2(forward.x,forward.z);
+        if(spherical){
+          surfaceCoordinates(world,position,chartPoint);
+          surfaceCoordinates(world,forward.add(position),chartForward);
+          x=chartPoint.x;z=chartPoint.z;angle=Math.atan2(chartForward.x-x,chartForward.z-z);
+        }else{x=position.x;z=position.z;angle=Math.atan2(forward.x,forward.z);}
         active=part.visible&&train.state?.active!==false?1:0;
       }
       writeMatrix(instance.outline,instance.outlineIndex,x,z,angle,.120,active,scaleX,scaleZ);

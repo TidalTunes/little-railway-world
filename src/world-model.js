@@ -5,6 +5,7 @@ import { mountainSurfaceHeight, mountainFootprintDistance } from './mountain-sha
 import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
 import { placeFarmland } from './farmland.js';
 import {riversOf,riverBankDistance,riverCenterDistance,createHydrology} from './hydrology.js';
+import {normalizeSurface} from './world-surface.js';
 /**
  * Deterministic, renderer-independent railway world planner.
  *
@@ -631,7 +632,7 @@ export function generateWorld(input = {}, options = {}) {
   assert(Object.values(trainOwners).every(id=>playerIds.has(id)),'trainOwners references an unknown player');
   const outline=input.outline?input.outline.map(p=>[Number(p[0]),Number(p[1])]):makeOutline(bounds.width,bounds.depth);
   assert(outline.length>=3&&outline.every(p=>p.every(Number.isFinite)),'outline requires at least three finite points');
-  const world={version:2,seed,bounds,outline,geography:input.geography,camera:input.camera,players,trainOwners,traffic:structuredClone(input.traffic??{}),density:clamp(Number(input.density??1)||0,0,3),detailMode:options.detail??'full',cities,lines:[],stations:[],placements:[],cityStreets:[],junctions:[]};
+  const world={version:2,seed,bounds,outline,geography:input.geography,camera:input.camera,surface:normalizeSurface(input.surface),players,trainOwners,traffic:structuredClone(input.traffic??{}),density:clamp(Number(input.density??1)||0,0,3),detailMode:options.detail??'full',cities,lines:[],stations:[],placements:[],cityStreets:[],junctions:[]};
   assert(cities.every(c=>inWorld(world,c.x,c.z,.5)),'cities must be inside the world outline');
   const defaultRiver={points:[[-.64,.015],[-.42,-.025],[-.20,.035],[.02,.00],[.22,.075],[.43,.055],[.64,.015]]
     .map(([x,z])=>[x*bounds.width,z*bounds.depth])};
@@ -766,6 +767,7 @@ export function generateWorldRegion(network,{x=0,z=0,size=192}={}){
 export function validateWorld(world) {
   const violations=[];
   const add=(type,id,detail)=>violations.push({type,id,detail});
+  try{normalizeSurface(world.surface);}catch(error){add('surface','world',error.message);}
   const playerIds=new Set((world.players??[]).map(p=>p.id));
   try{normalizePlayers(world.players??[]);}catch(error){add('players','world',error.message);}
   for(const city of world.cities){

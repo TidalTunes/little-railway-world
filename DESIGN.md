@@ -6,7 +6,7 @@ A sunlit miniature railway. The viewport is entirely the world: no typography, l
 
 ## Composition
 
-An irregular layered terrain tile carries towns, a river, and broad coherent biomes. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places, with gently varied, blended ground colors between them. Quiet open ground makes the trains easy to follow. The default fifty-city Europe map uses a Lambert conformal conic projection to preserve local shapes across the continent; the sixteen-city showcase, classic generator, and authored layouts use the same placement rules.
+A curved, layered section of the Earth carries Europe’s towns, rivers, and broad coherent biomes. A restrained cut edge makes the spherical surface tangible. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places, with gently varied, blended ground colors between them. Quiet open ground makes the trains easy to follow. The default fifty-city Europe map uses geographic positions on a sphere, with radial elevations and local tangent frames for buildings, railways, train carriages, and cameras. The sixteen-city showcase, classic generator, and stress presets retain their planar surfaces and the same placement rules.
 
 The world has three viewing distances. The far view is a network summary: broad biome fills, water, two quiet mountain contour layers, railways, moving train marks, and one city glyph per settlement. Individual buildings, trees, farms, rocks, animals, station marks, and water strokes belong to the closer views. The middle view presents the isometric miniature. The close view looks down on individual trains and their surroundings. All three share the same geography and simulation state.
 
@@ -36,7 +36,7 @@ Trains follow continuous circuits through cities when the graph permits them. Ea
 
 A small boat, water ripples, birds, and a balloon provide quieter background movement. Space pauses motion; reduced-motion preferences start paused.
 
-Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions finish in a clear flat representation. Reduced-motion preferences make camera transitions immediate.
+Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions retain the globe’s curvature and simplify the art. The camera moves around the spherical section as the user pans; closer views orient to the local ground. Reduced-motion preferences make camera transitions immediate.
 
 ## Inspection
 

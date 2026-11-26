@@ -2,14 +2,19 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CAMERA_ZOOM,modeForZoom,shouldStopFollowing,fitZoomForSpan } from './camera-modes.js';
 import { C } from './palette.js';
+import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal } from './world-surface.js';
 
 const ease=(rate,dt,reduced)=>reduced?1:1-Math.exp(-rate*dt);
 const centerOf=train=>train.parts[Math.floor(train.parts.length/2)];
+// Map markers use the same 16× radial layer spacing as map-terrain-geometry.
+// Keep this lightweight: importing that compiler here also loads tessellation.
+const SPHERICAL_MAP_TRAIN_HEIGHT=.123*16;
+const GLOBE_MAP_TILT=.48;
 
-export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,onPause,onRegenerate,isDetailReady=()=>true}){
+export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true}){
   // Navigation keeps the user's orbit. The displayed camera can rise above it
   // for the map or train view without feeding automatic motion into OrbitControls.
-  const navigation=camera.clone();
+  const navigation=camera.clone(),chartCamera=camera.clone(),coverageChart=camera.clone(),coverageView=camera.clone();
   const controls=new OrbitControls(navigation,canvas);
   Object.assign(controls,{enableDamping:true,dampingFactor:.075,panSpeed:.7,rotateSpeed:.45,
     minZoom:CAMERA_ZOOM.min,maxZoom:CAMERA_ZOOM.max,minPolarAngle:Math.PI*.20,maxPolarAngle:Math.PI*.40});
@@ -23,12 +28,62 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   const pickMeshes=[];
   const projected=new THREE.Vector3(),pointerNDC=new THREE.Vector2(),cameraOffset=new THREE.Vector3();
   const spherical=new THREE.Spherical(),followTarget=new THREE.Vector3(),delta=new THREE.Vector3();
+  const tangentFrame=new THREE.Matrix4(),surfaceTarget=new THREE.Vector3(),surfaceOffset=new THREE.Vector3();
+  const surfaceUp=new THREE.Vector3(),viewDirection=new THREE.Vector3(),markerYaw=new THREE.Quaternion(),vertical=new THREE.Vector3(0,1,0);
+  const chartBounds=new WeakMap();
   const domState={};
   const ringGeometry=new THREE.RingGeometry(.94,1,64);ringGeometry.rotateX(-Math.PI/2);
   const ringMaterial=new THREE.MeshBasicMaterial({color:C.trim,transparent:true,opacity:.9,depthWrite:false,toneMapped:false,side:THREE.DoubleSide});
   const ring=new THREE.Mesh(ringGeometry,ringMaterial),mapRing=new THREE.Mesh(ringGeometry,ringMaterial.clone());
   ring.visible=mapRing.visible=false;scene.add(ring);mapScene.add(mapRing);
   ring.renderOrder=3;mapRing.renderOrder=10;
+
+  function constrainTarget(){
+    const world=getWorld();
+    if(!surfaceFor(world))return;
+    let bounds=chartBounds.get(world);
+    if(!bounds){
+      if(world.outline?.length){
+        const xs=world.outline.map(point=>point[0]),zs=world.outline.map(point=>point[1]);
+        bounds={left:Math.min(...xs),right:Math.max(...xs),top:Math.min(...zs),bottom:Math.max(...zs)};
+      }else if(world.bounds){
+        bounds={left:-world.bounds.width/2,right:world.bounds.width/2,top:-world.bounds.depth/2,bottom:world.bounds.depth/2};
+      }else return;
+      const margin=Math.max(8,Math.min(bounds.right-bounds.left,bounds.bottom-bounds.top)*.05);
+      bounds.left-=margin;bounds.right+=margin;bounds.top-=margin;bounds.bottom+=margin;
+      chartBounds.set(world,bounds);
+    }
+    delta.set(THREE.MathUtils.clamp(controls.target.x,bounds.left,bounds.right)-controls.target.x,0,
+      THREE.MathUtils.clamp(controls.target.z,bounds.top,bounds.bottom)-controls.target.z);
+    controls.target.add(delta);navigation.position.add(delta);
+  }
+  function buildChartCamera(destination,close,map){
+    destination.copy(navigation);
+    spherical.setFromVector3(cameraOffset.copy(navigation.position).sub(controls.target));
+    spherical.phi=THREE.MathUtils.lerp(spherical.phi,.36,close);
+    spherical.phi=THREE.MathUtils.lerp(spherical.phi,surfaceFor(getWorld())?GLOBE_MAP_TILT:.00001,map);
+    destination.position.copy(controls.target).add(cameraOffset.setFromSpherical(spherical));
+    destination.lookAt(controls.target);destination.updateMatrixWorld(true);
+    return destination;
+  }
+  function bendCamera(destination,chart){
+    destination.copy(chart);
+    const world=getWorld();
+    if(surfaceFor(world)){
+      surfaceFrame(world,controls.target.x,controls.target.z,tangentFrame);
+      surfacePoint(world,controls.target.x,controls.target.y,controls.target.z,surfaceTarget);
+      surfaceOffset.copy(chart.position).sub(controls.target).applyMatrix4(tangentFrame);
+      destination.position.copy(surfaceTarget).add(surfaceOffset);
+      destination.up.copy(chart.up).transformDirection(tangentFrame);
+      destination.lookAt(surfaceTarget);
+    }
+    destination.updateMatrixWorld(true);
+    return destination;
+  }
+  function updateCamera(){
+    buildChartCamera(chartCamera,closeBlend,blend);bendCamera(camera,chartCamera);
+    getWorldRoot()?.scale.set(1,surfaceFor(getWorld())?1:1-blend*.985,1);
+  }
 
   function flushControls(){const damping=controls.enableDamping;controls.enableDamping=false;controls.update();controls.enableDamping=damping;}
   function clearSelection(){selected=null;zoomGoal=null;}
@@ -46,17 +101,20 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     navigation.position.copy(homePosition);controls.target.copy(homeTarget);
     navigation.zoom=1;navigation.updateProjectionMatrix();controls.update();
     mode=modeForZoom(1/zoomScale);blend=mode==='map'||!isDetailReady()?1:0;closeBlend=0;ring.visible=mapRing.visible=false;
-    getWorldRoot()?.scale.set(1,1-blend*.985,1);camera.copy(navigation);camera.updateMatrixWorld(true);
+    constrainTarget();
+    if(surfaceFor(getWorld()))updateCamera();
+    else{getWorldRoot()?.scale.set(1,1-blend*.985,1);chartCamera.copy(navigation);camera.copy(navigation);camera.updateMatrixWorld(true);}
     updateDOM();
   }
   function updateDOM(){
     const values={view:mode,following:selected?.state.id??'',zoom:navigation.zoom.toFixed(3),mapBlend:blend.toFixed(3)};
     for(const key in values)if(domState[key]!==values[key])canvas.dataset[key]=domState[key]=values[key];
   }
-  function screenPosition(train,part=centerOf(train)){
-    const p=part.position.clone();
-    p.y=blend>.7 ? .3 : (p.y+.8)*(getWorldRoot()?.scale.y??1);
-    return p.project(camera);
+  function screenPosition(train,part=centerOf(train),target=projected){
+    const world=getWorld(),p=part.position;
+    if(surfaceFor(world))surfacePoint(world,p.x,blend>.7?SPHERICAL_MAP_TRAIN_HEIGHT:p.y+.8,p.z,target);
+    else{target.copy(p);target.y=blend>.7 ? .3 : (p.y+.8)*(getWorldRoot()?.scale.y??1);}
+    return target.project(camera);
   }
   function isVisible(train,part){
     if(!train.state.active)return false;
@@ -64,6 +122,10 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     if(!part.visible)return false;
     const p=screenPosition(train,part);
     if(Math.abs(p.x)>1.05||Math.abs(p.y)>1.05||p.z < -1||p.z>1)return false;
+    if(surfaceFor(getWorld())){
+      surfaceNormal(getWorld(),part.position.x,part.position.z,surfaceUp);
+      if(surfaceUp.dot(camera.getWorldDirection(viewDirection))>=0)return false;
+    }
     if(blend>.7)return true;
     raycaster.setFromCamera(pointerNDC.set(p.x,p.y),camera);
     pickMeshes.length=0;
@@ -83,7 +145,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     for(const train of getTrains()){
       if(!train.state.active)continue;
       for(const part of train.parts){
-        const p=projected.copy(part.position);p.y=blend>.7?.3:(p.y+.8)*(getWorldRoot()?.scale.y??1);p.project(camera);
+        const p=screenPosition(train,part);
         if(p.z < -1||p.z>1)continue;
         const d=Math.hypot((p.x+1)*rect.width/2+rect.left-x,(1-p.y)*rect.height/2+rect.top-y);
         if(d<limit)candidates.push({train,part,d});
@@ -111,7 +173,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   }
   function configureInput(){
     const plan=mode==='map'||mode==='close'||blend>.7;
-    controls.enableRotate=!plan&&!selected;controls.enablePan=!selected;controls.screenSpacePanning=!plan;
+    controls.enableRotate=!plan&&!selected;controls.enablePan=!selected;controls.screenSpacePanning=!plan&&!surfaceFor(getWorld());
     controls.mouseButtons.LEFT=plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
     controls.touches.TWO=THREE.TOUCH.DOLLY_PAN;
@@ -160,18 +222,22 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
         navigation.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
       }else{
         clearSelection();
-        const right=new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion),up=new THREE.Vector3(0,1,0).applyQuaternion(camera.quaternion);
+        const right=new THREE.Vector3(1,0,0).applyQuaternion(chartCamera.quaternion),up=new THREE.Vector3(0,1,0).applyQuaternion(chartCamera.quaternion);
         right.y=up.y=0;right.normalize();up.normalize();
         const amount=(navigation.top-navigation.bottom)/navigation.zoom*.045;
         const delta=(event.key==='ArrowLeft'?right.multiplyScalar(-amount):event.key==='ArrowRight'?right.multiplyScalar(amount):event.key==='ArrowUp'?up.multiplyScalar(amount):up.multiplyScalar(-amount));
         controls.target.add(delta);navigation.position.add(delta);
       }
-      controls.update();
+      controls.update();constrainTarget();
     }else handled=false;
     if(handled)event.preventDefault();
   });
   return {
-    navigation,controls,reset,
+    navigation,chartCamera,controls,reset,
+    get coverageCamera(){
+      const close=selected?1:THREE.MathUtils.smoothstep(navigation.zoom/zoomScale,1.9,2.8);
+      return bendCamera(coverageView,buildChartCamera(coverageChart,close,0));
+    },
     setScale(value){zoomScale=Math.max(1,Number(value)||1);controls.maxZoom=CAMERA_ZOOM.max*zoomScale;},
     get zoomScale(){return zoomScale;},
     get wantsDetail(){return navigation.zoom/zoomScale>.52||selected!==null;},
@@ -189,17 +255,12 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
         followTarget.copy(centerOf(selected).position);followTarget.y=.75;
         delta.copy(controls.target).lerp(followTarget,ease(7,dt,reducedMotion.matches)).sub(controls.target);controls.target.add(delta);navigation.position.add(delta);
       }
+      constrainTarget();
       blend=THREE.MathUtils.lerp(blend,mode==='map'||!isDetailReady()?1:0,ease(8,dt,reducedMotion.matches));
       if(blend<.001)blend=0;if(blend>.999)blend=1;
       const closeTarget=selected?1:THREE.MathUtils.smoothstep(navigation.zoom/zoomScale,1.9,2.8);
       closeBlend=THREE.MathUtils.lerp(closeBlend,closeTarget,ease(6,dt,reducedMotion.matches));
-      camera.copy(navigation);
-      spherical.setFromVector3(cameraOffset.copy(navigation.position).sub(controls.target));
-      spherical.phi=THREE.MathUtils.lerp(spherical.phi,.36,closeBlend);
-      spherical.phi=THREE.MathUtils.lerp(spherical.phi,.00001,blend);
-      camera.position.copy(controls.target).add(cameraOffset.setFromSpherical(spherical));
-      camera.lookAt(controls.target);camera.updateMatrixWorld(true);
-      getWorldRoot()?.scale.set(1,1-blend*.985,1);
+      updateCamera();
       hoverClock+=dt;
       if(hoverClock>.12&&lastPointer&&!lastPointer.touch&&!pointers.size&&!selected){
         hoverClock=0;hovered=pick(lastPointer.x,lastPointer.y);
@@ -210,8 +271,15 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       if(highlighted){
         const part=centerOf(highlighted);
         for(const marker of [ring,mapRing]){
-          marker.position.set(part.position.x,marker===ring ? .045 : .6,part.position.z);
-          marker.rotation.y=part.rotation.y;
+          const world=getWorld(),height=marker===ring ? .045 : surfaceFor(world)?1.6:.6;
+          if(surfaceFor(world)){
+            surfacePoint(world,part.position.x,height,part.position.z,marker.position);
+            surfaceFrame(world,part.position.x,part.position.z,tangentFrame);
+            marker.quaternion.setFromRotationMatrix(tangentFrame).multiply(markerYaw.setFromAxisAngle(vertical,part.rotation.y));
+          }else{
+            marker.position.set(part.position.x,height,part.position.z);
+            marker.rotation.set(0,part.rotation.y,0);
+          }
           marker.scale.set(1.35,1,4.65);
           marker.material.opacity=selected?.state.id===highlighted.state.id ? .95 : .48;
         }

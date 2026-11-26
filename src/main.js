@@ -10,6 +10,8 @@ import { createWorldWorker } from './world-worker-client.js';
 import { createGeometryUploader } from './geometry-uploader.js';
 import { ambience } from './ambience.js';
 import { C,color } from './palette.js';
+import {surfaceFor,surfacePoint,surfaceFrame} from './world-surface.js';
+import {createSurfaceShell} from './surface-shell.js';
 import './style.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
@@ -27,11 +29,11 @@ sun.position.set(-65,110,65);sun.castShadow=true;sun.shadow.mapSize.set(2048,204
 Object.assign(sun.shadow.camera,{left:-95,right:95,top:95,bottom:-95,near:1,far:260});
 sun.shadow.normalBias=.025;sun.shadow.bias=-.00015;sun.shadow.radius=3;
 scene.add(sun,sun.target);
-const fill=new THREE.DirectionalLight(color(.85,.035,218),.65);fill.position.set(40,30,-40);scene.add(fill);
+const fill=new THREE.DirectionalLight(color(.85,.035,218),.65);fill.position.set(40,30,-40);scene.add(fill,fill.target);
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(2000,2000),new THREE.MeshStandardMaterial({color:C.backdrop,roughness:1}));
 ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;scene.add(ground);
 
-let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,worker,pendingWorker;
+let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,worker,pendingWorker;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 let paused=reducedMotion.matches;
@@ -39,7 +41,7 @@ reducedMotion.addEventListener('change',event=>{paused=event.matches;});
 const compositor=createViewCompositor(renderer);
 const geometryUploader=createGeometryUploader(renderer);
 const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
-  getTrains:()=>trains,getWorldRoot:()=>worldRoot,
+  getTrains:()=>trains,getWorldRoot:()=>worldRoot,getWorld:()=>model,
   isDetailReady:()=>!!detail?.ready&&shaderReady,
   onPause:()=>{paused=!paused;},
   onRegenerate:()=>{
@@ -52,6 +54,7 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
 const {navigation,controls}=view;
 let frameWidth=170,frameHeight=112,time=0;
 const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3(-65,110,65);
+const lightFrame=new THREE.Matrix4(),localSun=new THREE.Vector3();
 function disposeLife(){
   if(!life)return;
   life.root.traverse(node=>node.geometry?.dispose());life.root.removeFromParent();life=null;
@@ -61,6 +64,7 @@ function fitWorld(){
   const xs=model.outline.map(p=>p[0]),zs=model.outline.map(p=>p[1]);
   const width=Math.max(...xs)-Math.min(...xs),depth=Math.max(...zs)-Math.min(...zs);
   const radius=Math.hypot(width,depth),height=Math.max(0,...model.mountains.map(m=>m.height));
+  ground.visible=!surfaceFor(model);
   view.setScale(Math.max(1,radius/410));
   controls.target.set((Math.max(...xs)+Math.min(...xs))/2,1.3,(Math.max(...zs)+Math.min(...zs))/2);
   const direction=model.camera?.northUp?new THREE.Vector3(0,125,180).normalize():cameraDirection;
@@ -91,8 +95,17 @@ function fitWorld(){
 function fitShadows(){
   const span=Math.max((camera.right-camera.left)/camera.zoom,(camera.top-camera.bottom)/camera.zoom);
   const extent=Math.min(480,Math.max(45,span*.72)),texel=extent*2/2048;
-  sun.target.position.set(Math.round(controls.target.x/texel)*texel,0,Math.round(controls.target.z/texel)*texel);
-  sun.position.copy(sun.target.position).addScaledVector(sunDirection,Math.max(1,extent/95));
+  const x=Math.round(controls.target.x/texel)*texel,z=Math.round(controls.target.z/texel)*texel;
+  if(surfaceFor(model)){
+    surfacePoint(model,x,0,z,sun.target.position);surfaceFrame(model,x,z,lightFrame);
+    localSun.copy(sunDirection).applyMatrix4(lightFrame);
+    sun.position.copy(sun.target.position).addScaledVector(localSun,Math.max(1,extent/95));
+    fill.position.set(40,30,-40).applyMatrix4(lightFrame).add(sun.target.position);fill.target.position.copy(sun.target.position);
+  }else{
+    sun.target.position.set(x,0,z);
+    sun.position.copy(sun.target.position).addScaledVector(sunDirection,Math.max(1,extent/95));
+    fill.position.set(40,30,-40);fill.target.position.set(0,0,0);
+  }
   const c=sun.shadow.camera;
   if(Math.abs(c.right-extent)>.1){Object.assign(c,{left:-extent,right:extent,top:extent,bottom:-extent,far:Math.max(260,extent*4)});c.updateProjectionMatrix();}
 }
@@ -104,25 +117,28 @@ async function loadWorld(input={}){
   const version=++loadingVersion,config=structuredClone(input);loadStarted=performance.now();
   canvas.dataset.loading='true';delete canvas.dataset.error;
   pendingWorker?.dispose();const nextWorker=createWorldWorker();pendingWorker=nextWorker;
-  let nextMap,nextRailway,nextDetail,root;
+  let nextMap,nextRailway,nextDetail,nextShell,root;
   try{
     const generated=await nextWorker.request('generate',config);
     if(version!==loadingVersion)throw new DOMException('World replaced','AbortError');
     const next=generated.world;root=new THREE.Group();
     nextMap=buildMapWorld(new THREE.Group(),next);
+    nextShell=createSurfaceShell(next);
+    if(nextShell){root.add(nextShell.detail);nextMap.root.add(nextShell.map);}
     nextRailway=makeTrains(root,next);
     nextDetail=createWorldRenderer(root,next,{requestChunk:region=>nextWorker.request('chunk',region),uploadMesh:mesh=>geometryUploader.upload(mesh)});
-    disposeLife();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
+    disposeLife();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
-    mapWorld=nextMap;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
+    mapWorld=nextMap;surfaceShell=nextShell;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
+    canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
     clearMeasurements();return model;
   }catch(error){
     if(version===loadingVersion){canvas.dataset.loading='false';pendingWorker=null;}
-    nextDetail?.dispose();nextRailway?.dispose();nextMap?.dispose();root?.removeFromParent();
+    nextShell?.dispose();nextDetail?.dispose();nextRailway?.dispose();nextMap?.dispose();root?.removeFromParent();
     nextWorker.dispose();throw error;
   }
 }
@@ -174,7 +190,7 @@ function frame(now){
     railway.update(paused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
     detail.update(camera,{mapBlend:view.wantsDetail?0:1,target:controls.target,budgetMs:2,
-      coverageCamera:view.mode==='close'?camera:navigation});
+      coverageCamera:surfaceFor(model)?view.coverageCamera:view.mode==='close'?camera:navigation});
     if(detail.ready&&!shaderReady&&!shaderJob){
       const version=loadingVersion;
       renderer.shadowMap.enabled=true;

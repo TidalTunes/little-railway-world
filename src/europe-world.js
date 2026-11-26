@@ -2,6 +2,7 @@ import cityReference from '../data/europe-cities.json' with {type:'json'};
 import geography from '../data/europe-geography.json' with {type:'json'};
 import {createEuropeRanges} from './europe-ranges.js';
 import {projectGeographic,projectGeographicHeading} from './europe-projection.js';
+import {EARTH_SURFACE_RADIUS} from './world-surface.js';
 
 /** Shared conformal coordinates; grid north is negative z, grid east positive x. */
 export function projectEurope(longitude,latitude){
@@ -96,7 +97,8 @@ export function createEuropeWorld({seed='europe-50-2025',trainCount=180}={}){
   });
   return {
     name:'Europe · 50 largest cities',seed,bounds:{...geography.bounds},outline:structuredClone(geography.outline),
-    camera:{northUp:true},density:.7,minTurnRadius:4,throatLength:1.5,cities,connections,
+    camera:{northUp:true},surface:{type:'sphere',radius:EARTH_SURFACE_RADIUS,origin:{longitude:10,latitude:52},projection:structuredClone(geography.projection)},
+    density:.7,minTurnRadius:4,throatLength:1.5,cities,connections,
     rivers:geography.rivers.flatMap(river=>river.paths.map((points,index)=>({
       id:`${river.id}-${index+1}`,name:river.name,points,smooth:false,
       width:['danube','volga','dnieper','nile'].includes(river.id)?2.1:

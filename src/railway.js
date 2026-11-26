@@ -6,6 +6,7 @@ import { sampleLine } from './world-model.js';
 import { createNetworkTraffic } from './network-traffic.js';
 import { createPlayerPalette } from './player-palette.js';
 import { bakeMaterialColors } from './color-batches.js';
+import {surfaceFor,surfacePoint,surfacePoseMatrix} from './world-surface.js';
 
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 
@@ -41,6 +42,7 @@ export function buildRailways(parent,world){
 // Carriages follow one continuous arc-length path through city connections.
 // Reversible shuttles remain available for authored networks without a circuit.
 export function makeTrains(parent,world,options={}){
+  const curved=!!surfaceFor(world);
   const traffic=options.traffic??createNetworkTraffic(world);
   const root=new THREE.Group();root.name='instanced-trains';parent.add(root);
   const palettes=new Map((world.players??[]).map(player=>[player.id,createPlayerPalette(player)]));
@@ -98,7 +100,9 @@ export function makeTrains(parent,world,options={}){
     const visible=new Map(),visibleTrains=new Set();
     for(const train of trains)for(let i=0;i<train.parts.length;i++){
       const part=train.parts[i];if(!part.visible)continue;
-      sphere.center.copy(part.position).addScaledVector(up,.8).applyMatrix4(parent.matrixWorld);
+      if(curved)surfacePoint(world,part.position.x,part.position.y+.8,part.position.z,sphere.center);
+      else sphere.center.copy(part.position).addScaledVector(up,.8);
+      sphere.center.applyMatrix4(parent.matrixWorld);
       if(camera&&!frustum.intersectsSphere(sphere))continue;
       const cab=i===0||i===train.parts.length-1,key=`${train.state.ownerId??train.state.color}:${cab?1:0}`;
       if(!visible.has(key))visible.set(key,{train,cab,cars:[]});visible.get(key).cars.push({train,part});stats.visibleCars++;visibleTrains.add(train.state.id);
@@ -117,7 +121,8 @@ export function makeTrains(parent,world,options={}){
       }
       for(let index=0;index<entry.cars.length;index++){
         const {train,part}=entry.cars[index];position.copy(part.position);quaternion.setFromAxisAngle(up,part.rotation.y);
-        matrix.compose(position,quaternion,unit);
+        if(curved)surfacePoseMatrix(world,position.x,position.y,position.z,part.rotation.y,matrix);
+        else matrix.compose(position,quaternion,unit);
         for(const mesh of batch.meshes){mesh.setMatrixAt(index,matrix);mesh.userData.instanceTrainIds[index]=train.state.id;}
       }
       for(const mesh of batch.meshes){

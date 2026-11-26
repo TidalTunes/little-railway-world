@@ -17,7 +17,7 @@ self.onmessage=({data:{id,type,payload}})=>{
     if(type==='generate'){
       world=generateWorld(payload,{detail:'network'});
       for(const mountain of world.mountains)if(mountain.range)mountain.mapContours=createMountainContours(mountain);
-      world.mapTerrain={meshes:compileMapTerrainGeometry(prepareMapTerrain(world))};
+      world.mapTerrain={meshes:compileMapTerrainGeometry(prepareMapTerrain(world),world)};
       const violations=validateWorld(world);
       if(violations.length)throw new Error(`Invalid world: ${violations[0].detail??violations[0].type}`);
       result={world,milliseconds:performance.now()-start};

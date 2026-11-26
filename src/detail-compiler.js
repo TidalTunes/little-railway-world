@@ -6,6 +6,8 @@ import { consolidate } from './geometry.js';
 import { bakeMaterialColors } from './color-batches.js';
 import {serializeGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
 import {indexGeometryExact,geometryAttributeBytes} from './index-geometry.js';
+import {warpGeometryToSurface,SURFACE_MAX_SEGMENT} from './world-surface.js';
+import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 
 function segmentInterval(a,b,bounds){
   let lo=0,hi=1;
@@ -58,16 +60,23 @@ export function compileDetailPacket(region,network){
     root.traverse(node=>{for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
     bakeMaterialColors(consolidate(root));
     root.userData.ownedMaterials.forEach(material=>ownedMaterials.add(material));
+    const renderBounds=new THREE.Box3();
     const meshes=root.children.map(mesh=>{
+      if(network.surface?.type==='sphere'){
+        const chartGeometry=mesh.geometry;
+        mesh.geometry=tessellateSurfaceGeometry(chartGeometry,SURFACE_MAX_SEGMENT);
+        chartGeometry.dispose();warpGeometryToSurface(mesh.geometry,network);
+      }
       const original=mesh.geometry,indexed=indexGeometryExact(original);
       if(geometryAttributeBytes(indexed)<geometryAttributeBytes(original)){mesh.geometry=indexed;original.dispose();}
       else indexed.dispose();
       const geometry=mesh.geometry,material=mesh.material;
+      geometry.computeBoundingBox();renderBounds.union(geometry.boundingBox);
       return {position:geometry.attributes.position.array,normal:geometry.attributes.normal?.array,color:geometry.attributes.color?.array,
         index:geometry.index?.array,bvh:serializeGeometryBVH(geometry),material:{name:material.name,color:material.color.toArray(),
           roughness:material.roughness??1,metalness:material.metalness??0,side:material.side,flatShading:true,vertexColors:material.vertexColors}};
     });
-    return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes};
+    return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
     root.traverse(node=>{if(node.geometry)node.geometry.dispose();
       for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
