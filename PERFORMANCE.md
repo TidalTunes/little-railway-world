@@ -81,7 +81,7 @@ of movement or an actual change to nearby source records. Distant chunk
 publications retain the existing matrices. Camera and movement rays use local
 mesh bounds and the existing worker-built BVHs, with a cached local mesh list.
 Player movement uses bounded 120 Hz physics steps; idle frames need only the
-camera obstruction ray. The sky adds one fullscreen triangle.
+camera obstruction ray. Character rendering interpolates between the last two physical poses, including across the globe’s date line, with at most one 8.33 ms physics tick of visual delay. The camera follows that same rendered position; its elevation eases over small steps and only its obstruction distance retracts or recovers. Position and aim always share one focus. This removes the previous mismatch between a damped camera and a stepped look target. A deterministic flat-ground sprint probe at 90/144 Hz and irregular frame intervals previously produced 2.4–3.4 pixels of horizon jitter at 1080p; after the fix, pitch remains constant to floating-point precision. This isolates camera motion, not browser frame-time variation. Real .10-unit sleeper height changes retain accurate foot contact without pitching the scene. The sky adds one fullscreen triangle.
 
 The dense vegetation planner measured roughly 27 ms for the initial hidden
 Westhaven build and 9–11 ms when crossing a five-unit refresh boundary. Ordinary

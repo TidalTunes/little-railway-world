@@ -16,7 +16,7 @@ import {surfaceFor,surfacePoint,surfaceFrame,surfaceChartCoordinates,surfaceDisp
 import {createSurfaceShell} from './surface-shell.js';
 import {createDaylight,styleUniforms} from './scene-style.js';
 import {createNightSky} from './night-sky.js';
-import {createWalkingPlayer,WALKING} from './walking-player.js';
+import {createWalkingPlayer} from './walking-player.js';
 import {createWalkingDetail} from './walking-detail.js';
 import {createWalkingInput} from './walking-input.js';
 import {createWalkingSky} from './walking-sky.js';
@@ -76,7 +76,7 @@ const {navigation,controls}=view;
 const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking});
 const transitionFocus=new THREE.Vector3();
 const smoothStep=(a,b,value)=>{const t=THREE.MathUtils.clamp((value-a)/(b-a),0,1);return t*t*(3-2*t);};
-function walkingTarget(){return surfacePoint(model,walker.position.x,walker.position.y+WALKING.cameraHeight,walker.position.z,new THREE.Vector3());}
+function walkingTarget(){return walker.cameraTarget.clone();}
 function transitionSphere(){const surface=surfaceFor(model);return surface?{center:new THREE.Vector3(0,-surface.radius,0),radius:surface.radius}:undefined;}
 function displayedCamera(){return characterTransition.active?characterTransition.camera:walkingMode?walker.camera:camera;}
 function displayedTarget(){
@@ -348,7 +348,7 @@ function frame(now){
         .catch(error=>{if(version===loadingVersion){shaderJob=null;reportError(error);}});
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
-    const renderFocus=groundLayer?walker.position:view.renderTarget;
+    const renderFocus=groundLayer?walker.renderPosition:view.renderTarget;
     clockHands.update(time,{focus:renderFocus,placements:detail.placements,revision:detail.placementRevision,
       visible:blend<.999,reducedMotion:reducedMotion.matches});
     detail.updateVisibility(activeCamera,{dt,reveal:shaderReady&&blend<.999,reducedMotion:reducedMotion.matches||entryFrame});
@@ -364,7 +364,7 @@ function frame(now){
     walkingSunDirection.subVectors(sun.position,sun.target.position).normalize();
     walkingSky.update(activeCamera,{visible:walkingWeight>.001,strength:walkingWeight,night:daylight.night,sunDirection:walkingSunDirection,horizonColor:scene.background});
     mapWorld.update(trains,{visible:blend>.001,camera,viewportHeight:innerHeight,poseBuffer:railway.poseBuffer,dt,reducedMotion:reducedMotion.matches});
-    characterMarker.update({position:walker.position,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
+    characterMarker.update({position:walker.renderPosition,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
       walking:walkingMode,walkingWeight,viewportHeight:innerHeight});
     // Keep the figure where it can be read; its fixed-size locator represents
     // the same position once the figure becomes subpixel geometry.

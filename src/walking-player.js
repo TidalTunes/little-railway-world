@@ -10,6 +10,7 @@ export const WALKING=Object.freeze({height:PERSON_HEIGHT,radius:PERSON_RADIUS,sp
   stepHeight:.32,maxSlope:.78,cameraDistance:2.85,cameraHeight:.50,spawnRailClearance:4.5,fov:54,near:.045,far:140});
 const solids=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
 const tau=Math.PI*2,clamp=THREE.MathUtils.clamp;
+const physicsStep=1/120;
 const swingDuration=.58;
 const ease=t=>t*t*(3-2*t);
 const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
@@ -40,20 +41,21 @@ function traveller(parent){
   for(const side of [-1,1])part(body,'eye',side*.034,.603,.100,.014,.018,.015,M.window);
   const arms=[],legs=[];
   for(const side of [-1,1]){
-    const arm=new THREE.Group();arm.name=side<0?'left-arm':'right-arm';arm.position.set(side*.146,.48,0);arm.rotation.order='YXZ';body.add(arm);arms.push(arm);
+    // The figure faces +Z, so its anatomical right is -X.
+    const arm=new THREE.Group();arm.name=side<0?'right-arm':'left-arm';arm.position.set(side*.146,.48,0);arm.rotation.order='YXZ';body.add(arm);arms.push(arm);
     part(arm,'sleeve',0,-.06,0,.066,.15,.10,M.teal);
     part(arm,'mitten',0,-.145,.008,.045,.045,.046,M.peach,sphere);
-    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.055,.29,0);root.add(leg);legs.push(leg);
+    const leg=new THREE.Group();leg.name=side<0?'right-leg':'left-leg';leg.position.set(side*.055,.29,0);root.add(leg);legs.push(leg);
     part(leg,'trousers',0,-.14,0,.075,.30,.10,M.roofBlue);
     part(leg,'boot',0,-.285,.015,.09,.08,.13,M.timber);
   }
-  const axe=new THREE.Group();axe.name='traveller-axe';axe.position.set(0,-.145,.008);axe.scale.setScalar(.82);arms[1].add(axe);
+  const rightArm=arms[0],axe=new THREE.Group();axe.name='traveller-axe';axe.position.set(0,-.145,.008);axe.scale.setScalar(.82);rightArm.add(axe);
   part(axe,'axe-handle',0,-.105,0,.037,.33,.041,M.timber);
   part(axe,'axe-head',0,-.225,0,1,1,1,M.rail,blade);
   const shadowMaterial=new THREE.MeshBasicMaterial({color:0x173c37,transparent:true,opacity:.16,depthWrite:false});
   const shadowGeometry=new THREE.CircleGeometry(.18,16);geometries.push(shadowGeometry);
   const shadow=new THREE.Mesh(shadowGeometry,shadowMaterial);shadow.matrixAutoUpdate=false;shadow.name='traveller-contact-shadow';parent.add(shadow);
-  return{root,body,arms,legs,axe,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
+  return{root,body,arms,legs,rightArm,axe,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
 }
 
 /** Render-space rays and physical surface offsets agree with the shared world
@@ -62,14 +64,15 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   const root=new THREE.Group();root.name='walking-player';root.visible=false;parent.add(root);
   const art=traveller(root),camera=new THREE.PerspectiveCamera(WALKING.fov,1,WALKING.near,WALKING.far);
   camera.name='walking-camera';
-  const position={x:0,y:0,z:0},velocity={x:0,y:0,z:0},matrix=new THREE.Matrix4(),frame=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
+  const position={x:0,y:0,z:0},previousPosition={x:0,y:0,z:0},renderPosition={x:0,y:0,z:0},velocity={x:0,y:0,z:0},matrix=new THREE.Matrix4(),frame=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
   const up=new THREE.Vector3(),groundPoint=new THREE.Vector3(),target=new THREE.Vector3(),desired=new THREE.Vector3(),direction=new THREE.Vector3();
   const forwardVector=new THREE.Vector3(),rightVector=new THREE.Vector3(),ray=new THREE.Raycaster(),hits=[];ray.firstHitOnly=true;
-  const collisionDelta={},stepPoint={},samplePoint={},moveOrigin={},groundTarget=new THREE.Vector3();
+  const collisionDelta={},stepPoint={},samplePoint={},renderOrigin={},renderDelta={},groundTarget=new THREE.Vector3();
   const routeTree=polylineTree(world.lines??[]),railA={},railB={};
   const meshCenter=new THREE.Vector3(),meshSphere=new THREE.Sphere();
   let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0,runBlend=0,poseSpeed=0,swingTime=swingDuration,swingDown=false;
-  let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0;
+  let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0,previousFloorHeight=0,renderFloorHeight=0;
+  let cameraElevation=0,cameraArm=WALKING.cameraDistance;
   const stats={steps:0,swings:0,blocked:0,raycasts:0,obstacles:0,meshes:0,meshSelections:0};
 
   function refreshScene(force=false){
@@ -197,8 +200,8 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
 
   function setPose(dt,speed,travelled=0){
     heading+=wrap(bodyTurn-heading)*Math.min(1,dt*15);
-    const angle=chartHeadingForSurface(world,position.x,position.z,heading);
-    rigidSurfacePoseMatrix(world,position.x,position.y,position.z,angle,matrix);
+    const angle=chartHeadingForSurface(world,renderPosition.x,renderPosition.z,heading);
+    rigidSurfacePoseMatrix(world,renderPosition.x,renderPosition.y,renderPosition.z,angle,matrix);
     matrix.decompose(art.root.position,art.root.quaternion,art.root.scale);
     const moving=clamp(speed/.7,0,1),running=THREE.MathUtils.smoothstep(speed,WALKING.speed*.97,WALKING.sprintSpeed*.96);
     runBlend+=(running-runBlend)*(dt>0?1-Math.exp(-12*dt):1);
@@ -218,40 +221,59 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       // simple step keeps the solid feet above the shared supporting surface.
       leg.position.y=-.035+.325*Math.cos(angle)+(Math.sin(angle)>0?.08:.05)*Math.abs(Math.sin(angle))+lift;
       art.arms[side].rotation.y=0;art.arms[side].position.z=0;
-      art.arms[side].rotation.x=grounded?-Math.sin(phase)*(side===0?.24:.10)*moving:-.2;
-      art.arms[side].rotation.z=side===0?-.06:.10;
+      art.arms[side].rotation.x=grounded?-Math.sin(phase)*(side===0?.10:.24)*moving:-.2;
+      art.arms[side].rotation.z=side===0?-.10:.06;
     }
+    art.axe.rotation.y=0;
     if(swingTime<swingDuration){
       // Wind to the right, sweep across the chest, then return to the side.
       // The arm's yaw carries the tool horizontally; pitch never lifts it
       // overhead. A small forward shoulder shift clears the front of the coat.
       const t=swingTime/swingDuration;
       let weight,yaw;
-      if(t<.25){weight=ease(t/.25);yaw=.95*weight;}
-      else if(t<.65){weight=1;yaw=THREE.MathUtils.lerp(.95,-1.15,ease((t-.25)/.40));}
-      else{weight=1-ease((t-.65)/.35);yaw=-1.15*weight;}
-      art.arms[1].rotation.set(-1.27*weight,yaw,.10*(1-weight));
-      art.arms[1].position.z=.075*weight;
+      if(t<.25){weight=ease(t/.25);yaw=-.95*weight;}
+      else if(t<.65){weight=1;yaw=THREE.MathUtils.lerp(-.95,1.15,ease((t-.25)/.40));}
+      else{weight=1-ease((t-.65)/.35);yaw=1.15*weight;}
+      art.rightArm.rotation.set(-1.27*weight,yaw,-.10*(1-weight));
+      art.rightArm.position.z=.075*weight;
+      // Turn the grip around the handle so the cutting edge leads the sweep.
+      // Without this quarter turn, pitching the arm points the blade skyward.
+      art.axe.rotation.y=Math.PI/2*weight;
       art.body.rotation.y=yaw*.08;
     }
-    rigidSurfacePoseMatrix(world,position.x,Math.min(position.y,floorHeight)+.036,position.z,angle,matrix);
+    rigidSurfacePoseMatrix(world,renderPosition.x,Math.min(renderPosition.y,renderFloorHeight)+.036,renderPosition.z,angle,matrix);
     art.shadow.matrix.copy(matrix).multiply(shadowTilt);art.shadow.matrixWorldNeedsUpdate=true;
-    art.shadow.material.opacity=.16/(1+Math.max(0,position.y-floorHeight)*1.6);
+    art.shadow.material.opacity=.16/(1+Math.max(0,renderPosition.y-renderFloorHeight)*1.6);
   }
 
   function updateCamera(dt=0,snap=false){
-    surfaceFrame(world,position.x,position.z,frame);const e=frame.elements;
+    surfaceFrame(world,renderPosition.x,renderPosition.z,frame);const e=frame.elements;
     up.set(e[4],e[5],e[6]);rightVector.set(e[0],e[1],e[2]);forwardVector.set(e[8],e[9],e[10]);
-    target.copy(surfacePoint(world,position.x,position.y+WALKING.cameraHeight,position.z,groundTarget));
+    // Feet still follow every curb and sleeper. Only the viewing focus eases
+    // those small height changes; camera position and aim share that same focus.
+    cameraElevation=snap||dt<=0?renderPosition.y:THREE.MathUtils.lerp(cameraElevation,renderPosition.y,1-Math.exp(-14*dt));
+    target.copy(surfacePoint(world,renderPosition.x,cameraElevation+WALKING.cameraHeight,renderPosition.z,groundTarget));
     const distance=WALKING.cameraDistance,horizontal=Math.cos(pitch)*distance;
     desired.copy(target).addScaledVector(rightVector,-Math.sin(orbit)*horizontal).addScaledVector(forwardVector,-Math.cos(orbit)*horizontal).addScaledVector(up,Math.sin(pitch)*distance);
     direction.subVectors(desired,target);const length=direction.length();direction.divideScalar(length);
     const hit=cast(target,direction,length+.14);
-    if(hit)desired.copy(target).addScaledVector(direction,Math.max(.32,hit.distance-.18));
-    // Collision retracts instantly; outward movement is damped so a door jamb
-    // cannot jerk the camera away from the traveller on the next frame.
-    if(snap||hit||dt<=0)camera.position.copy(desired);else camera.position.lerp(desired,1-Math.exp(-15*dt));
+    const allowed=hit?Math.max(.32,hit.distance-.18):length;
+    // Only the obstruction arm changes length. Damping a camera's world
+    // position while aiming at an undamped target makes the entire world pitch
+    // on every physics step. New obstacles retract immediately; recovery eases.
+    cameraArm=snap||dt<=0||allowed<cameraArm?allowed:THREE.MathUtils.lerp(cameraArm,allowed,1-Math.exp(-15*dt));
+    camera.position.copy(target).addScaledVector(direction,cameraArm);
     camera.up.copy(up);camera.lookAt(target);camera.updateMatrixWorld(true);
+  }
+
+  function interpolatePosition(){
+    const alpha=clamp(accumulator/physicsStep,0,1);
+    // Physical surface offsets interpolate across the globe's date line as
+    // well as on the island. Chart-coordinate lerp would cross the whole map.
+    surfaceDisplacement(world,previousPosition,position,renderDelta);
+    surfaceOffset(world,previousPosition.x,previousPosition.z,renderDelta.x*alpha,renderDelta.z*alpha,renderPosition);
+    renderPosition.y=THREE.MathUtils.lerp(previousPosition.y,position.y,alpha);
+    renderFloorHeight=THREE.MathUtils.lerp(previousFloorHeight,floorHeight,alpha);
   }
 
   function blockedRay(next,height){
@@ -290,15 +312,15 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     if(length>1){forward/=length;right/=length;}
     const speed=input.sprint?WALKING.sprintSpeed:WALKING.speed;
     const x=(Math.sin(orbit)*forward-Math.cos(orbit)*right)*speed,z=(Math.cos(orbit)*forward+Math.sin(orbit)*right)*speed;
-    accumulator+=dt;let travelled=0;
-    while(accumulator>=1/120-1e-12){
-      const step=1/120;accumulator-=step;stats.steps++;
+    accumulator+=dt;renderOrigin.x=renderPosition.x;renderOrigin.z=renderPosition.z;
+    while(accumulator>=physicsStep-1e-12){
+      const step=physicsStep;accumulator-=step;stats.steps++;
+      Object.assign(previousPosition,position);previousFloorHeight=floorHeight;
       const damp=1-Math.exp(-18*step);velocity.x+=(x-velocity.x)*damp;velocity.z+=(z-velocity.z)*damp;
       const dx=velocity.x*step,dz=velocity.z*step;
       if(Math.hypot(dx,dz)>.000001){
-        moveOrigin.x=position.x;moveOrigin.z=position.z;
         if(!move(dx,dz,step)){if(Math.abs(dx)>1e-8)move(dx,0,step);if(Math.abs(dz)>1e-8)move(0,dz,step);}
-        bodyTurn=Math.atan2(velocity.x,velocity.z);travelled+=surfaceDistance(world,moveOrigin,position);
+        bodyTurn=Math.atan2(velocity.x,velocity.z);
       }
       if(!grounded){
         velocity.y-=WALKING.gravity*step;position.y+=velocity.y*step;
@@ -307,19 +329,21 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
         if(position.y<=floor.height+.035&&velocity.y<=0){position.y=floor.height+.035;velocity.y=0;grounded=true;}
       }
     }
-    const actualSpeed=dt>0?travelled/dt:0;
+    interpolatePosition();
+    const travelled=surfaceDistance(world,renderOrigin,renderPosition),actualSpeed=dt>0?travelled/dt:0;
     poseSpeed+=(actualSpeed-poseSpeed)*(1-Math.exp(-24*dt));
     setPose(dt,poseSpeed,travelled);updateCamera(dt);
   }
 
-  return{root,camera,position,velocity,stats,prepareSpawn,update,
+  return{root,camera,position,renderPosition,cameraTarget:target,velocity,stats,prepareSpawn,update,
     get swinging(){return swingTime<swingDuration;},get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get pitch(){return pitch;},
     enter(focus,initialHeading=0,{respawn=false}={}){
       if(disposed)return false;
       if(initialized&&!respawn){active=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;}
       const spawn=prepareSpawn(focus);if(!spawn)return false;
       Object.assign(position,spawn);velocity.x=velocity.y=velocity.z=0;heading=orbit=bodyTurn=Number.isFinite(initialHeading)?initialHeading:0;
-      floorHeight=spawn.y-.035;
+      Object.assign(previousPosition,spawn);Object.assign(renderPosition,spawn);
+      floorHeight=previousFloorHeight=renderFloorHeight=spawn.y-.035;
       pitch=Math.PI/10;accumulator=0;jumpDown=false;poseSpeed=runBlend=gait=0;swingTime=swingDuration;swingDown=false;grounded=true;active=initialized=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;
     },
     exit(){active=false;root.visible=false;poseSpeed=runBlend=0;swingTime=swingDuration;swingDown=false;setPose(0,0);velocity.x=velocity.y=velocity.z=0;jumpDown=false;return{...position};},

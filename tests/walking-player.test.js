@@ -156,17 +156,18 @@ test('axe sweeps horizontally across the body while remaining attached to its ha
   const arm=player.root.getObjectByName('right-arm'),axe=player.root.getObjectByName('traveller-axe');
   const handle=player.root.getObjectByName('axe-handle'),blade=player.root.getObjectByName('axe-head');
   assert.equal(axe.parent,arm);assert.equal(handle.parent,axe);assert.equal(blade.parent,axe);
+  assert.ok(arm.position.x<0,'a figure facing +Z carries the axe on its anatomical right, -X');
   const original=structuredClone(player.position),grip=axe.position.clone(),attachment=blade.position.clone();
   player.update(1/120,{swing:true});assert.equal(player.swinging,true);
-  let rightmost=-Infinity,leftmost=Infinity,highest=-Infinity;const point=new Vector3();
+  let rightmost=Infinity,leftmost=-Infinity,highest=-Infinity;const point=new Vector3();
   for(let i=0;i<90;i++){
     player.update(1/120,{swing:true});
     player.root.updateMatrixWorld(true);blade.getWorldPosition(point);
-    rightmost=Math.max(rightmost,point.x);leftmost=Math.min(leftmost,point.x);
+    rightmost=Math.min(rightmost,point.x);leftmost=Math.max(leftmost,point.x);
     highest=Math.max(highest,new Box3().setFromObject(blade,true).max.y);
     assert.ok(axe.position.equals(grip)&&blade.position.equals(attachment),'the axe is a rigid assembly through the whole arc');
   }
-  assert.ok(rightmost>.35&&leftmost<-.12,'the axe head crosses from the right to the left of the body');
+  assert.ok(rightmost<-.35&&leftmost>.12,'the axe head crosses from the right to the left of the body');
   assert.ok(highest<.60,'the complete blade stays below the face rather than rising overhead');assert.equal(player.swinging,false);assert.ok(Math.abs(arm.rotation.x)<1e-8);
   assert.deepEqual(player.position,original,'a cosmetic swing does not move the player');
   run(player,1,{swing:true});assert.equal(player.swinging,false,'a held action cannot repeat itself');
@@ -174,6 +175,23 @@ test('axe sweeps horizontally across the body while remaining attached to its ha
   player.exit();assert.equal(player.swinging,false);player.enter({x:0,z:0});assert.equal(player.swinging,false);
   player.update(1/60,{swing:true});assert.equal(player.swinging,true);
   player.dispose();assert.equal(player.swinging,false);
+});
+
+test('the axe cutting edge leads the across-body stroke instead of pointing upward or hitting broadside',()=>{
+  const player=createWalkingPlayer(new Group(),flat());player.enter({x:0,z:0});player.update(0,{swing:true});
+  const axe=player.root.getObjectByName('traveller-axe'),blade=player.root.getObjectByName('axe-head');
+  const previous=new Vector3(),point=new Vector3(),motion=new Vector3(),edge=new Vector3();
+  for(let i=1;i<=80;i++){
+    player.update(1/240,{});player.root.updateMatrixWorld(true);blade.getWorldPosition(point);
+    const swingFraction=(i/240)/.58;
+    if(swingFraction>.28&&swingFraction<.56){
+      motion.subVectors(point,previous).normalize();edge.set(0,0,1).transformDirection(axe.matrixWorld);
+      assert.ok(edge.dot(motion)>.96,'the sharp edge points along the travelling head throughout the cutting stroke');
+      assert.ok(Math.abs(edge.y)<.01,'the blade cuts across at waist height');
+    }
+    previous.copy(point);
+  }
+  player.dispose();
 });
 
 test('swing timing is independent of frame rate and does not block walking or jumping',()=>{
