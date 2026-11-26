@@ -95,7 +95,7 @@ test('destination coverage camera is ready before detail visibility and never ch
   const f=fixture(t,{ready:false}),{view}=f;
   const movement=new THREE.Vector3(-450,0,300);view.controls.target.add(movement);view.navigation.position.add(movement);
   view.navigation.zoom=8;view.navigation.updateProjectionMatrix();f.update();
-  assert.equal(view.mode,'world');assert.equal(view.blend,1);
+  assert.equal(view.mode,'map');assert.equal(view.blend,1);assert.equal(f.camera.zoom,8*.78);
   const position=f.camera.position.clone(),quaternion=f.camera.quaternion.clone();
   const coverage=view.coverageCamera,normal=surfaceNormal(f.world,-450,300);
   assert.ok(localViewAngle(coverage,normal)>.8,'world detail is requested at the destination orbit, not the temporary map angle');
@@ -104,7 +104,7 @@ test('destination coverage camera is ready before detail visibility and never ch
   const localAngle=localViewAngle(coverage,normal);
   view.navigation.zoom=32;view.navigation.updateProjectionMatrix();
   assert.ok(Math.abs(localViewAngle(view.coverageCamera,normal)-localAngle)<1e-8,'coverage retains the same orbit at close zoom');
-  assert.equal(view.coverageCamera.zoom,32,'coverage zoom updates before the next animation frame');
+  assert.equal(view.coverageCamera.zoom,8*.78,'a fast close jump still prepares the widest detailed footprint');
 });
 
 test('chart panning and bounds remain finite far from the sphere origin, and replacement planar worlds regain flattening',t=>{
@@ -156,6 +156,7 @@ test('spherical coverage requests the destination chart cells before the display
   assert.ok(requests.length>0&&requests.length<=2);
   assert.ok(requests.some(request=>Math.abs(request.x-720)<=48&&Math.abs(request.z+320)<=48),
     'the nearest requested cell owns the chart-space destination, not its bent world x/z');
-  assert.ok(renderer.stats.requiredChunks<=4,'close detail must stay local on the sphere');
+  assert.ok(renderer.stats.requiredChunks>4&&renderer.stats.requiredChunks<=40,
+    `entry coverage prepares a bounded region before a close jump (${renderer.stats.requiredChunks} cells)`);
   assert.equal(renderer.stats.coverageLimited,false);
 });

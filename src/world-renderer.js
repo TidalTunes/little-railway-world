@@ -1,20 +1,23 @@
 import * as THREE from 'three';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
-import {surfaceFor,surfaceCoordinates} from './world-surface.js';
+import {surfaceFor,surfaceCoordinates,surfacePoint} from './world-surface.js';
 
 export {compileDetailPacket,detailPacketTransfers,clipRailRanges} from './detail-compiler.js';
 
 /** Bounded main-thread GPU cache; expensive geometry is supplied by a worker. */
-export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunks=48,maxVisibleChunks=36,maxPending=2,maxBytes=128*1024*1024,uploadMesh}={}){
+export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunks=48,maxVisibleChunks=Infinity,maxPending=2,maxBytes=128*1024*1024,uploadMesh}={}){
   if(typeof requestChunk!=='function')throw new TypeError('Regional rendering requires a worker requestChunk function');
-  maxVisibleChunks=Math.min(maxVisibleChunks,maxChunks);
+  // A fixed zoom boundary must be allowed to finish loading its full visible
+  // footprint. Portrait views, shallow orbits and polar chart cells can need
+  // more cells than the LRU target; only an explicit caller cap limits demand.
   const root=new THREE.Group();root.name='local-world-detail';parent.add(root);
   const cache=new Map(),pending=new Map(),incoming=new Map(),materials=new Map(),wanted=new Map(),required=new Map(),failures=new Map();
-  const frustum=new THREE.Frustum(),projection=new THREE.Matrix4(),direction=new THREE.Vector3();
+  const frustum=new THREE.Frustum(),coverageFrustum=new THREE.Frustum(),projection=new THREE.Matrix4(),direction=new THREE.Vector3();
   const point=new THREE.Vector3(),box=new THREE.Box3(),targetPoint=new THREE.Vector3();
   const surface=surfaceFor(world),ray=new THREE.Ray(),hit=new THREE.Vector3(),chart={};
   const shell=surface?new THREE.Sphere(new THREE.Vector3(0,-surface.radius,0),surface.radius):null;
-  let frame=0,disposed=false;
+  const patchBounds=new THREE.Box3(),cellSphere=new THREE.Sphere(),pole=new THREE.Vector3();
+  let frame=0,disposed=false,coverageChecked=false;
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
   const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,bytes:0,errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0};
@@ -116,6 +119,45 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const xs=world.outline.map(p=>p[0]),zs=world.outline.map(p=>p[1]);
   const extent={minX:Math.min(...xs),maxX:Math.max(...xs),minZ:Math.min(...zs),maxZ:Math.max(...zs)};
   const period=surface?.complete?extent.maxX-extent.minX:0;
+  const angularChart=surface?.complete&&surface.projection.type==='equirectangular';
+  // The closed ocean shell already covers cells with no terrain or objects.
+  // Polygon bounds conservatively retain coastal cells; holes and concave
+  // coasts may prefetch extra cells but can never lose an island or shoreline.
+  const terrainBounds=angularChart&&Array.isArray(world.biomes?.land)
+    ?[...world.biomes.land,...(world.biomes.oceanShore??[]),...(world.biomes.lakeShore??[])].map(polygon=>{
+      const result={minX:Infinity,minZ:Infinity,maxX:-Infinity,maxZ:-Infinity};
+      for(const [x,z]of polygon[0]){result.minX=Math.min(result.minX,x);result.maxX=Math.max(result.maxX,x);result.minZ=Math.min(result.minZ,z);result.maxZ=Math.max(result.maxZ,z);}
+      return result;
+    }):null;
+  const occupiedBounds=terrainBounds?[...features.map(feature=>{
+    const radius=feature.radius??4;return {minX:feature.x-radius,maxX:feature.x+radius,minZ:feature.z-radius,maxZ:feature.z+radius};
+  }),...(world.lines??[]).map(line=>{
+    const bounds={minX:Infinity,minZ:Infinity,maxX:-Infinity,maxZ:-Infinity};
+    for(const point of line.points??[]){bounds.minX=Math.min(bounds.minX,point.x-4);bounds.maxX=Math.max(bounds.maxX,point.x+4);bounds.minZ=Math.min(bounds.minZ,point.z-4);bounds.maxZ=Math.max(bounds.maxZ,point.z+4);}
+    return bounds;
+  })]:[];
+  const terrainCells=new Map();
+  function hasDetail(entry){
+    if(!terrainBounds)return true;
+    if(!terrainCells.has(entry.key)){
+      const left=entry.x-size/2,right=entry.x+size/2,top=entry.z-size/2,bottom=entry.z+size/2;
+      terrainCells.set(entry.key,[...terrainBounds,...occupiedBounds].some(bounds=>
+        bounds.minX<=right&&bounds.maxX>=left&&bounds.minZ<=bottom&&bounds.maxZ>=top));
+    }
+    return terrainCells.get(entry.key);
+  }
+  function intersectsCoverage(entry){
+    if(!angularChart)return true;
+    const p=surface.projection,left=Math.max(extent.minX,entry.x-size/2),right=Math.min(extent.maxX,entry.x+size/2),
+      top=Math.max(extent.minZ,entry.z-size/2),bottom=Math.min(extent.maxZ,entry.z+size/2);
+    const latitude=p.centralLatitude*Math.PI/180-(top+bottom)/(2*p.radius),halfLatitude=(bottom-top)/(2*p.radius);
+    const longitudeScale=Math.cos(Math.max(0,Math.abs(latitude)-halfLatitude));
+    surfacePoint(world,(left+right)/2,(maxHeight-4)/2,(top+bottom)/2,cellSphere.center);
+    // A path in the chart cannot be longer than its largest local metric.
+    // This sphere therefore encloses the complete curved cell and its height.
+    cellSphere.radius=(surface.radius+maxHeight)*Math.hypot((right-left)/(2*p.radius)*longitudeScale,halfLatitude)+(maxHeight+4)/2;
+    return coverageFrustum.intersectsSphere(cellSphere);
+  }
   const longitudeDelta=delta=>period?((delta+period/2)%period+period)%period-period/2:delta;
   function longitudeRanges(min,max){
     if(period&&max-min>=period)return [[extent.minX,extent.maxX]];
@@ -123,25 +165,47 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     const start=((min-extent.minX)%period+period)%period+extent.minX,end=start+max-min;
     return end<=extent.maxX?[[start,end]]:[[start,extent.maxX],[extent.minX,end-period]];
   }
-  function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera}={}){
-    if(disposed)return;frame++;root.visible=mapBlend<.999;
-    if(!root.visible&&!prewarm)return;
-    parent.updateWorldMatrix(true,false);camera.updateMatrixWorld();projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(projection);
+  function footprint(coverageCamera,target){
     coverageCamera.updateMatrixWorld();coverageCamera.getWorldDirection(direction);
+    projection.multiplyMatrices(coverageCamera.projectionMatrix,coverageCamera.matrixWorldInverse);coverageFrustum.setFromProjectionMatrix(projection);
     let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
     if(surface){
       let missed=false;
+      patchBounds.makeEmpty();
       // Both the ground and tallest scenery can enter the frustum. Sample its
       // edges and centre against the real sphere, then request chart cells.
       for(const height of [-4,maxHeight])for(const x of [-1,0,1])for(const y of [-1,0,1]){
         ray.origin.set(x,y,-1).unproject(coverageCamera);ray.direction.copy(direction);shell.radius=surface.radius+height;
         if(!ray.intersectSphere(shell,hit)){missed=true;continue;}
+        patchBounds.expandByPoint(hit);
         surfaceCoordinates(world,hit,chart);
         if(period&&target)chart.x=target.x+longitudeDelta(chart.x-target.x);
         minX=Math.min(minX,chart.x);maxX=Math.max(maxX,chart.x);minZ=Math.min(minZ,chart.z);maxZ=Math.max(maxZ,chart.z);
       }
       if(missed){minX=extent.minX;maxX=extent.maxX;minZ=extent.minZ;maxZ=extent.maxZ;}
-      else{
+      else if(angularChart){
+        // Longitude expands near a pole; its chart width is not a physical
+        // chord. Using it as curvature padding used to request the whole Earth
+        // at an otherwise local zoom. Measure curvature in 3D instead.
+        const p=surface.projection,span=patchBounds.getSize(point);
+        const padding=Math.max(4,span.lengthSq()/(8*surface.radius))*p.radius/surface.radius;
+        minZ=Math.max(extent.minZ,minZ-padding);maxZ=Math.min(extent.maxZ,maxZ+padding);
+        let containsPole=false;
+        for(const z of [extent.minZ,extent.maxZ]){
+          surfacePoint(world,0,0,z,pole);
+          if(point.subVectors(pole,shell.center).dot(direction)>=0)continue;
+          pole.project(coverageCamera);
+          if(Math.abs(pole.x)<=1&&Math.abs(pole.y)<=1&&pole.z>=-1&&pole.z<=1){
+            containsPole=true;minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);
+          }
+        }
+        if(containsPole){minX=extent.minX;maxX=extent.maxX;}
+        else{
+          const closestPole=Math.max(Math.abs(p.centralLatitude*Math.PI/180-minZ/p.radius),Math.abs(p.centralLatitude*Math.PI/180-maxZ/p.radius));
+          const longitudePadding=padding/Math.max(.01,Math.cos(closestPole));
+          minX-=longitudePadding;maxX+=longitudePadding;
+        }
+      }else{
         const padding=Math.max(4,((maxX-minX)**2+(maxZ-minZ)**2)/(8*surface.radius));
         minX-=padding;maxX+=padding;minZ-=padding;maxZ+=padding;
       }
@@ -150,44 +214,68 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       const t=Math.abs(direction.y)>1e-5?-point.y/direction.y:0;point.addScaledVector(direction,t);
       minX=Math.min(minX,point.x);maxX=Math.max(maxX,point.x);minZ=Math.min(minZ,point.z);maxZ=Math.max(maxZ,point.z);
     }
-    if(target)targetPoint.copy(target);else targetPoint.set((minX+maxX)/2,0,(minZ+maxZ)/2);
-    const candidate=(x,z)=>({key:`${x}:${z}`,x:x+size/2,z:z+size/2,size,
-      distance:longitudeDelta(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
-    required.clear();wanted.clear();
-    for(const [left,right]of longitudeRanges(minX,maxX))for(let x=Math.floor(left/size)*size;x<right;x+=size){
-      for(let z=Math.floor(Math.max(extent.minZ,minZ)/size)*size;z<Math.min(extent.maxZ,maxZ);z+=size){
-        const entry=candidate(x,z);required.set(entry.key,entry);
-      }
-    }
-    // Cities and mountains belong to their centre cell but may extend into a
-    // neighbouring visible cell. Their owner region is therefore required too.
-    for(const feature of features){
-      const radius=feature.radius??4;
-      const x=period?targetPoint.x+longitudeDelta(feature.x-targetPoint.x):feature.x;
-      if(x+radius<minX||x-radius>maxX||feature.z+radius<minZ||feature.z-radius>maxZ)continue;
-      const entry=candidate(Math.floor(feature.x/size)*size,Math.floor(feature.z/size)*size);required.set(entry.key,entry);
-    }
-    const candidates=[...required.values()].sort((a,b)=>a.distance-b.distance);
-    stats.requiredChunks=required.size;stats.coverageLimited=required.size>maxVisibleChunks;
-    for(const entry of candidates.slice(0,maxVisibleChunks))wanted.set(entry.key,entry);
-    if(!stats.coverageLimited){
-      const prefetch=[];
-      for(const [left,right]of longitudeRanges(minX-size,maxX+size))for(let x=Math.floor(left/size)*size;x<right;x+=size){
-        for(let z=Math.floor(Math.max(extent.minZ,minZ-size)/size)*size;z<Math.min(extent.maxZ,maxZ+size);z+=size){
-          const entry=candidate(x,z);if(!wanted.has(entry.key))prefetch.push(entry);
-        }
-      }
-      prefetch.sort((a,b)=>a.distance-b.distance);
-      for(const entry of prefetch){if(wanted.size>=Math.min(maxChunks,required.size+36))break;wanted.set(entry.key,entry);}
-    }
-    stats.prefetchChunks=wanted.size-Math.min(required.size,maxVisibleChunks);
+    return {minX,maxX,minZ,maxZ};
+  }
+  function updateVisibility(camera){
+    if(disposed)return;
+    parent.updateWorldMatrix(true,false);camera.updateMatrixWorld();
+    projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(projection);
     stats.visibleChunks=0;
     for(const chunk of cache.values()){
-      if(wanted.has(chunk.key))chunk.last=frame;
       box.copy(chunk.bounds).applyMatrix4(parent.matrixWorld);chunk.root.visible=frustum.intersectsBox(box);
       if(chunk.root.visible)stats.visibleChunks++;
     }
+  }
+  function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false}={}){
+    if(disposed)return;frame++;root.visible=mapBlend<.999;
+    if(!root.visible&&!prewarm)return;
+    const footprints=[];
+    if(target)targetPoint.copy(target);
+    const candidate=(x,z)=>({key:`${x}:${z}`,x:x+size/2,z:z+size/2,size,
+      distance:longitudeDelta(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
+    required.clear();wanted.clear();
+    // The transition can protect both its widest destination and the current
+    // displayed footprint. Union cells, not chart rectangles: a date-line
+    // crossing must never turn two neighbouring footprints into a whole world.
+    for(const coverage of coverageCameras?.length?coverageCameras:[coverageCamera]){
+      const bounds=footprint(coverage,target),{minX,maxX,minZ,maxZ}=bounds;
+      if(!target&&!footprints.length)targetPoint.set((minX+maxX)/2,0,(minZ+maxZ)/2);
+      footprints.push(bounds);
+      for(const [left,right]of longitudeRanges(minX,maxX))for(let x=Math.floor(left/size)*size;x<right;x+=size){
+        for(let z=Math.floor(Math.max(extent.minZ,minZ)/size)*size;z<Math.min(extent.maxZ,maxZ);z+=size){
+          const entry=candidate(x,z);if(hasDetail(entry)&&intersectsCoverage(entry))required.set(entry.key,entry);
+        }
+      }
+      // Cities and mountains belong to their centre cell but may extend into a
+      // neighbouring visible cell. Their owner region is therefore required too.
+      for(const feature of features){
+        const radius=feature.radius??4;
+        const x=period?targetPoint.x+longitudeDelta(feature.x-targetPoint.x):feature.x;
+        if(x+radius<minX||x-radius>maxX||feature.z+radius<minZ||feature.z-radius>maxZ)continue;
+        const entry=candidate(Math.floor(feature.x/size)*size,Math.floor(feature.z/size)*size);required.set(entry.key,entry);
+      }
+    }
+    const candidates=[...required.values()].sort((a,b)=>a.distance-b.distance);
+    coverageChecked=true;
+    stats.requiredChunks=required.size;stats.coverageLimited=required.size>maxVisibleChunks;
+    for(const entry of candidates.slice(0,maxVisibleChunks))wanted.set(entry.key,entry);
+    if(!stats.coverageLimited){
+      const prefetch=new Map();
+      for(const {minX,maxX,minZ,maxZ}of footprints){
+        for(const [left,right]of longitudeRanges(minX-size,maxX+size))for(let x=Math.floor(left/size)*size;x<right;x+=size){
+          for(let z=Math.floor(Math.max(extent.minZ,minZ-size)/size)*size;z<Math.min(extent.maxZ,maxZ+size);z+=size){
+            const entry=candidate(x,z);if(!wanted.has(entry.key)&&hasDetail(entry))prefetch.set(entry.key,entry);
+          }
+        }
+      }
+      for(const entry of [...prefetch.values()].sort((a,b)=>a.distance-b.distance)){
+        if(wanted.size>=Math.min(maxChunks,required.size+36))break;wanted.set(entry.key,entry);
+      }
+    }
+    stats.prefetchChunks=wanted.size-Math.min(required.size,maxVisibleChunks);
     const started=performance.now();hydrate(started+budgetMs);warmOne();publishReady();
+    updateVisibility(camera);
+    for(const chunk of cache.values())if(wanted.has(chunk.key)||(retainVisible&&chunk.root.visible))chunk.last=frame;
     for(const [key,coordinates]of wanted){
       if(pending.size+incoming.size>=maxPending||performance.now()-started>=budgetMs)break;
       const estimate=cache.size?stats.bytes/cache.size:4*1024*1024;
@@ -195,7 +283,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       if(!cache.has(key)&&!pending.has(key)&&!incoming.has(key)&&!failures.has(key))request(key,coordinates);
     }
     if(cache.size>maxChunks||stats.bytes>maxBytes){
-      const removable=[...cache.values()].filter(chunk=>!required.has(chunk.key)).sort((a,b)=>{
+      const removable=[...cache.values()].filter(chunk=>!required.has(chunk.key)&&!(retainVisible&&chunk.root.visible)).sort((a,b)=>{
         const priority=Number(wanted.has(a.key))-Number(wanted.has(b.key));
         return priority||a.last-b.last;
       });
@@ -210,5 +298,5 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     for(const job of incoming.values())releaseIncoming(job);
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
   }
-  return {root,update,stats,dispose,get ready(){return !stats.coverageLimited&&required.size>0&&[...required.keys()].every(key=>cache.has(key));}};
+  return {root,update,updateVisibility,stats,dispose,get ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}};
 }

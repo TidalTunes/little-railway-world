@@ -260,14 +260,15 @@ test('continental framing starts as a map and still reaches a train-scale follow
   assert.equal(f.view.selected, null); assert.equal(f.view.mode, 'map');
 });
 
-test('map remains visible until local geometry is ready, then reveals detail smoothly', t => {
+test('pending detail holds the visible zoom at entry, then resumes the requested zoom smoothly', t => {
   let ready = false;
   const f = fixture(t, {isDetailReady: () => ready});
   f.zoom(1.2);
   assert.equal(f.view.mode, 'world'); assert.equal(f.view.blend, 1);
+  assert.equal(f.camera.zoom,.78);assert.equal(f.view.navigation.zoom,1.2);
   ready = true; f.update();
   assert.ok(f.view.blend > 0 && f.view.blend < 1);
-  f.settle(); assert.equal(f.view.blend, 0);
+  f.settle(); assert.equal(f.view.blend, 0);assert.equal(f.camera.zoom,1.2);
 });
 
 test('WASD pans screen-relative at every zoom without changing the orbit, and Home cancels held motion',t=>{

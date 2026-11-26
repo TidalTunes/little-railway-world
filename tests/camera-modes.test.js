@@ -55,11 +55,11 @@ test('close mode persists in its hysteresis band and large zoom jumps resolve di
 });
 
 test('map blend is continuous and monotonic independently of discrete mode hysteresis', () => {
-  assert.equal(mapBlendForZoom(.55), 1);
+  assert.equal(mapBlendForZoom(.78), 1);
   assert.equal(mapBlendForZoom(.38), 1);
-  assert.equal(mapBlendForZoom(.86), 0);
+  assert.equal(mapBlendForZoom(1), 0);
   assert.equal(mapBlendForZoom(9), 0);
-  near(mapBlendForZoom((.55 + .86) / 2), .5);
+  near(mapBlendForZoom((.78 + 1) / 2), .5);
   let previous = 1;
   for (let zoom = .38; zoom <= 9; zoom += .001) {
     const value = mapBlendForZoom(zoom);
@@ -68,8 +68,8 @@ test('map blend is continuous and monotonic independently of discrete mode hyste
     previous = value;
   }
   // Smoothstep flattens at both ends, avoiding a projection-speed jump.
-  assert.ok((1 - mapBlendForZoom(.550001)) < 1e-9);
-  assert.ok(mapBlendForZoom(.859999) < 1e-9);
+  assert.ok((1 - mapBlendForZoom(.780001)) < 1e-9);
+  assert.ok(mapBlendForZoom(.999999) < 1e-9);
 });
 
 test('selection targets close zoom and zooming out below two releases following', () => {

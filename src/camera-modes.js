@@ -10,8 +10,9 @@ export const CAMERA_ZOOM = Object.freeze({
   closeExit: 2,
   follow: 3.2,
   followExit: 2,
-  mapBlendStart: .86,
-  mapBlendEnd: .55,
+  mapBlendStart: 1,
+  mapBlendEnd: .78,
+  detailPrefetch: .35,
 });
 
 export const FOLLOW_ZOOM = CAMERA_ZOOM.follow;

@@ -67,7 +67,7 @@ function fitWorld(){
     frameWidth=frameHeight=radius*2.2;
     view.setScale(frameHeight/230);
     controls.target.set(home.x,1.3,home.z);
-    const localOrbit=new THREE.Vector3().setFromSphericalCoords(1,Math.PI/3,Math.PI/4);
+    const localOrbit=new THREE.Vector3().setFromSphericalCoords(1,Math.PI/4,0);
     navigation.position.copy(controls.target).addScaledVector(localOrbit,radius*3);
     navigation.zoom=1;navigation.far=radius*8;controls.update();
     resize();view.setHome();return;
@@ -106,7 +106,7 @@ function fitWorld(){
 function fitShadows(){
   const span=Math.max((camera.right-camera.left)/camera.zoom,(camera.top-camera.bottom)/camera.zoom);
   const extent=Math.min(480,Math.max(45,span*.72)),texel=extent*2/2048;
-  const x=Math.round(controls.target.x/texel)*texel,z=Math.round(controls.target.z/texel)*texel;
+  const x=Math.round(view.renderTarget.x/texel)*texel,z=Math.round(view.renderTarget.z/texel)*texel;
   if(surfaceFor(model)){
     surfacePoint(model,x,0,z,sun.target.position);surfaceFrame(model,x,z,lightFrame);
     sky.position.set(0,1,0).applyMatrix4(lightFrame);
@@ -202,20 +202,22 @@ function frame(now){
     let stamp=performance.now();
     railway.update(paused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
+    view.updateNavigation(dt);
     detail.update(camera,{mapBlend:view.wantsDetail?0:1,target:controls.target,budgetMs:2,
-      coverageCamera:surfaceFor(model)?view.coverageCamera:view.mode==='close'?camera:navigation});
+      coverageCameras:view.coverageCameras,retainVisible:view.blend<1});
     if(detail.ready&&!shaderReady&&!shaderJob){
       const version=loadingVersion;
       renderer.shadowMap.enabled=true;
-      railway.updateView(camera,{mapBlend:view.blend,focus:controls.target,prewarm:true});
+      railway.updateView(camera,{mapBlend:view.blend,focus:view.renderTarget,prewarm:true});
       if(!life&&model.cities.length<=32){life=ambience(worldRoot,model);life.update(time);}
       shaderJob=compositor.prepare(scene,mapScene,camera)
         .then(()=>{if(version===loadingVersion)shaderReady=true;})
         .catch(error=>{if(version===loadingVersion){shaderJob=null;reportError(error);}});
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
-    view.update(dt);
-    railway.updateView(camera,{mapBlend:view.blend,focus:controls.target});
+    view.updatePresentation(dt);
+    detail.updateVisibility(camera);
+    railway.updateView(camera,{mapBlend:view.blend,focus:view.renderTarget});
     if(view.blend<.999){
       fitShadows();
       if(!life&&model.cities.length<=32)life=ambience(worldRoot,model);

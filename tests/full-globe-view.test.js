@@ -31,7 +31,7 @@ function fixture(t,{reduced=true}={}){
   const view=createViewController({canvas,camera,scene,mapScene,reducedMotion:{matches:reduced},getWorld:()=>world,
     getWorldRoot:()=>root,getTrains:()=>trains,onPause(){},onRegenerate(){}});
   view.setScale(12);view.controls.target.copy(home);
-  view.navigation.position.copy(home).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/3,Math.PI/4));
+  view.navigation.position.copy(home).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/4,0));
   view.controls.update();view.setHome();view.update(1/60);
   function key(value,type='keydown',properties={}){const item=event(type,{key:value,...properties});canvas.dispatchEvent(item);return item;}
   function update(count=1,dt=1/60){for(let i=0;i<count;i++)view.update(dt);}
@@ -62,7 +62,7 @@ test('complete overview centers the whole sphere on the authored home location a
   const normal=surfaceNormal(f.world,f.home.x,f.home.z),direction=f.camera.getWorldDirection(new THREE.Vector3()).negate();
   assert.ok(normal.dot(direction)>.99999999);
   assert.ok(new THREE.Vector3(1,0,0).applyQuaternion(view.chartCamera.quaternion).dot(new THREE.Vector3(1,0,0))>.99999999,
-    'overview remains north-up despite the local 45° azimuth');
+    'overview shares the north-up heading of the local view');
   const before=view.controls.target.clone();assert.equal(f.key('d').defaultPrevented,true);f.key('d','keyup');
   assert.ok(view.controls.target.x-before.x>1,'even a press and release between frames visibly rotates the globe');
   f.key('Home');f.key('d');
@@ -145,24 +145,54 @@ test('high-latitude isometric WASD motion projects along the visible screen axes
   }
 });
 
-test('local zoom and following retain the strong isometric angle and deliberate orbit changes',t=>{
+test('zoom tilts toward the far edge without changing heading and retains the local ground angle',t=>{
   const f=fixture(t),{view}=f;
   const angle=()=>new THREE.Spherical().setFromVector3(view.chartCamera.position.clone().sub(view.controls.target));
   const check=(phi,theta)=>{
     const actual=angle();assert.ok(Math.abs(actual.phi-phi)<1e-10);assert.ok(Math.abs(actual.theta-theta)<1e-10);
   };
+  for(const zoom of [1,3,6,7.2,8.4,10,12]){
+    view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();
+    const screenRight=new THREE.Vector3(1,0,0).applyQuaternion(view.chartCamera.quaternion);
+    near(screenRight,new THREE.Vector3(1,0,0));
+    assert.ok(angle().phi<=Math.PI/4+1e-10,'zoom only tilts away from the existing screen heading');
+  }
   for(const zoom of [12,24,40,80]){
-    view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();check(Math.PI/3,Math.PI/4);
+    view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();check(Math.PI/4,0);
   }
   // OrbitControls remains available in the core view; zoom/follow must not
   // overwrite the chosen azimuth or elevation afterward.
   view.navigation.zoom=12;view.navigation.updateProjectionMatrix();f.update();
   f.pointer('pointerdown',400,350);f.pointer('pointermove',480,390);f.pointer('pointerup',480,390);f.update(360);
-  const chosen=angle();assert.ok(Math.abs(chosen.theta-Math.PI/4)>.01);
+  const chosen=angle();assert.ok(Math.abs(chosen.theta)>.01);
   for(const zoom of [24,40,80]){
     view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();check(chosen.phi,chosen.theta);
   }
   f.key(']');f.update();assert.equal(view.selected,'front');check(chosen.phi,chosen.theta);
+  f.key('Escape');
+  for(const zoom of [8,6,3,1]){
+    view.navigation.zoom=zoom;view.navigation.updateProjectionMatrix();f.update();
+    assert.ok(Math.abs(angle().theta-chosen.theta)<1e-10,'overview retains the deliberately chosen heading');
+  }
+});
+
+test('local camera keeps the same angle to the ground across both hemispheres',t=>{
+  const f=fixture(t),{view}=f;
+  view.navigation.zoom=40;view.navigation.updateProjectionMatrix();
+  for(const [longitude,latitude] of [[0,0],[100,70],[-120,-60],[179,30]]){
+    const target=new THREE.Vector3(radius*longitude*radians,1.3,-radius*latitude*radians);
+    view.controls.target.copy(target);
+    view.navigation.position.copy(target).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/4,0));
+    f.update();
+    const ground=surfacePoint(f.world,target.x,target.y,target.z);
+    const direction=f.camera.position.clone().sub(ground).normalize();
+    const normal=surfaceNormal(f.world,target.x,target.z);
+    assert.ok(Math.abs(direction.angleTo(normal)-Math.PI/4)<1e-10,'local elevation is independent of latitude and longitude');
+    const north=surfacePoint(f.world,target.x,target.y,target.z-.01).project(f.camera);
+    const center=ground.project(f.camera);
+    assert.ok(north.y>center.y,'the northern far edge of the ground stays toward the top of the view');
+    assert.ok(Math.abs(north.x-center.x)<1e-10,'north never rotates sideways during local zoom');
+  }
 });
 
 test('back hemisphere trains cannot be selected through the globe and following crosses the date line the short way',t=>{
