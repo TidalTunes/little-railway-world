@@ -45,7 +45,7 @@ export function buildWorld(parent,world,{terrain=true,rigidAssets=null,animatedL
     else if(p.kind==='civic')civic(root,{...p,palette});
     else if(p.kind==='plaza')plaza(root,{...p,palette});
     else if(p.kind==='tower')tower(root,{...p,palette});
-    else if(p.kind==='farm')farmPatch(root,p);
+    else if(p.kind==='farm')farmPatch(root,{...p,animatedLife});
     else if(p.kind==='nature')naturePatch(root,p);
     else if(p.kind==='sheep'&&!animatedLife)sheep(root,p);
     else if(p.kind==='cactus')cactus(root,p);

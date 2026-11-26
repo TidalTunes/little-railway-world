@@ -67,8 +67,88 @@ test('day and night fauna animate deterministically, freeze when paused and hono
   life.update(40,{...options,reducedMotion:true});assert.deepEqual(snapshot(life),frozen);
   const selections=life.stats.selections;life.update(41,{...options,detailBlend:0});assert.equal(life.root.visible,false);assert.equal(life.stats.selections,selections);
   life.update(42,{...options,placements:[],revision:2});assert.equal(life.root.visible,true);assert.equal(life.stats.sheep,0);
-  for(const batch of life.root.children)assert.equal(batch.count,0,'evicted scenery leaves no floating animals');
+  for(const batch of life.root.children)if(!batch.name.startsWith('local-swallow'))assert.equal(batch.count,0,'evicted ground scenery leaves no floating ground animals');
+  assert.equal(life.stats.birds,3,'birds keep flying when their ground chunk leaves the view');
   life.dispose();assert.equal(life.root.parent,null);
+});
+
+test('visible flocks retain their flight paths through panning, chunk removal and rehydration',()=>{
+  const placements=Array.from({length:28},(_,i)=>({kind:'tree',id:`tree-${i}`,x:i%7*14,z:Math.floor(i/7)*14,y:0}));
+  const life=createLocalLife(new Group(),plane),birds=life.root.getObjectByName('local-swallow-bodies');
+  life.update(10,{placements,focus:{x:35,z:20}});
+  const initial=Array.from(birds.instanceMatrix.array),count=birds.count;
+  assert.equal(count,LIFE_LIMITS.flocks*3);
+  for(const [revision,candidates]of [[1,placements],[2,[]],[3,structuredClone(placements)]]){
+    life.update(10,{placements:candidates,revision,focus:{x:42,z:20}});
+    assert.equal(birds.count,count,'streaming and reordered distance selection cannot replace or duplicate birds');
+    assert.deepEqual(Array.from(birds.instanceMatrix.array),initial,'same time means exactly the same airborne positions');
+  }
+  life.update(10.01,{placements:[],focus:{x:42,z:20}});
+  for(let i=0;i<count;i++)assert.ok(new Vector3().setFromMatrixPosition(matrix(birds,i)).distanceTo(new Vector3().fromArray(initial,i*16+12))<.015,'flight is continuous');
+  life.update(11,{placements,focus:{x:500,z:0}});assert.equal(birds.count,0,'distant anchors retire within the fixed budget');
+  life.dispose();
+});
+
+test('bird distance fading remains continuous during sub-threshold camera movement while paused',()=>{
+  const placements=[{kind:'tree',id:'nest',x:0,z:0,y:0}],life=createLocalLife(new Group(),plane);
+  const birds=life.root.getObjectByName('local-swallow-bodies'),wings=life.root.getObjectByName('local-swallow-wings');
+  life.update(10,{placements,focus:{x:0,z:0}});
+  const positions=Array.from(birds.instanceMatrix.array);let previous=1;
+  for(let x=131;x<174;x+=.5){
+    life.update(10,{placements,focus:{x,z:0}});
+    const value=birds.geometry.attributes.lifeVisibility.getX(0);
+    assert.ok(value<previous&&previous-value<.04,'feather tracks every half-unit pan, including frozen simulation frames');previous=value;
+    assert.deepEqual(Array.from(birds.instanceMatrix.array),positions,'fading does not move the birds');
+    assert.equal(wings.geometry.attributes.lifeVisibility.getX(0),value);
+  }
+  life.update(10,{placements,focus:{x:182,z:0}});assert.equal(birds.count,0);
+  life.dispose();
+});
+
+test('persistent flock distance uses physical globe distance across the date line',()=>{
+  const nest=surfaceChartCoordinates(globe,179.9,72),placements=[{kind:'tree',id:'arctic-nest',...nest,y:0}];
+  const life=createLocalLife(new Group(),globe),birds=life.root.getObjectByName('local-swallow-bodies');
+  life.update(3,{placements,focus:nest});const initial=Array.from(birds.instanceMatrix.array);
+  life.update(3,{placements:[],revision:1,focus:surfaceChartCoordinates(globe,-179.9,72)});
+  assert.equal(birds.count,3);assert.deepEqual(Array.from(birds.instanceMatrix.array),initial);
+  assert.equal(birds.geometry.attributes.lifeVisibility.getX(0),1);
+  life.dispose();
+});
+
+test('reduced motion reveals newly streamed birds immediately even when simulation time is paused',()=>{
+  const life=createLocalLife(new Group(),plane),placements=[{kind:'tree',id:'new-nest',x:0,z:0,y:0}];
+  const birds=life.root.getObjectByName('local-swallow-bodies');
+  life.update(0,{placements:[]});life.update(1,{placements});
+  assert.equal(birds.geometry.attributes.lifeVisibility.getX(0),0,'new flocks normally fade in');
+  life.update(1,{placements,reducedMotion:true});
+  assert.equal(birds.geometry.attributes.lifeVisibility.getX(0),1,'preference changes bypass a paused animation upload guard');
+  life.dispose();
+});
+
+test('sheep walk between grazing spots with continuous motion inside their reserved ground envelope',()=>{
+  for(const world of [plane,globe]){
+    const center=world===plane?{x:4,z:7}:surfaceChartCoordinates(globe,28,76);
+    const sheep={kind:'sheep',id:'roaming-ram',...center,y:.07,radius:2.1,roamRadius:1.4};
+    const life=createLocalLife(new Group(),world),wool=life.root.getObjectByName('grazing-sheep-wool');
+    const origin=surfacePoint(world,center.x,sheep.y,center.z),up=surfacePoint(world,center.x,sheep.y+1,center.z).sub(origin).normalize();
+    let previous=null,farthest=0,first=null,walked=0,rested=0;
+    for(let frame=0;frame<900;frame++){
+      life.update(frame/10,{placements:[sheep],focus:center});
+      const p=new Vector3().setFromMatrixPosition(matrix(wool));
+      if(!first)first=p.clone();farthest=Math.max(farthest,p.distanceTo(first));
+      if(previous){const distance=p.distanceTo(previous);assert.ok(distance<.06,'no jumps at walk/graze boundaries');if(distance>.005)walked++;if(distance<.001)rested++;}previous=p;
+      for(const object of life.root.children.filter(batch=>batch.name.startsWith('grazing-sheep')))for(let index=0;index<object.count;index++){
+        const transform=matrix(object,index),vertices=object.geometry.attributes.position;
+        for(let vertex=0;vertex<vertices.count;vertex++){
+          const delta=new Vector3().fromBufferAttribute(vertices,vertex).applyMatrix4(transform).sub(origin);
+          assert.ok(delta.clone().addScaledVector(up,-delta.dot(up)).length()<sheep.radius,'whole moving animal stays inside the clear disk');
+          assert.ok(delta.dot(up)>-.004,'walking feet remain above the field');
+        }
+      }
+    }
+    assert.ok(farthest>.7,'animals explore their pasture instead of trembling in place');assert.ok(walked>100&&rested>80,'walking alternates with grazing');
+    life.dispose();
+  }
 });
 
 test('cloned wing materials retain the shared painted-world shader and time uniforms',()=>{

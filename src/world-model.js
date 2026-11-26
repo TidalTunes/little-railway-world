@@ -645,7 +645,8 @@ function placeScenery(world,random,density) {
     for(let i=0;i<count;i++){
       const kind=herd?'sheep':'cactus';if(herd?sheep>=sheepTarget:cacti>=cactusTarget)break;
       const angle=rng()*Math.PI*2,offset=2.4+rng()*4.8,pos=surfaceOffset(world,p.x,p.z,Math.cos(angle)*offset,Math.sin(angle)*offset);
-      const size=herd?1:.72+rng()*.35,item={kind,...pos,radius:herd?.7:.7*size,scale:size,variant:Math.floor(rng()*3),
+      const size=herd?1:.72+rng()*.35,roamRadius=herd?.9+rng()*.5:0,item={kind,...pos,radius:herd?.7+roamRadius:.7*size,
+        ...(herd?{roamRadius}:{}),scale:size,variant:Math.floor(rng()*3),
         rotation:chartHeadingForSurface(world,pos.x,pos.z,heading+(rng()-.5)*.65)};
       if(allowed(item,biome)){add(item);if(herd)sheep++;else cacti++;}
     }

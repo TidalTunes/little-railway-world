@@ -1,6 +1,7 @@
 import { Float32BufferAttribute } from 'three';
 import { box, cylinder, roof, group, ico, beam, v, polygon, extrudedPolygon } from './geometry.js';
 import { C, M } from './palette.js';
+import {farmRandom,fieldContains,fieldFeatureFootprint,fieldDetailSeed,fieldOutline} from './farm-layout.js';
 
 // Bounds include every roof, wheel and trim piece. Placement uses the footprint,
 // while detail stays inside it: an asset never silently occupies a neighbour.
@@ -285,17 +286,6 @@ export function tower(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
   return g;
 }
 
-function farmRandom(seed){
-  let state=(Number(seed)||1)>>>0;
-  return()=>{state=Math.imul(state,1664525)+1013904223|0;return(state>>>0)/4294967296;};
-}
-function fieldContains(points,x,z,margin=0){
-  for(let i=0;i<points.length;i++){
-    const a=points[i],b=points[(i+1)%points.length],dx=b[0]-a[0],dz=b[1]-a[1];
-    if(dx*(z-a[1])-dz*(x-a[0])<margin*Math.hypot(dx,dz)-1e-8)return false;
-  }
-  return true;
-}
 // Crop marks are flat clipped ribbons, not little raised slats. The shared
 // terrain material carries a quiet colour variation without another draw batch.
 function fieldPaint(parent,points,y,color){
@@ -346,19 +336,10 @@ function farmRows(parent,points,angle,color,pitch,feature,crop){
   }
 }
 function fieldFeature(parent,points,feature,preferred,angle,rng){
-  if(!feature)return null;
-  const centroid=points.reduce((p,q)=>[p[0]+q[0]/points.length,p[1]+q[1]/points.length],[0,0]);
-  const radius=feature==='barn'?1.42:feature==='bales'?.84:.7;
   // A farmstead belongs beside a boundary, leaving the middle of its field open.
-  const candidates=Array.isArray(preferred)&&preferred.length===2&&preferred.every(Number.isFinite)?[preferred]:[];
-  const start=Math.floor(rng()*points.length);
-  for(const fraction of [.22,.38,.55,.72])for(let i=0;i<points.length;i++){
-    const corner=points[(start+i)%points.length];
-    candidates.push(corner.map((value,axis)=>value+(centroid[axis]-value)*fraction));
-  }
-  candidates.push(centroid);
-  const center=candidates.find(point=>fieldContains(points,...point,radius));
-  if(!center)return null;
+  const footprint=fieldFeatureFootprint(points,feature,preferred,rng);
+  if(!footprint)return null;
+  const {center,radius}=footprint;
   const f=group(parent,center[0],0,center[1],-angle);
   f.userData.surfaceAnchor=true;
   if(feature==='barn'){
@@ -397,7 +378,7 @@ function fieldHedges(parent,points,edges,rng){
 }
 
 export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1,
-  width = 3, depth = 4, parcels } = {}) {
+  width = 3, depth = 4, parcels,livestock=[],animatedLife=false } = {}) {
   if(!Number.isFinite(width)||!Number.isFinite(depth)||width<=0||depth<=0)throw new TypeError('Farm dimensions must be positive and finite');
   const fields=parcels??[{x:0,z:0,width,depth,variant}];
   if(!Array.isArray(fields)||fields.some(p=>![p.x,p.z,p.width,p.depth].every(Number.isFinite)
@@ -406,17 +387,7 @@ export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant =
   for(const field of fields)if(field.polygon&&(!Array.isArray(field.polygon)||field.polygon.length<3
     ||field.polygon.some(p=>!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)
       ||Math.abs(p[0])>field.width/2+1e-7||Math.abs(p[1])>field.depth/2+1e-7)))throw new TypeError('Farm polygons must stay inside their parcel');
-  const outlines=fields.map(field=>{
-    const w=field.width/2,d=field.depth/2,points=field.polygon??[[-w,-d],[w,-d],[w,d],[-w,d]];
-    const area=points.reduce((sum,p,index)=>{const q=points[(index+1)%points.length];return sum+p[0]*q[1]-q[0]*p[1];},0);
-    if(Math.abs(area)<1e-8)throw new TypeError('Farm polygons must enclose a nonzero area');
-    const outline=area<0?points.toReversed():points;
-    for(let index=0;index<outline.length;index++){
-      const a=outline[index],b=outline[(index+1)%outline.length],c=outline[(index+2)%outline.length];
-      if((b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0])< -1e-8)throw new TypeError('Farm polygons must be convex');
-    }
-    return outline;
-  });
+  const outlines=fields.map(fieldOutline);
   const g = asset(parent, 'farmPatch', { x, y, z, rotation, scale });
   g.userData.surfaceFootprint=true;
   g.userData.footprint={width,depth,height:ASSET_BOUNDS.farmPatch.height,radius:Math.hypot(width,depth)/2};
@@ -429,7 +400,7 @@ export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant =
     const color=C[base].clone().lerp(C[crop==='wheat'?'soilLight':crop==='fallow'?'field':'grassDark'],.07+tone*.20);
     const angle=Number.isFinite(field.rowsAngle)?field.rowsAngle:field.rowsAlong==='x'?0:Math.PI/2;
     fieldPaint(f,points,.055,color);
-    const rng=farmRandom(field.detailSeed??(type+1)*7117),feature=fieldFeature(f,points,field.feature,field.featurePosition,angle,rng);
+    const rng=farmRandom(fieldDetailSeed(field,variant)),feature=fieldFeature(f,points,field.feature,field.featurePosition,angle,rng);
     const available=(x,z,r)=>fieldContains(points,x,z,r)&&(!feature||Math.hypot(x-feature.center[0],z-feature.center[1])>feature.radius+r);
     if(crop==='wheat'||crop==='vegetables'||crop==='lavender'||crop==='fallow'){
       const pitch=Number.isFinite(field.rowPitch)&&field.rowPitch>0?Math.max(.4,field.rowPitch):crop==='fallow'?1.05:crop==='vegetables'?.8:1.35;
@@ -460,6 +431,9 @@ export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant =
       }
     }
     fieldHedges(f,points,field.hedgeEdges,rng);
+  }
+  if(!animatedLife)for(const animal of livestock){
+    const grazing=sheep(g,{...animal,y:.07});grazing.userData.surfaceAnchor=true;
   }
   return g;
 }

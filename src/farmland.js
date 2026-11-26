@@ -1,6 +1,7 @@
 import { biomeDistance, fitsBiome } from './biomes.js';
 import {surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceChartRadius,surfaceHeading,chartHeadingForSurface} from './world-surface.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
+import {createFarmLivestock} from './farm-livestock.js';
 
 function randomFor(seed){
   let state=2166136261;
@@ -148,7 +149,8 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
       if(!fitsBiome(world,'farmland',position.x,position.z,surfaceChartRadius(world,position.x,position.z,radius)))continue;
       if(canPlace(proposal)){
         proposal.family=position.family??candidate.family;
-        proposal.parcels=parcelsFor(width,depth,candidate.seed,proposal.family,footprint);item=proposal;break;
+        proposal.parcels=parcelsFor(width,depth,candidate.seed,proposal.family,footprint);
+        proposal.livestock=createFarmLivestock(proposal);item=proposal;break;
       }
     }
     if(!item)continue;

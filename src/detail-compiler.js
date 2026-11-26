@@ -8,6 +8,7 @@ import {serializeGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
 import {indexGeometryExact,geometryAttributeBytes} from './index-geometry.js';
 import {warpGeometryToSurface,SURFACE_MAX_SEGMENT} from './world-surface.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
+import {farmLivestockPlacements} from './farm-livestock.js';
 
 function segmentInterval(a,b,bounds){
   let lo=0,hi=1;
@@ -83,8 +84,9 @@ export function compileDetailPacket(region,network){
           roughness:material.roughness??1,metalness:material.metalness??0,side:material.side,flatShading:true,vertexColors:material.vertexColors,sceneStyle:material.userData.sceneStyle??'asset'}};
     });
     const lifeKinds=new Set(['sheep','tree','farmPatch','house','apartment','civic','tower','plaza']);
-    const lifePlacements=(region.placements??[]).filter(p=>lifeKinds.has(p.kind)).map(p=>({kind:p.kind,id:p.id,x:p.x,y:p.y??0,z:p.z,
-      rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1}));
+    const lifePlacements=(region.placements??[]).flatMap(p=>p.kind==='farm'?farmLivestockPlacements(network,p):lifeKinds.has(p.kind)?[p]:[])
+      .map(p=>({kind:p.kind,id:p.id,x:p.x,y:p.y??0,z:p.z,rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1,
+        ...(Number.isFinite(p.roamRadius)?{roamRadius:p.roamRadius}:{})}));
     return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,lifePlacements,renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{if(node.geometry)node.geometry.dispose();
