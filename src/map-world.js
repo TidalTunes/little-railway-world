@@ -8,7 +8,7 @@ import {compileMapTerrainGeometry,MAP_SURFACE_HEIGHT_SCALE} from './map-terrain-
 import {surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent,surfaceCoordinates,SURFACE_MAX_SEGMENT} from './world-surface.js';
 import {globeMapLighting} from './globe-lighting.js';
 import {applySceneStyle} from './scene-style.js';
-import {mapSymbolMetrics,mapCityRadius,declutterMapCities,MAP_CITY_DOT_DIAMETER} from './map-symbols.js';
+import {mapSymbolMetrics,mapCityRadius,declutterMapCities,MAP_CITY_DOT_DIAMETER,mapNetworkVisibility,applyMapNetworkVisibility} from './map-symbols.js';
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 const PALETTE = {
   grass:C.grass.clone().lerp(C.trim,.10), farmland:C.farmland.clone().lerp(C.trim,.08),
@@ -73,15 +73,15 @@ export function buildMapWorld(parent,world){
   const trainColor=train=>players.has(train.state?.ownerId)?`player:${train.state.ownerId}:body`
     :LIVERY[train.state?.color]??train.state?.color??'redLight';
   const symbolScale=THREE.MathUtils.clamp(Math.sqrt((world.bounds?.width??130)*(world.bounds?.depth??95)/(130*95)),1,2.6);
-  const materials=new Map(),batches=new Map(),ownedGeometries=new Set(),cityInstances=[],cityEntries=[];
+  const materials=new Map(),batches=new Map(),ownedGeometries=new Set(),cityInstances=[],cityEntries=[],routeMeshes=[];
   const surfacePosition=new THREE.Vector3(),surfaceCorner=new THREE.Vector3(),surfaceCenter=new THREE.Vector3();
   const routeUp=new THREE.Vector3(),routeForward=new THREE.Vector3(),routeRight=new THREE.Vector3();
   const cityTransform=(city,target)=>{
     surfaceFrame(world,city.x,city.z,target);
     target.setPosition(surfacePoint(world,city.x,0,city.z,surfacePosition));return target;
   };
-  const stats={cityBatches:0,trainBatches:0,updatedCars:0,staticVertices:0,farTrains:false,declutterPasses:0,cityAttributeUpdates:0};
-  const routeScale={value:1},cityScale={value:1};
+  const stats={cityBatches:0,trainBatches:0,updatedCars:0,staticVertices:0,farTrains:false,declutterPasses:0,cityAttributeUpdates:0,networkVisibility:1};
+  const routeScale={value:1},cityScale={value:1},networkVisibility={value:1};
   let disposed=false;
   const material=(name,vertexColors=false)=>{
     if(!materials.has(name))materials.set(name,new THREE.MeshBasicMaterial({
@@ -119,6 +119,7 @@ export function buildMapWorld(parent,world){
       const symbol=name.startsWith('route-')||name==='paper'||name.startsWith('player:')||Object.values(LIVERY).includes(name);
       applySceneStyle(result,{kind:symbol?'map-symbol':['ocean','waterLight'].includes(name)?'water':'map',
         role:name.endsWith('paper')?'paper':name.endsWith('ink')?'ink':'owner'});
+      if(symbol)applyMapNetworkVisibility(result,networkVisibility);
     }
     return result;
   };
@@ -199,7 +200,7 @@ export function buildMapWorld(parent,world){
   for(const [color,geometries] of batches){
     const geometry=mergeGeometries(geometries,false);ownedGeometries.add(geometry);
     const mesh=new THREE.Mesh(geometry,material(color,!!geometry.attributes.color));mesh.name=`map-${color.replace('route-','')}`;staticRoot.add(mesh);
-    if(color.startsWith('route-'))mesh.frustumCulled=false;
+    if(color.startsWith('route-')){mesh.frustumCulled=false;routeMeshes.push(mesh);}
     stats.staticVertices+=geometry.attributes.position.count;
     geometries.forEach(geometry=>geometry.dispose());
   }
@@ -218,6 +219,7 @@ export function buildMapWorld(parent,world){
   };
   cityMaterial.customProgramCacheKey=()=> 'map-city-screen-size-v2';
   applySceneStyle(cityMaterial,{kind:'map-symbol',role:'owner'});
+  applyMapNetworkVisibility(cityMaterial,networkVisibility);
   materials.set('city-glyph',cityMaterial);
   const cityEntry=(city,attribute,index=0,instanced=false)=>cityEntries.push({city,attribute,index,instanced,detail:1,target:1,
     anchor:surfacePoint(world,city.x,0,city.z),normal:spherical?surfaceNormal(world,city.x,city.z):null});
@@ -269,7 +271,7 @@ export function buildMapWorld(parent,world){
         const front=!entry.normal||cityNormal.copy(entry.normal).transformDirection(root.matrixWorld).dot(cityViewDirection)<-.035;
         return {id:entry.city.id,x:cityProjection.x*viewportWidth/2,y:cityProjection.y*viewportHeight/2,
           radius:mapCityRadius(entry.city.level),previous:entry.target,
-          visible:front&&Math.abs(cityProjection.x)<1+24/viewportWidth&&Math.abs(cityProjection.y)<1+24/viewportHeight&&Math.abs(cityProjection.z)<=1};
+          visible:front&&Math.abs(cityProjection.x)<1+2*mapCityRadius(10)/viewportWidth&&Math.abs(cityProjection.y)<1+2*mapCityRadius(10)/viewportHeight&&Math.abs(cityProjection.z)<=1};
       });
       const targets=declutterMapCities(projected,unitsPerPixel);
       for(const entry of cityEntries)entry.target=targets.get(entry.city.id);
@@ -329,8 +331,18 @@ export function buildMapWorld(parent,world){
     const unitsPerPixel=camera?.isOrthographicCamera?(camera.top-camera.bottom)/camera.zoom/Math.max(1,viewportHeight):0;
     const metrics=mapSymbolMetrics(unitsPerPixel,symbolScale,trainWidthScale);
     routeScale.value=metrics.routeScale;cityScale.value=metrics.cityScale;
+    networkVisibility.value=stats.networkVisibility=mapNetworkVisibility(camera?.zoom);
+    const showNetwork=networkVisibility.value>0;
+    cityRoot.visible=trainRoot.visible=showNetwork;
+    for(const mesh of routeMeshes)mesh.visible=showNetwork;
+    // Traffic keeps simulating; fully hidden atlas marks need no projection,
+    // decluttering, matrix uploads or draw calls. Their next frame catches up.
+    if(!showNetwork)return;
     updateCityDetails(camera,unitsPerPixel,viewportHeight,dt,reducedMotion);
-    const nextFar=unitsPerPixel>.8;
+    // Keep one enlarged marker until individual carriages are naturally at
+    // least that long on screen. The old fixed cutoff shrank the new markers
+    // abruptly while the player was still viewing the regional map.
+    const nextFar=metrics.trainScaleZ>1;
     let changed=sourceTrains!==trains||cachedOwners.length!==trains.length||farMode!==nextFar;
     farMode=nextFar;stats.farTrains=farMode;
     for(let i=0;!changed&&i<trains.length;i++)changed=cachedOwners[i]!==trains[i].state?.ownerId||cachedLiveries[i]!==trains[i].state?.color||cachedParts[i]!==trains[i].parts;

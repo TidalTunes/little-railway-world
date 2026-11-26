@@ -105,8 +105,8 @@ function fixture(t, {reduced = false, isDetailReady = () => true} = {}) {
 const nearVector = (actual, expected, tolerance = 1e-8) => assert.ok(actual.distanceTo(expected) < tolerance,
   `expected ${expected.toArray()}, received ${actual.toArray()}`);
 
-test('selecting a train from the far map survives the initial zoom below two and follows movement', t => {
-  const f = fixture(t); f.zoom(.5);
+test('selecting a train from the fading far map survives the initial zoom below two and follows movement', t => {
+  const f = fixture(t); f.zoom(.65);
   assert.equal(f.view.mode, 'map');
   f.tap();
   assert.equal(f.view.selected, 'first');
@@ -137,6 +137,18 @@ test('zooming out, Escape, and empty clicks release follow without resetting the
   assert.equal(f.view.selected, null); assert.equal(f.view.mode, 'close');
 });
 
+test('hidden distant trains cannot produce ghost hover rings or intercept map clicks', t => {
+  const f=fixture(t,{reduced:true});f.zoom(.65);
+  let p=f.location();f.pointer('pointermove',p.x,p.y);f.update(.15);
+  assert.equal(f.canvas.style.cursor,'pointer');
+  assert.ok(f.mapScene.children.some(marker=>marker.visible),'visible network supports train hover');
+  f.zoom(.4);p=f.location();f.pointer('pointermove',p.x,p.y);f.update(.15);
+  assert.equal(f.canvas.style.cursor,'grab');
+  assert.ok(f.mapScene.children.every(marker=>!marker.visible));
+  f.tap();f.update();assert.equal(f.view.selected,null,'an invisible marker does not consume a tap');
+  f.zoom(.65);f.tap();assert.equal(f.view.selected,'first','picking returns with the network');
+});
+
 test('Home and double-click clear following and pending damping to restore the saved world view', t => {
   const f = fixture(t);
   const homePosition = f.view.navigation.position.clone(), homeTarget = f.view.controls.target.clone();
@@ -145,7 +157,7 @@ test('Home and double-click clear following and pending damping to restore the s
   f.pointer('pointerup', 510, 380);
   f.key('Home'); f.settle();
   nearVector(f.view.navigation.position, homePosition); nearVector(f.view.controls.target, homeTarget);
-  f.zoom(.5); f.tap(); f.update(); f.key('Home'); f.update();
+  f.zoom(.65); f.tap(); f.update(); f.key('Home'); f.update();
   assert.equal(f.view.selected, null); assert.equal(f.view.mode, 'world');
   assert.equal(f.view.navigation.zoom, 1); assert.equal(f.view.blend, 0);
   nearVector(f.root.scale, new THREE.Vector3(1, 1, 1));
@@ -167,7 +179,7 @@ test('regeneration replaces selection and saves the new world framing as Home', 
 });
 
 test('dragging onto a train, right clicks, and canceled pointers do not select it', t => {
-  const f = fixture(t, {reduced: true}); f.zoom(.5);
+  const f = fixture(t, {reduced: true}); f.zoom(.65);
   const p = f.location();
   f.pointer('pointerdown', p.x - 20, p.y);
   f.pointer('pointermove', p.x, p.y, {buttons: 1});
@@ -181,7 +193,7 @@ test('dragging onto a train, right clicks, and canceled pointers do not select i
 });
 
 test('two-finger gestures cannot become a train tap when either finger is lifted', t => {
-  const f = fixture(t, {reduced: true}); f.zoom(.5);
+  const f = fixture(t, {reduced: true}); f.zoom(.65);
   const p = f.location();
   f.pointer('pointerdown', p.x, p.y, {pointerId: 1, pointerType: 'touch'});
   f.pointer('pointerdown', p.x + 25, p.y, {pointerId: 2, pointerType: 'touch'});
@@ -193,7 +205,7 @@ test('two-finger gestures cannot become a train tap when either finger is lifted
 });
 
 test('keyboard selection, reduced-motion framing, pause, and normal Tab navigation remain usable', t => {
-  const f = fixture(t, {reduced: true}); f.zoom(.5);
+  const f = fixture(t, {reduced: true}); f.zoom(.65);
   f.key('f'); f.update();
   assert.notEqual(f.view.selected, null); assert.equal(f.view.mode, 'close');
   assert.ok(f.view.navigation.zoom >= 3.2);

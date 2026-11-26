@@ -194,7 +194,7 @@ function metrics(now,interval,cpu){
   const active=trains.reduce((count,train)=>count+(train.state.active?1:0),0);
   Object.assign(canvas.dataset,{frameP95:percentile(frameTimes).toFixed(2),cpuP95:percentile(cpuTimes).toFixed(2),
     drawCalls:String(renderer.info.render.calls),triangles:String(renderer.info.render.triangles),
-    geometries:String(renderer.info.memory.geometries),activeTrains:String(active),
+    geometries:String(renderer.info.memory.geometries),activeTrains:String(active),mapNetworkVisibility:mapWorld.stats.networkVisibility.toFixed(3),
     visibleTrains:String(railway.stats?.visibleTrains??0),detailChunks:String(detail.stats?.chunks??detail.stats?.loadedChunks??0),
     detailReady:String(detail.ready),detailSettled:String(detail.settled),detailRevealing:String(detail.stats.revealingChunks),detailBase:String(detailBase.root.visible),detailRequired:String(detail.stats.requiredChunks??0),
     detailPending:String(detail.stats.pendingChunks??0),detailWorkers:String(worker.stats.workers),detailWorkerMs:String(Math.round(worker.stats.lastChunkMs)),detailBytes:String(detail.stats.bytes??0),

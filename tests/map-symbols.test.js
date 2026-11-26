@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {buildMapWorld} from '../src/map-world.js';
-import {MAP_SYMBOL_PIXELS,mapSymbolMetrics} from '../src/map-symbols.js';
+import {MAP_SYMBOL_PIXELS,MAP_CITY_DOT_DIAMETER,mapSymbolMetrics} from '../src/map-symbols.js';
 import {styleUniforms} from '../src/scene-style.js';
 import {surfacePoint,surfaceNormal,surfaceFrame} from '../src/world-surface.js';
 
@@ -12,10 +12,10 @@ test('atlas symbols stay readable and bounded in CSS pixels from regional to pla
   for(const units of [.08,.4,2,8,40])for(const symbolScale of [1,2.6]){
     const metrics=mapSymbolMetrics(units,symbolScale,1.8);
     assert.ok(Math.abs(.42*metrics.routeScale/units-MAP_SYMBOL_PIXELS.railCore)<1e-10);
-    assert.ok(Math.abs(.96*metrics.routeScale/units-3.2)<1e-10,'ivory casing maintains a crisp subpixel margin around its ink');
+    assert.ok(Math.abs(.96*metrics.routeScale/units-48/7)<1e-10,'ivory casing gives the bold railway a clear outline');
     for(const level of [1,5,10]){
       const diameter=2*(1.75+level*.12)*symbolScale*metrics.cityScale/units;
-      assert.ok(diameter>=11&&diameter<=18,'development tiers stay recognizable without overwhelming the atlas');
+      assert.ok(diameter>=24&&diameter<=39,'development tiers have substantial, recognizable silhouettes');
     }
     if(units>1){
       assert.ok(Math.abs(1.22*1.8*metrics.trainScaleX/units-MAP_SYMBOL_PIXELS.trainWidth)<1e-10);
@@ -115,7 +115,7 @@ test('dense British cities keep one priority stamp and anchored owner dots on bo
       for(let i=1;i<glyphs.length;i++){
         const glyph=glyphs[i];glyph.geometry.computeBoundingBox();
         const pixels=2*glyph.geometry.boundingBox.max.x*shader.uniforms.mapCityScale.value*glyph.geometry.attributes.cityCompactScale.getX(0)/units;
-        assert.ok(Math.abs(pixels-3.4)<.00001,'secondary city retains a bounded, readable owner dot');
+        assert.ok(Math.abs(pixels-MAP_CITY_DOT_DIAMETER)<.00001,'secondary city retains a bounded, readable owner dot');
         const color=new THREE.Vector3().fromBufferAttribute(glyph.geometry.attributes.cityDotColor,0);
         assert.ok(color.length()>0,'compact glyph carries its owner color');
       }
@@ -144,4 +144,21 @@ test('city priority is stable across input ordering and reduced motion updates w
     assert.deepEqual(details(maps[0]),details(maps[1]));
     assert.ok(Object.values(details(maps[0])).every(value=>value===0||value===1));
   }finally{maps.forEach(map=>map.dispose());}
+});
+
+test('enlarged train marks persist through regional zoom until separate carriages are readable',()=>{
+  const map=buildMapWorld(new THREE.Group(),emptyWorld());
+  const parts=Array.from({length:3},(_,i)=>{const part=new THREE.Group();part.position.z=i*2.64;return part;});
+  const trains=[{state:{id:'regional',color:'teal',active:true},parts}];
+  const camera=new THREE.OrthographicCamera(-800,800,600,-600,.1,10000);
+  try{
+    for(const units of [2,.81,.79,.4,.2]){
+      camera.zoom=2/units;map.update(trains,{camera,viewportHeight:600});
+      assert.equal(map.stats.updatedCars,1,'one readable mark survives the previous regional cutoff');
+      const mesh=map.root.getObjectByName('map-train-outlines'),matrix=new THREE.Matrix4();mesh.getMatrixAt(0,matrix);
+      assert.ok(Math.abs(2.45*new THREE.Vector3().setFromMatrixColumn(matrix,2).length()/units-15)<1e-5);
+    }
+    camera.zoom=20;map.update(trains,{camera,viewportHeight:600});
+    assert.equal(map.stats.updatedCars,3,'close carriages retain physical spacing once each is large enough');
+  }finally{map.dispose();}
 });

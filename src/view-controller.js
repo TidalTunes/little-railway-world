@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CAMERA_ZOOM,modeForZoom,mapBlendForZoom,shouldStopFollowing,fitZoomForSpan,smoothZoom } from './camera-modes.js';
 import { C } from './palette.js';
+import {mapNetworkVisibility} from './map-symbols.js';
 import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent,surfaceOffset as offsetOnSurface } from './world-surface.js';
 
 const ease=(rate,dt,reduced)=>reduced?1:1-Math.exp(-rate*dt);
@@ -151,6 +152,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   }
   function isVisible(train,part){
     if(!train.state.active)return false;
+    if(blend>.7&&mapNetworkVisibility(camera.zoom)===0)return false;
     if(!part)return train.parts.some(car=>isVisible(train,car));
     if(!part.visible)return false;
     const p=screenPosition(train,part);
@@ -358,6 +360,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       }
       const highlighted=selected??hovered;
       ring.visible=mapRing.visible=!!highlighted?.state.active;
+      mapRing.visible&&=mapNetworkVisibility(camera.zoom)>0;
       if(highlighted){
         const part=centerOf(highlighted);
         for(const marker of [ring,mapRing]){
@@ -375,6 +378,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
           }
           marker.scale.set(1.35,1,4.65);
           marker.material.opacity=selected?.state.id===highlighted.state.id ? .95 : .48;
+          if(marker===mapRing)marker.material.opacity*=mapNetworkVisibility(camera.zoom);
         }
       }
       updateDOM();
