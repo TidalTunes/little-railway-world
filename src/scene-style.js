@@ -37,13 +37,15 @@ export function applySceneStyle(material,{kind=material.userData.sceneStyle??'as
     }else if(kind==='water'||kind==='surf'){
       finish=`float rippleFootprint = length(fwidth(paintedPosition));
         float rippleVisibility = 1.0 - smoothstep(0.8, 4.0, rippleFootprint);
-        float drift = sin(dot(paintedPosition, vec3(0.13, 0.05, -0.17)));
+        float drift = sin(dot(paintedPosition, vec3(0.13, 0.05, -0.17)))
+          + 0.45 * sin(dot(paintedPosition, vec3(-0.037, 0.061, 0.049)));
         float ripple = sin(dot(paintedPosition, vec3(0.72, 0.31, 1.18)) - worldTime * 0.65 + drift * 0.75);
         float brokenCrest = sin(dot(paintedPosition, vec3(-0.12, 0.047, 0.058)) - worldTime * 0.09);
-        float crest = smoothstep(0.94, 0.995, ripple) * smoothstep(-0.15, 0.65, brokenCrest) * rippleVisibility;
-        outgoingLight *= 1.0 + ripple * 0.022 * rippleVisibility;
+        float crest = smoothstep(0.95, 0.998, ripple) * smoothstep(0.10, 0.75, brokenCrest) * rippleVisibility;
+        outgoingLight *= 1.0 + ripple * 0.015 * rippleVisibility;
         outgoingLight += vec3(0.018, 0.035, 0.033) * crest * (1.0 - worldNight * 0.65);`;
-      if(kind==='surf')finish+=`outgoingLight *= 0.80 + 0.20 * sin(dot(paintedPosition, vec3(0.19, 0.13, 0.24)) - worldTime * 0.65);`;
+      if(kind==='surf')finish+=`float wash = sin(dot(paintedPosition, vec3(0.19, 0.13, 0.24)) - worldTime * 0.65 + drift);
+        outgoingLight *= 0.91 + 0.09 * wash;`;
       if(basic)finish+='outgoingLight = mix(outgoingLight, outgoingLight * vec3(0.12, 0.25, 0.40) + vec3(0.006, 0.014, 0.027), worldNight);';
     }else{
       const amount=kind==='terrain'?'0.065':'0.032';
@@ -59,7 +61,7 @@ export function applySceneStyle(material,{kind=material.userData.sceneStyle??'as
       finish+='outgoingLight = mix(outgoingLight, outgoingLight * vec3(0.66, 0.85, 1.24) + vec3(0.002, 0.005, 0.013), worldNight);';
     shader.fragmentShader=shader.fragmentShader.replace('#include <opaque_fragment>',finish+'\n#include <opaque_fragment>');
   };
-  material.customProgramCacheKey=()=>`${baseKey}|painted-world-v1:${kind}:${role}:${basic?'basic':'lit'}`;
+  material.customProgramCacheKey=()=>`${baseKey}|painted-world-v2:${kind}:${role}:${basic?'basic':'lit'}`;
   return material;
 }
 

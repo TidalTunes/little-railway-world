@@ -1,8 +1,28 @@
-import {C} from './palette.js';
+import {C,color} from './palette.js';
+import {sampleLandscape} from './landscape-field.js';
 
 const clamp=value=>Math.max(0,Math.min(1,value));
 const smooth=value=>{const t=clamp(value);return t*t*(3-2*t);};
 const mix=(a,b,t)=>a.clone().lerp(b,t);
+const canopyFloor=color(.615,.079,145),dryHeath=color(.72,.071,99),sandstone=color(.77,.077,65),blueIce=color(.90,.035,220);
+
+/** One restrained district palette for both ground and its scenery. A high
+ * patch value is a closed grove or stony desert; open ground occupies the same
+ * clearings used by the placement planner. This only paints existing vertices.
+ */
+export function paintLandscapeColor(target,landscape,forest=0,desert=0,ice=0,grass=0){
+  const cover=smooth((landscape.patch-.27)/.46),dry=smooth((.57-landscape.moisture)/.36);
+  target.lerp(C.meadow,forest*(1-cover)*.15);
+  target.lerp(canopyFloor,forest*cover*.13);
+  target.lerp(C.meadow,grass*(1-cover)*.11);
+  target.lerp(dryHeath,grass*dry*.12);
+  target.lerp(C.grassDark,grass*(1-dry)*cover*.07);
+  target.lerp(C.desertLight,desert*(1-cover)*.20);
+  target.lerp(sandstone,desert*cover*.24);
+  target.lerp(blueIce,ice*dry*.13);
+  const variation=(landscape.moisture-.5)*.028+(landscape.detail-.5)*.012;
+  return target.multiplyScalar(1+variation*(1-ice*.8));
+}
 
 // These are vegetation families inside the existing placement biomes. Keeping
 // them separate preserves every authored farm, forest and dry-land reservation.
@@ -60,9 +80,12 @@ export function createGlobeLandField(source,sites){
     const latitude=latitudeOffset-site.z/radius,longitude=longitudeOffset+site.x/radius,c=Math.cos(latitude);
     const region=landEcoregion({...site,latitude:latitude*180/Math.PI});
     return {x:c*Math.sin(longitude),y:Math.sin(latitude),z:c*Math.cos(longitude),
-      color:colors[region],forest:['tropical','woodland','taiga'].includes(region)?1:0,ice:region==='ice'?1:0};
+      color:colors[region],forest:['tropical','woodland','taiga'].includes(region)?1:0,
+      desert:region==='desert'?1:0,ice:region==='ice'?1:0,
+      grass:['meadow','savanna','steppe','mediterranean','tundra'].includes(region)?1:0};
   });
   const distances=new Float64Array(prepared.length),width=.105,smoothing=width*.55;
+  const landscape={},paint=C.grass.clone();
   for(let row=0;row<=rows;row++){
     const latitude=Math.PI/2-row*Math.PI/rows,cosine=row===0||row===rows?0:Math.cos(latitude),ny=Math.sin(latitude);
     for(let column=0;column<columns;column++){
@@ -76,23 +99,28 @@ export function createGlobeLandField(source,sites){
         const site=prepared[i],dx=px-site.x,dy=py-site.y,dz=pz-site.z;
         distances[i]=Math.sqrt(dx*dx+dy*dy+dz*dz+smoothing*smoothing);nearest=Math.min(nearest,distances[i]);
       }
-      let total=0,r=0,g=0,b=0,forest=0,ice=0;
+      let total=0,r=0,g=0,b=0,forest=0,desert=0,ice=0,grass=0;
       for(let i=0;i<prepared.length;i++){
         const site=prepared[i],weight=Math.exp(-(distances[i]-nearest)/width);
         total+=weight;r+=site.color.r*weight;g+=site.color.g*weight;b+=site.color.b*weight;
-        forest+=site.forest*weight;ice+=site.ice*weight;
+        forest+=site.forest*weight;desert+=site.desert*weight;ice+=site.ice*weight;grass+=site.grass*weight;
       }
-      r/=total;g/=total;b/=total;forest/=total;ice/=total;
+      r/=total;g/=total;b/=total;forest/=total;desert/=total;ice/=total;grass/=total;
       const tundra=smooth((Math.abs(latitude)*180/Math.PI-61)/15)*(1-ice)*.88;
       r+=(colors.tundra.r-r)*tundra;g+=(colors.tundra.g-g)*tundra;b+=(colors.tundra.b-b)*tundra;
       const glade=smooth((broad-.42)/.4)*forest*(1-tundra)*.14;
       r+=(C.meadow.r-r)*glade;g+=(C.meadow.g-g)*glade;b+=(C.meadow.b-b)*glade;
       // Broad woodland glades and dry-country variation remain visible from
       // orbit. The same field is used locally; no forest objects are needed here.
-      const vegetation=(broad-.5)*.13+(middle-.5)*.055;
+      const vegetation=(broad-.5)*.10+(middle-.5)*.045;
       const shade=1+vegetation*(1-ice*.95)*(1+forest*.7);
       const index=(row*columns+column)*3;
-      values[index]=r*shade;values[index+1]=g*shade;values[index+2]=b*shade;
+      // The full ecology pass runs once over this fixed-size lookup, never for
+      // each terrain vertex. Map and close detail sample the identical colors.
+      sampleLandscape(source,(longitude-longitudeOffset)*radius,(latitudeOffset-latitude)*radius,landscape);
+      paint.setRGB(r*shade,g*shade,b*shade);
+      paintLandscapeColor(paint,landscape,forest*(1-tundra)*.65,desert*.8,ice,grass+tundra);
+      values[index]=paint.r;values[index+1]=paint.g;values[index+2]=paint.b;
     }
   }
   // A chart's entire top/bottom row denotes a single physical point. Identical

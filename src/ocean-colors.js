@@ -3,10 +3,15 @@ import {C,color} from './palette.js';
 import {surfaceNormal,surfaceGeographicCoordinates} from './world-surface.js';
 import {terrainColor} from './terrain-colors.js';
 import {BoundsTree} from './spatial-index.js';
+import {sampleLandscape} from './landscape-field.js';
 
 const fields=new WeakMap(),normal=new Vector3(),geographic={};
 const deep=color(.57,.092,235),temperate=color(.615,.091,224),shallows=color(.72,.082,202);
+const coldWater=color(.64,.055,219),coldShallows=color(.75,.045,207);
 const wetSand=C.sand.clone().lerp(C.oceanLight,.32).multiplyScalar(.94);
+const shingle=C.rockLight.clone().lerp(C.oceanLight,.25).multiplyScalar(.87);
+const iceShore=C.snow.clone().lerp(C.oceanLight,.26);
+const coastSample={},shoreSample=new Color(),shelfSample=new Color();
 const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
 const distance2=(point,a,b)=>{
   let dot=0,length=0;for(let i=0;i<point.length;i++){const d=b[i]-a[i];dot+=(point[i]-a[i])*d;length+=d*d;}
@@ -78,10 +83,22 @@ export function oceanColor(world,x,z,target=new Color()){
   const {x:nx,y:ny,z:nz}=normal,latitude=Math.abs(geographic.latitude)/90;
   const current=(Math.sin(nx*5.1+ny*2.3-nz*3.7)+Math.sin(ny*6.3+nz*4.2+nx*1.7))*.25+.5;
   target.copy(deep).lerp(temperate,.38+.42*current-.15*latitude);
-  const field=fieldFor(source),width=24+18*current;
+  // Wide warm shelves and quieter slate-blue cold seas give each coast a
+  // regional character without another water layer or bathymetry mesh.
+  const cold=smooth((latitude-.50)/.43);
+  target.lerp(coldWater,cold*.26);
+  const field=fieldFor(source),width=(24+18*current)*(1-cold*.32);
   const distance=field?.sphere?sphereDistance(field.sphere,[nx*source.surface.radius,ny*source.surface.radius,nz*source.surface.radius],width*2):width*2;
   const shelf=Math.exp(-((distance/width)**2))*(.64-.16*latitude);
-  return target.lerp(shallows,shelf);
+  shelfSample.copy(shallows).lerp(coldShallows,cold*.72);
+  return target.lerp(shelfSample,shelf);
+}
+
+/** A physical landscape field makes long stretches of beach, shingle and
+ * exposed headland agree across streamed cells. No extra shore geometry. */
+export function coastExposure(world,x,z){
+  sampleLandscape(world.terrainSource??world,x,z,coastSample);
+  return .25+.75*smooth((coastSample.patch-.18)/.64);
 }
 
 /** Narrow coasts merge wet sand into the neighboring biome instead of drawing
@@ -92,5 +109,9 @@ export function shoreColor(world,x,z,{map=false,target=new Color()}={}){
   if(distance>=width*1.5)return target.copy(C.sand);
   const blend=smooth(distance/width);
   terrainColor(source,x,z,{map,target});
-  return target.lerp(wetSand,1-blend);
+  sampleLandscape(source,x,z,coastSample);
+  const rocky=smooth((coastSample.patch-.30)/.50)*.58;
+  const polar=source.surface?.complete?smooth((Math.abs(coastSample.latitude)-61)/18):0;
+  shoreSample.copy(wetSand).lerp(shingle,rocky).lerp(iceShore,polar*.80);
+  return target.lerp(shoreSample,1-blend);
 }

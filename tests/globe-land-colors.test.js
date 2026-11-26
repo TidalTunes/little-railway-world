@@ -57,7 +57,7 @@ test('map and detailed chunks sample the identical continuous globe field',()=>{
     const p=projectEarth(longitude,latitude),detail=terrainColor(earth,p.x,p.z);
     assert.deepEqual(detail,terrainColor(earth,p.x,p.z,{map:true}),'zoom does not recolor the ground');
     assert.deepEqual(detail,terrainColor(regional,p.x,p.z),'workers and chunk boundaries share one field');
-    assert.deepEqual(detail,terrainColor({biomes:{sites:earth.biomes.sites},surface:earth.surface},p.x,p.z),'field is independent of local bounds');
+    assert.deepEqual(detail,terrainColor({seed:earth.seed,biomes:{sites:earth.biomes.sites},surface:earth.surface},p.x,p.z),'field is independent of local bounds');
     assert.ok(detail.toArray().every(value=>Number.isFinite(value)&&value>=0&&value<=1));
   }
   const ice=sample(earth,80,-80),forest=sample(earth,-60,-5),desert=sample(earth,18,25);

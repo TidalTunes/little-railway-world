@@ -80,7 +80,7 @@ test('cloned wing materials retain the shared painted-world shader and time unif
     assert.equal(shader.uniforms.worldNight,styleUniforms.night);
     assert.equal(shader.uniforms.worldTime,styleUniforms.time);
     assert.match(shader.fragmentShader,/grainVisibility/);
-    assert.equal((material.customProgramCacheKey().match(/painted-world-v1/g)??[]).length,1,'clone receives exactly one style hook');
+    assert.equal((material.customProgramCacheKey().match(/painted-world-v\d+/g)??[]).length,1,'clone receives exactly one style hook');
   }
   life.dispose();
 });

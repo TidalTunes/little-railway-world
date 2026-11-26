@@ -75,6 +75,7 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 | `src/alignments.js` | Exact straight and circular-arc tracks with continuous tangents and a minimum turning radius. |
 | `src/biomes.js` | Broad seeded regions, authored sites, protected coastal bays, and complete-footprint lookup. |
 | `src/terrain-colors.js` / `src/globe-land-colors.js` / `src/ocean-colors.js` | Shared land ecology, spherical ocean color, coastal shelves, and blended shores. |
+| `src/landscape-field.js` / `src/nature-assets.js` | Continuous seeded landscape districts and bounded meadow, scrub, dune, rock and ice details. |
 | `src/mountain-shape.js` | Shared irregular mountain mesh and exact surface-height lookup. |
 | `src/geography.js` | Clipped biome terrain, excavated water, continuous bridge decks, mountain cuttings, and tunnel portals. |
 | `src/assets.js` | Reusable low-poly assets with declared silhouette bounds. |
@@ -90,6 +91,8 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 | `src/ambience.js` / `src/palette.js` | Background movement and the OKLCH material palette. |
 
 Scenery reserves complete roof and canopy footprints. Farms fit inside farmland, dense groves stay in forests, and cacti occupy desert. Shorelines exclude dry assets. Stations reserve their rotated platforms, and shared railway sections have one render owner so coincident rails are drawn once. Bridges span both banks across the full width of their curved decks.
+
+Forests grow into coherent cores, smaller edge trees and glades. Plains keep sparse groves and clustered grazing; desert districts share dune bearings, rock outcrops and scrub, with cacti restricted to the Americas on Earth. Climate shapes the pine, birch, broadleaf and acacia mix. Polar ice gains sparse low ridges. Ground color and scenery use the same continuous seeded field across the globe, including its date line and poles. Nature details use bounded geometry and an existing shared material; the ground portions follow spherical curvature without visible base tiles. Ocean and shore colors vary with latitude and coastal exposure, with restrained animated surf.
 
 City streets grow into connected winding lanes and irregular branches on dry ground beside the railway. Level-based footprints provide room for dense residential frontages and compact rear infill. Reusable lot candidates fill gaps without repeating geographic checks for every attempted building; houses receive priority before larger civic features. Buildings reserve their complete geometry and street clearances. Farmland joins broad, irregular fields along narrow lanes, with related crops and shared bearings across each neighborhood. Soft crop bands, whole-field orchards, occasional hedges, and farm buildings at the field edges give the countryside variety. Neighboring farms compare their actual polygon boundaries; conservative clearances still protect tracks, water, towns, and other scenery. Development sets a building budget and available asset types; constrained plots are skipped. Ownership and development are authoring data, with no economy or progression controls.
 

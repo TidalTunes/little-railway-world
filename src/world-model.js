@@ -5,6 +5,7 @@ import { mountainSurfaceHeight, mountainFootprintDistance } from './mountain-sha
 import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
 import { placeFarmland } from './farmland.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
+import {sampleLandscape} from './landscape-field.js';
 import {riversOf,riverBankDistance,riverCenterDistance,createHydrology} from './hydrology.js';
 import {normalizeSurface,surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceChartRadius,surfaceHeading,chartHeadingForSurface} from './world-surface.js';
 import {surfaceQueryBoxes,surfaceQuerySegments} from './surface-query.js';
@@ -557,33 +558,97 @@ function placeScenery(world,random,density) {
   const add=item=>world.placements.push({id:world.detailRegion?`asset-${world.detailRegion.minX}-${world.detailRegion.minZ}-${world.placements.length+1}`:`asset-${world.placements.length+1}`,y:0,rotation:random()*Math.PI*2,biome:biomeAt(world,item.x,item.z),...item});
   const region=world.detailRegion;
   const scale=Math.sqrt((region?(region.maxX-region.minX)*(region.maxZ-region.minZ):world.bounds.width*world.bounds.depth)/(130*95));
-  const candidate=()=>region?{x:lerp(region.minX,region.maxX,random()),z:lerp(region.minZ,region.maxZ,random())}:{x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94};
   const unfrozen=item=>!world.surface?.complete||inWorld(world,item.x,item.z)&&biomeDistance(world,'ice',item.x,item.z)<-footprintRadius(world,item);
   world.farmland=placeFarmland(world,{density,canPlace:item=>unfrozen(item)&&canPlace(world,item,{keepOutsideCities:true}),add});
-  // The forest is a connected biome, with small open glades between groves.
-  const groves=[];
-  for(let i=0;i<500&&groves.length<16;i++){const p=candidate();if(biomeAt(world,p.x,p.z)==='forest')groves.push(p);}
-  const treeTarget=Math.round(250*density*scale);
-  for(let attempt=0,accepted=0;attempt<treeTarget*65&&accepted<treeTarget;attempt++){
-    const forest=attempt%13!==0;
-    const grove=forest&&groves.length?groves[Math.floor(random()*groves.length)]:candidate();
-    if(!inWorld(world,grove.x,grove.z))continue;
-    const a=random()*Math.PI*2,r=Math.sqrt(random())*11,size=.68+random()*.4;
-    const item={kind:'tree',...surfaceOffset(world,grove.x,grove.z,Math.cos(a)*r,Math.sin(a)*r),radius:.85*size,
-      scale:size,variant:random()<.66?'pine':random()<.55?'round':'gold'};
-    const biome=biomeAt(world,item.x,item.z);
-    if(unfrozen(item)&&(forest?biome==='forest':biome==='plains')&&fitsBiome(world,['forest','plains'],item.x,item.z,item.radius)
-      &&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+  if(density<=0)return;
+  const bounds=region??{minX:-world.bounds.width*.47,maxX:world.bounds.width*.47,minZ:-world.bounds.depth*.47,maxZ:world.bounds.depth*.47};
+  const smooth=t=>{t=clamp(t,0,1);return t*t*(3-2*t);};
+  // Global jittered cells supply bounded candidates, never sixteen repeated
+  // grove stamps. A shared physical noise field shapes canopy cores, glades,
+  // species neighborhoods and dry-country districts across chunk boundaries.
+  const candidates=(spacing,label,limit,sort=true)=>{
+    spacing/=Math.sqrt(Math.min(2,density));
+    const area=(bounds.maxX-bounds.minX)*(bounds.maxZ-bounds.minZ);
+    spacing=Math.max(spacing,Math.sqrt(area/limit));
+    const list=[];
+    for(let iz=Math.floor(bounds.minZ/spacing);iz<=Math.floor(bounds.maxZ/spacing);iz++)for(let ix=Math.floor(bounds.minX/spacing);ix<=Math.floor(bounds.maxX/spacing);ix++){
+      const rng=seededRandom(`${world.seed}:landscape:${label}:${ix}:${iz}`);
+      const x=(ix+.08+rng()*.84)*spacing,z=(iz+.08+rng()*.84)*spacing;
+      if(x<bounds.minX||x>=bounds.maxX||z<bounds.minZ||z>=bounds.maxZ||!inWorld(world,x,z))continue;
+      list.push({x,z,rng,priority:rng()});
+    }
+    return sort?list.sort((a,b)=>a.priority-b.priority):list;
+  };
+  const allowed=(item,biomes,frozen=false)=>
+    (frozen?biomeDistance(world,'ice',item.x,item.z)>=footprintRadius(world,item):unfrozen(item))
+    &&fitsBiome(world,biomes,item.x,item.z,footprintRadius(world,item))
+    &&canPlace(world,item,{keepOutsideCities:true});
+  const treeTarget=Math.round(310*density*scale),ecology={};let trees=0;
+  // Crowns are roughly two units across. The old 3.8-unit candidate spacing
+  // could never close a canopy, while random budget truncation scattered the
+  // surviving trees evenly. Fill the strongest ecological cores first from a
+  // closer lattice: the same bounded budget now forms irregular woodland masses.
+  const canopy=candidates(2.2,'canopy',12000,false).filter(p=>{
+    p.biome=biomeAt(world,p.x,p.z);if(p.biome!=='forest'&&p.biome!=='plains')return false;
+    p.ecology=sampleLandscape(world,p.x,p.z);if(p.ecology.ecoregion==='polar')return false;
+    p.priority=p.biome==='forest'?1+p.ecology.patch*.75+p.ecology.detail*.25+p.priority*.025:p.priority;
+    return true;
+  }).sort((a,b)=>b.priority-a.priority);
+  for(const p of canopy){
+    if(trees>=treeTarget)break;
+    const biome=p.biome,e=p.ecology,rng=p.rng;
+    const core=smooth((e.patch-.35)/.34),grove=smooth((e.patch-.57)/.2);
+    const coverage=biome==='forest'?core*(.55+e.detail*.45):.004+grove*.054;
+    // Chart cells converge towards a pole; thinning preserves physical density.
+    const metric=world.surface?.projection.type==='equirectangular'?Math.max(.06,Math.cos(e.latitude*Math.PI/180)):1;
+    if(rng()>coverage*metric||e.ecoregion==='polar')continue;
+    const mature=biome==='forest'?core:grove,size=.48+mature*.48+rng()*.25;
+    let species=e.ecoregion==='tropical'?(biome==='plains'||e.moisture<.38?'acacia':'broadleaf'):
+      e.ecoregion==='boreal'?(e.moisture>.65?'birch':'pine'):
+      e.moisture<.36?'pine':e.moisture>.62?'birch':e.detail>.62?'gold':'broadleaf';
+    if(rng()<.09)species=species==='pine'?'birch':'round';
+    const item={kind:'tree',x:p.x,z:p.z,radius:.85*size,scale:size,variant:species,landscapeLayer:'canopy',
+      rotation:chartHeadingForSurface(world,p.x,p.z,rng()*Math.PI*2)};
+    if(allowed(item,['forest','plains'])){add(item);trees++;}
   }
-  for(let attempt=0,accepted=0;attempt<2200&&accepted<Math.round(25*density*scale);attempt++){
-    const size=.8+random()*.35,item={kind:'cactus',...candidate(),radius:.7*size,scale:size,variant:Math.floor(random()*3)};
-    if(unfrozen(item)&&fitsBiome(world,'desert',item.x,item.z,item.radius)&&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
-  }
-  for(let attempt=0,accepted=0;attempt<2500&&accepted<Math.round(65*density*scale);attempt++){
-    const kind=attempt%6===0?'sheep':'rock',size=.6+random()*.55;
-    const item={kind,...candidate(),radius:kind==='sheep'?.7:.65*size,scale:kind==='sheep'?1:size,variant:Math.floor(random()*3)};
-    if((kind==='rock'||unfrozen(item))&&fitsBiome(world,kind==='sheep'?'plains':['plains','desert'],item.x,item.z,item.radius)
-      &&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+  let patches=0,sheep=0,cacti=0;
+  const patchTarget=Math.round(48*density*scale),sheepTarget=Math.round(14*density*scale),cactusTarget=Math.round(12*density*scale);
+  for(const p of candidates(14,'understory',1800)){
+    const biome=biomeAt(world,p.x,p.z);if(!['forest','plains','desert'].includes(biome))continue;
+    const e=sampleLandscape(world,p.x,p.z,ecology),rng=p.rng;
+    const frozen=world.surface?.complete&&biomeDistance(world,'ice',p.x,p.z)>0;
+    let style=null,radius=2+rng()*2.4;
+    if(frozen){if(rng()<.36)style='frost';}
+    else if(biome==='desert'){
+      if(e.patch<.55&&rng()<.7){style='dune';radius=4.1+rng()*2.8;}
+      else if(e.patch>.61&&rng()<.67){style='outcrop';radius=2.8+rng()*2.3;}
+      else if(e.moisture>.47&&rng()<.28)style='scrub';
+    }else if(biome==='forest'){
+      if(e.patch<.47&&rng()<.45){style='meadow';radius=2.8+rng()*2.1;}
+      else if(e.detail>.72&&rng()<.18)style='outcrop';
+    }else if(e.ecoregion==='polar'){
+      if(rng()<.4)style=e.moisture>.52?'scrub':'frost';
+    }else if(e.patch<.6&&rng()<.46){style=e.moisture<.34?'scrub':'meadow';radius=2.6+rng()*2.5;}
+    else if(e.detail>.7&&rng()<.38)style='outcrop';
+    if(style&&patches<patchTarget){
+      const item={kind:'nature',x:p.x,z:p.z,radius,scale:1,style,variant:Math.floor(rng()*65536),
+        rotation:chartHeadingForSurface(world,p.x,p.z,e.windAngle+(rng()-.5)*.28)};
+      if(allowed(item,biome,frozen)){add(item);patches++;}
+    }
+    // Flocks graze together in selected glades. Sparse plant colonies stay in
+    // dry districts; Old World deserts use scrub rather than American cacti.
+    const herd=!frozen&&biome==='plains'&&e.ecoregion!=='polar'&&e.patch<.58&&e.moisture>.36&&rng()<.17;
+    const american=!world.surface?.complete||(e.longitude>-125&&e.longitude<-60);
+    const colony=!frozen&&biome==='desert'&&american&&e.patch>.5&&e.patch<.72&&rng()<.2;
+    if(!herd&&!colony)continue;
+    const count=2+Math.floor(rng()*4),heading=rng()*Math.PI*2;
+    for(let i=0;i<count;i++){
+      const kind=herd?'sheep':'cactus';if(herd?sheep>=sheepTarget:cacti>=cactusTarget)break;
+      const angle=rng()*Math.PI*2,offset=2.4+rng()*4.8,pos=surfaceOffset(world,p.x,p.z,Math.cos(angle)*offset,Math.sin(angle)*offset);
+      const size=herd?1:.72+rng()*.35,item={kind,...pos,radius:herd?.7:.7*size,scale:size,variant:Math.floor(rng()*3),
+        rotation:chartHeadingForSurface(world,pos.x,pos.z,heading+(rng()-.5)*.65)};
+      if(allowed(item,biome)){add(item);if(herd)sheep++;else cacti++;}
+    }
   }
 }
 

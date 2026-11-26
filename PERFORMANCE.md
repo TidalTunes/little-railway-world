@@ -67,6 +67,7 @@ The residential-density iteration removes the Earth preset’s fixed eight-unit 
 ## Architecture and limits
 
 - Biome queries use cached polygon and hole bounds, lazy ring/edge indexes, and bounded exact clearance searches. Regional clipping passes only intersecting polygons and holes to the Boolean sweep, then retains the exact local outline intersection.
+- Biome scenery samples a continuous seeded physical field with no scans over distant sites. Candidate and accepted-asset budgets bound each region. Meadow, scrub, dune, outcrop and frost patches each use one existing material and at most 150 authored triangles; curved grounding remains bounded. Regional ground colors share the fixed-size globe lookup with the map, so the extra ecological variety adds no overview geometry or per-frame scenery work.
 - Route and river queries use exact spatial indexes. Junction discovery prunes distant segments before intersection tests. Deterministic region generation reuses the same immutable network indexes.
 - Traffic keeps ordered same-route leaders, indexed conflict blocks, and a persistent spatial hash of carriage footprints. Sampling uses exact line/arc segments with indexed distance lookup. A shared typed pose buffer feeds both representations.
 - Terrain clipping and triangulation for the far map run in the worker and transfer ready-made position buffers. The far map uses coarse curve tessellation, batched city glyphs, and a single readable marker per train. Hidden map marker updates are skipped; the coarse terrain can remain beneath streaming detail.

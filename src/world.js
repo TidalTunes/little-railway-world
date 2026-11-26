@@ -2,6 +2,7 @@ import { group, cylinder, ico, consolidate, ribbon } from './geometry.js';
 import { buildTerrain, buildMountains } from './geography.js';
 import { buildRailways } from './railway.js';
 import { house, station, tree, landmark, apartment, civic, plaza, tower, farmPatch, sheep, person, cactus } from './assets.js';
+import {naturePatch} from './nature-assets.js';
 import { createPlayerPalette } from './player-palette.js';
 import { biomeAt } from './biomes.js';
 import {extractRigidSurfaceAssets} from './rigid-surface-assets.js';
@@ -45,9 +46,10 @@ export function buildWorld(parent,world,{terrain=true,rigidAssets=null,animatedL
     else if(p.kind==='plaza')plaza(root,{...p,palette});
     else if(p.kind==='tower')tower(root,{...p,palette});
     else if(p.kind==='farm')farmPatch(root,p);
+    else if(p.kind==='nature')naturePatch(root,p);
     else if(p.kind==='sheep'&&!animatedLife)sheep(root,p);
     else if(p.kind==='cactus')cactus(root,p);
-    else if(p.kind==='tree')tree(root,{...p,variant:{pine:Math.floor(p.scale*7)%3,round:3,gold:4}[p.variant]??0});
+    else if(p.kind==='tree')tree(root,{...p,variant:{pine:Math.floor(p.scale*7)%3,round:3,gold:4,light:5,broadleaf:6,acacia:7,birch:8}[p.variant]??0});
     else if(p.kind==='rock')ico(root,p.x,.30*p.scale,p.z,.60*p.scale,.5*p.scale,.58*p.scale,p.biome==='desert'?'desertRock':p.variant%2?'rockLight':'rock').userData.rigidSurfaceAsset=true;
   }
   world.stations.forEach((p,i)=>{

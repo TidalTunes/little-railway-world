@@ -7,6 +7,7 @@ import {mountainSurfaceColor,mountainTrees} from '../src/mountain-cover.js';
 import {terrainColor} from '../src/terrain-colors.js';
 import {buildMountains,createMountainGeometry} from '../src/geography.js';
 import {C,M} from '../src/palette.js';
+import {surfaceDistance} from '../src/world-surface.js';
 
 function fixture(){
   const mountain=compileMountainRange({id:'forest-test',polygon:[[-70,-40],[70,-40],[70,40],[-70,40]],
@@ -67,6 +68,26 @@ test('mountain forests are deterministic, bounded, nonoverlapping and identicall
     }
   }
   assert.deepEqual(mountainTrees({...world,density:0},mountain),[]);
+});
+
+test('high-latitude mountain forests preserve physical crown spacing and independent chunk ownership',()=>{
+  const {mountain}=fixture();
+  for(const latitude of [72,85,-72]){
+    const radius=1600,world={seed:'polar-forest-spacing',mountains:[mountain],lines:[],density:1,
+      surface:{type:'sphere',radius,complete:true,origin:{longitude:0,latitude},
+        projection:{type:'equirectangular',radius,centralLongitude:0,centralLatitude:latitude}}};
+    const whole=mountainTrees(world,mountain);
+    assert.ok(whole.length>0,`forests survive at ${latitude} degrees`);
+    for(let i=0;i<whole.length;i++)for(let j=i+1;j<whole.length;j++){
+      const a=whole[i],b=whole[j];
+      assert.ok(surfaceDistance(world,a,b)>a.radius+b.radius,
+        `${latitude} degrees: physical crowns ${a.id} and ${b.id} remain separate`);
+    }
+    const west=mountainTrees(world,{...mountain,renderBounds:{minX:-70,maxX:0,minZ:-40,maxZ:40}});
+    const east=mountainTrees(world,{...mountain,renderBounds:{minX:0,maxX:70,minZ:-40,maxZ:40}});
+    const sorted=items=>items.sort((a,b)=>a.id.localeCompare(b.id));
+    assert.deepEqual(sorted([...west,...east]),sorted(whole),'row density never depends on the loaded region');
+  }
 });
 
 test('tree crowns clear the rail cutting, river banks, stations and scene assets',()=>{

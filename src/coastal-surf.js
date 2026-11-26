@@ -3,7 +3,7 @@ import clipping from './polygon-ops.js';
 import {BoundsTree} from './spatial-index.js';
 import {clipPolygonsToBounds} from './polygon-region.js';
 import {surfaceOffset,surfaceDisplacement,surfaceChartRadius} from './world-surface.js';
-import {oceanColor,coastDistance} from './ocean-colors.js';
+import {oceanColor,coastDistance,coastExposure} from './ocean-colors.js';
 import {C} from './palette.js';
 
 const indexes=new WeakMap();
@@ -109,7 +109,8 @@ export function coastalSurfGeometry(world,bounds,y){
         // The pale, turquoise breaker sits between a wet coastal rim and quiet
         // shelf water. It is painted rather than alpha blended, keeping overdraw
         // and sorting independent of the number of coastline pieces.
-        const distance=coastDistance(world,x,z,2),blend=.23+.20*Math.max(0,1-Math.abs(distance-.82)/.65);
+        const distance=coastDistance(world,x,z,2),exposure=coastExposure(world,x,z);
+        const blend=(.13+.26*Math.max(0,1-Math.abs(distance-.82)/.65))*(.45+.55*exposure);
         sample.lerp(C.foam,blend);painted=sample.toArray();samples.set(key,painted);
       }
       vertices.push(x,y,z);colors.push(...painted);

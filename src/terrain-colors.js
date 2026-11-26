@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {C} from './palette.js';
-import {createGlobeLandField,sampleGlobeLand} from './globe-land-colors.js';
+import {createGlobeLandField,sampleGlobeLand,paintLandscapeColor} from './globe-land-colors.js';
+import {sampleLandscape} from './landscape-field.js';
 
 const fields=new WeakMap();
 const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
@@ -17,21 +18,22 @@ export function terrainNoise(x,z,scale=24){
 function fieldFor(world){
   const source=world.terrainSource??world,sites=source.biomes?.sites??source.sites;
   if(!sites?.length)return null;
-  if(!fields.has(sites)){
+  if(!fields.has(sites)||fields.get(sites).seed!==source.seed){
     if(source.surface?.complete){
-      const field={globe:createGlobeLandField(source,sites)};fields.set(sites,field);return field;
+      const field={seed:source.seed,globe:createGlobeLandField(source,sites)};fields.set(sites,field);return field;
     }
     const extent=Math.hypot(source.bounds?.width??130,source.bounds?.depth??95);
     const width=Math.min(22,Math.max(4.5,extent*.011));
     const colors={farmland:C.grass.clone().lerp(C.farmland,.43),forest:C.grass.clone().lerp(C.forestFloor,.78),
       plains:C.grass.clone(),desert:C.desert.clone()};
-    fields.set(sites,{sites:sites.map(site=>({...site,color:site.ice?C.snow:colors[site.type]??C.grass})),width,
+    fields.set(sites,{seed:source.seed,sites:sites.map(site=>({...site,color:site.ice?C.snow:colors[site.type]??C.grass})),width,
       period:source.surface?.complete?source.bounds.width:0,distances:new Float64Array(sites.length)});
   }
   return fields.get(sites);
 }
 
 /** Visual ecotones do not alter the exact biome masks used by asset clearance. */
+const landscape={};
 export function terrainColor(world,x,z,{map=false,target=new THREE.Color()}={}){
   const field=fieldFor(world);
   if(!field)return target.copy(C.grass);
@@ -46,7 +48,7 @@ export function terrainColor(world,x,z,{map=false,target=new THREE.Color()}={}){
   const pz=z+(noise(x-73,z+119,39)-.5)*width*.85;
   // Every site within the blend band participates, so even four-way junctions
   // are continuous. The small distance array is reused between vertex samples.
-  let nearest=Infinity,total=0;
+  let nearest=Infinity,total=0,forest=0,desert=0,ice=0,grass=0;
   for(let i=0;i<sites.length;i++){
     const dx=period?((px-sites[i].x+period/2)%period+period)%period-period/2:px-sites[i].x;
     distances[i]=Math.hypot(dx,pz-sites[i].z);nearest=Math.min(nearest,distances[i]);
@@ -54,9 +56,16 @@ export function terrainColor(world,x,z,{map=false,target=new THREE.Color()}={}){
   target.setRGB(0,0,0);
   for(let i=0;i<sites.length;i++){
     const weight=smooth(1-(distances[i]-nearest)/width),color=sites[i].color;
+    const site=sites[i];
     target.r+=color.r*weight;target.g+=color.g*weight;target.b+=color.b*weight;total+=weight;
+    if(site.ice)ice+=weight;
+    else if(site.type==='forest')forest+=weight;
+    else if(site.type==='desert')desert+=weight;
+    else if(site.type==='plains')grass+=weight;
   }
   target.multiplyScalar(1/total);
+  sampleLandscape(world.terrainSource??world,x,z,landscape);
+  paintLandscapeColor(target,landscape,forest/total,desert/total,ice/total,grass/total);
   // Broad, subtle meadow variation, with quieter values in the network map.
   const variation=(noise(x,z,29)-.5)*.09+(noise(x+243,z-192,91)-.5)*.07;
   target.multiplyScalar(1+variation*(map?.42:1));

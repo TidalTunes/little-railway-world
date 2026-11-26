@@ -94,16 +94,27 @@ export function station(parent, { x = 0, y = 0, z = 0, rotation = 0, color = 'pl
   return g;
 }
 
-export function tree(parent, { x = 0, y = 0, z = 0, scale = 1, variant = 0 } = {}) {
-  const g = asset(parent, 'tree', { x, y, z, scale });
-  const type = variantOf(variant, 6);
-  cylinder(g, 0, .50, 0, .085, .13, 1.00, 'bark', 5);
+export function tree(parent, { x = 0, y = 0, z = 0, rotation = 0, scale = 1, variant = 0 } = {}) {
+  const g = asset(parent, 'tree', { x, y, z, rotation, scale });
+  const type = variantOf(variant, 9);
+  cylinder(g, 0, type===8?.82:.50, 0, .085, .13, type===8?1.64:1.00, type===8?'trim':'bark', 5);
   if (type < 3) {
     cylinder(g, 0, 1.40, 0, 0, .80, 1.45, type === 1 ? 'pineLight' : 'pine', 7);
     cylinder(g, 0, 2.03, 0, 0, .57, 1.38, type === 2 ? 'pineDark' : 'pineLight', 7);
-  } else {
+  } else if(type<6) {
     const foliage = ['leaf', 'leafGold', 'leafLight'][type - 3];
     ico(g, 0, 1.55, 0, .84, 1.05, .84, foliage);
+  } else if(type===6){
+    // One broad, crooked crown reads as oak without adding canopy layers.
+    beam(g,v(0,.75,0),v(.23,1.43,.08),.11,'bark');
+    ico(g,0,1.68,0,.84,.82,.80,'leaf');
+  } else if(type===7){
+    beam(g,v(0,.65,0),v(-.29,1.29,.06),.10,'bark');
+    beam(g,v(0,.72,0),v(.30,1.34,-.04),.09,'bark');
+    ico(g,0,1.51,0,.84,.35,.80,'pineLight');
+  } else {
+    beam(g,v(0,1.12,0),v(.22,1.67,.08),.07,'trim');
+    ico(g,.07,1.85,0,.55,.88,.56,'leafLight');
   }
   return g;
 }

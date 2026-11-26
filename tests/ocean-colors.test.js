@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import {oceanColor,shoreColor,coastDistance} from '../src/ocean-colors.js';
+import {oceanColor,shoreColor,coastDistance,coastExposure} from '../src/ocean-colors.js';
 import {terrainColor} from '../src/terrain-colors.js';
 import {createSurfaceShell} from '../src/surface-shell.js';
 
@@ -46,6 +46,19 @@ test('wet coasts meet the inland biome exactly without a uniformly pale outline'
   assert.ok(coast.toArray().some((value,i)=>Math.abs(value-inland.toArray()[i])>.01));
   for(let i=0;i<3;i++)assert.ok(middle.toArray()[i]>=Math.min(coast.toArray()[i],inland.toArray()[i])-.002
     &&middle.toArray()[i]<=Math.max(coast.toArray()[i],inland.toArray()[i])+.002,'shore colors vary smoothly from wet sand to ground');
+});
+
+test('coastal character forms continuous districts, including globe seams and polar shores',()=>{
+  const world={...globe(),seed:'coastal-districts'},samples=[];
+  for(let x=-300;x<=300;x+=2)samples.push(coastExposure(world,x,0));
+  assert.ok(Math.max(...samples)-Math.min(...samples)>.25,'headlands and quiet shore stretches have visibly different surf');
+  for(let i=1;i<samples.length;i++)assert.ok(Math.abs(samples[i]-samples[i-1])<.15,'character changes smoothly along the coast');
+  for(const z of [-1600,0,1800])assert.ok(Math.abs(coastExposure(world,-half,z)-coastExposure(world,half,z))<1e-10);
+  assert.equal(coastExposure(world,half,half/2),coastExposure(world,0,half/2),'the pole has only one coastal character');
+  const z=-radius*80*Math.PI/180,polar={...world,biomes:{...world.biomes,
+    ocean:[[ring(-half,-half/2,half,half/2),ring(-10,z-10,10,z+10)]]}};
+  const ice=shoreColor(polar,10,z),beach=shoreColor(world,10,0);
+  assert.ok(ice.b>beach.b+.1&&ice.r>beach.r,'polar margins read as blue-white ice, not warm sand');
 });
 
 test('both ocean representations share opaque closed shells and identical color samples',()=>{
