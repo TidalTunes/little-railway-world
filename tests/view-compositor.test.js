@@ -44,7 +44,7 @@ function fixture({failRender=false,failCompile=false}={}){
   return{world,map,view,geometry,material,renderer,state,compositor,restored,dispose};
 }
 
-test('preparation warms real shadow allocation and awaits target-specific shader variants without holding renderer state',async()=>{
+test('early preparation warms streamed, train, shadow and target-specific variants before chunks exist',async()=>{
   const f=fixture(),{world,map,view,renderer,state,compositor}=f;
   let borrowedDisposals=0;f.geometry.addEventListener('dispose',()=>borrowedDisposals++);
   f.material.addEventListener('dispose',()=>borrowedDisposals++);
@@ -53,40 +53,57 @@ test('preparation warms real shadow allocation and awaits target-specific shader
   const [worldTarget,mapTarget]=state.initialized;
   assert.equal(state.calls[0].source,world);assert.equal(state.calls[0].target,worldTarget);
   assert.equal(worldTarget.samples,2);assert.equal(mapTarget.samples,2);f.restored();
-  // The regular map frame disables shadows while compilation is pending. Every
-  // world compile must still use the original detailed-render configuration.
+  // Live map frames can disable shadows while compilation is pending. All
+  // variants still use the detailed scene's original shadow configuration.
   renderer.shadowMap.enabled=false;
-  state.calls[0].resolve();await Promise.resolve();
-  assert.equal(state.calls.length,2);assert.equal(state.calls[1].source.isMesh,true);
-  assert.equal(state.calls[1].source.isInstancedMesh,undefined);
-  assert.equal(state.calls[1].target,worldTarget);assert.equal(state.calls[1].targetScene,world);
-  assert.equal(state.calls[1].camera,world.children.find(object=>object.isDirectionalLight).shadow.camera);f.restored(false);
-  state.calls[1].resolve();await Promise.resolve();
-  assert.equal(state.calls.length,3);assert.equal(state.calls[2].source.isInstancedMesh,true);
-  assert.equal(state.calls[2].source.count,1);assert.equal(state.calls[2].target,worldTarget);
-  assert.equal(state.calls[2].targetScene,world);f.restored(false);
-  state.calls[2].resolve();await Promise.resolve();
-  assert.equal(state.calls.length,4);assert.equal(state.calls[3].source,map);
-  assert.equal(state.calls[3].target,mapTarget);f.restored(false);
-  state.calls[3].resolve();await Promise.resolve();
-  assert.equal(state.calls.length,5);assert.notEqual(state.calls[4].source,world);
-  assert.notEqual(state.calls[4].source,map);assert.equal(state.calls[4].target,null);f.restored(false);
-  state.calls[4].resolve();await Promise.resolve();
-  assert.equal(state.calls.length,6);assert.equal(state.calls[5].source,world);
-  assert.equal(state.calls[5].target,null);assert.equal(state.calls[5].shadows,true);f.restored(false);
-  state.calls[5].resolve();await pending;f.restored(false);
-  const proxies=[state.calls[1].source,state.calls[2].source];
-  assert.notEqual(proxies[0].material,proxies[1].material);
-  for(const proxy of proxies){
-    assert.equal(proxy.material.isMeshDepthMaterial,true);assert.equal(proxy.material.side,THREE.BackSide);
-    assert.equal(proxy.material.depthPacking,THREE.BasicDepthPacking);assert.equal(proxy.material.vertexColors,false);
-    assert.equal(proxy.material.flatShading,undefined);assert.equal(proxy.geometry.attributes.normal.count,3);
-    assert.equal(proxy.geometry.attributes.position.count,3);assert.equal(proxy.parent,null);
+  for(let i=0;i<13;i++){
+    assert.equal(state.calls.length,i+1,'each shader variant is awaited before reusing its material');
+    assert.equal(state.calls[i].shadows,true);f.restored(false);
+    state.calls[i].resolve();await Promise.resolve();
   }
-  const owned=[proxies[0].geometry,...proxies.map(proxy=>proxy.material),proxies[1]],disposals=new Map(owned.map(object=>[object,0]));
+  await pending;f.restored(false);
+  const surfaceProxies=state.calls.slice(1,4).map(call=>call.source);
+  const depthProxies=state.calls.slice(4,7).map(call=>call.source);
+  for(let i=1;i<=6;i++){
+    assert.equal(state.calls[i].target,worldTarget);assert.equal(state.calls[i].targetScene,world);
+    assert.equal(state.calls[i].camera,i<4?view:world.children.find(object=>object.isDirectionalLight).shadow.camera);
+  }
+  assert.equal(state.calls[7].source,map);assert.equal(state.calls[7].target,mapTarget);
+  assert.notEqual(state.calls[8].source,world);assert.notEqual(state.calls[8].source,map);assert.equal(state.calls[8].target,null);
+  assert.equal(state.calls[9].source,world);assert.equal(state.calls[9].target,null);
+  for(let i=0;i<3;i++){
+    const call=state.calls[10+i];assert.equal(call.source,surfaceProxies[i]);assert.equal(call.target,null);
+    assert.equal(call.camera,view);assert.equal(call.targetScene,world);
+  }
+  assert.deepEqual(surfaceProxies.map(proxy=>proxy.material.side),[THREE.FrontSide,THREE.DoubleSide,THREE.FrontSide]);
+  assert.deepEqual(depthProxies.map(proxy=>proxy.material.side),[THREE.BackSide,THREE.DoubleSide,THREE.BackSide]);
+  for(const [index,proxy]of surfaceProxies.entries()){
+    assert.equal(proxy.material.isMeshStandardMaterial,true);assert.equal(proxy.material.vertexColors,true);
+    assert.equal(proxy.material.flatShading,true);assert.equal(proxy.receiveShadow,true);
+    assert.equal(!!proxy.isInstancedMesh,index===2);
+    if(index<2){
+      assert.equal(proxy.material.customProgramCacheKey(),'streamed-detail-reveal-v1');
+      const shader={uniforms:{},fragmentShader:THREE.ShaderLib.standard.fragmentShader};proxy.material.onBeforeCompile(shader);
+      assert.equal(shader.uniforms.detailReveal.value,1);assert.match(shader.fragmentShader,/if \(detailReveal <= threshold\) discard/);
+    }else assert.equal(proxy.count,1);
+  }
+  for(const [index,proxy]of depthProxies.entries()){
+    assert.equal(proxy.material.isMeshDepthMaterial,true);assert.equal(proxy.material.depthPacking,THREE.BasicDepthPacking);
+    assert.equal(proxy.material.vertexColors,false);assert.equal(!!proxy.isInstancedMesh,index===2);
+    if(index<2)assert.equal(proxy.material.customProgramCacheKey(),'streamed-detail-reveal-v1');
+  }
+  const proxies=[...surfaceProxies,...depthProxies];
+  for(const proxy of proxies){
+    assert.equal(proxy.geometry,surfaceProxies[0].geometry);assert.equal(proxy.geometry.attributes.normal.count,3);
+    assert.equal(proxy.geometry.attributes.color.count,3);assert.equal(proxy.geometry.attributes.position.count,3);
+    assert.equal(proxy.parent,null,'proxies are compiled, never inserted into or drawn with the world');
+  }
+  assert.equal(new Set(proxies.map(proxy=>proxy.material)).size,6,'distinct materials retain their own async program state');
+  const owned=[proxies[0].geometry,...proxies.map(proxy=>proxy.material),...proxies.filter(proxy=>proxy.isInstancedMesh)];
+  const disposals=new Map(owned.map(object=>[object,0]));
   owned.forEach(object=>object.addEventListener('dispose',()=>disposals.set(object,disposals.get(object)+1)));
-  compositor.dispose();assert.equal(borrowedDisposals,0,'preparation never owns scene geometry or materials');
-  assert.ok([...disposals.values()].every(count=>count===1),'held depth resources are released exactly once');
+  compositor.dispose();compositor.dispose();assert.equal(borrowedDisposals,0,'preparation never owns scene geometry or materials');
+  assert.ok([...disposals.values()].every(count=>count===1),'held shader resources are released exactly once');
   f.geometry.dispose();f.material.dispose();world.traverse(object=>{if(object.isSprite)object.material.dispose();if(object.isInstancedMesh)object.dispose();});
 });
 
@@ -106,19 +123,19 @@ test('asynchronous compilation rejection leaves live renderer state untouched an
   f.restored(false);assert.equal(f.state.calls.length,1);f.dispose();
 });
 
-test('shadow proxy programs stay cached across preparations and a rejected depth variant releases no borrowed scene resources',async()=>{
+test('surface and depth proxy programs remain retained across preparations and failed variants restore renderer state',async()=>{
   const f=fixture();
   let pending=f.compositor.prepare(f.world,f.map,f.view);
-  for(let i=0;i<6;i++){f.state.calls[i].resolve();await Promise.resolve();}
+  for(let i=0;i<13;i++){f.state.calls[i].resolve();await Promise.resolve();}
   await pending;
-  const regular=f.state.calls[1].source,instanced=f.state.calls[2].source;
+  const proxies=f.state.calls.slice(1,7).map(call=>call.source);
   pending=f.compositor.prepare(f.world,f.map,f.view);
-  f.state.calls[6].resolve();await Promise.resolve();
-  assert.equal(f.state.calls[7].source,regular);
-  f.state.calls[7].resolve();await Promise.resolve();
-  assert.equal(f.state.calls[8].source,instanced);
-  f.state.calls[8].reject(new Error('depth program failed'));
+  for(let i=13;i<19;i++){
+    if(i>13)assert.equal(f.state.calls[i].source,proxies[i-14]);
+    f.state.calls[i].resolve();await Promise.resolve();
+  }
+  assert.equal(f.state.calls[19].source,proxies[5]);
+  f.state.calls[19].reject(new Error('depth program failed'));
   await assert.rejects(pending,/depth program failed/);
-  assert.equal(f.state.calls.length,9);f.restored();
-  assert.equal(regular.geometry,instanced.geometry);f.dispose();
+  assert.equal(f.state.calls.length,20);f.restored();f.dispose();
 });

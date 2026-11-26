@@ -1,5 +1,9 @@
 import geography from '../data/earth-geography.json' with {type:'json'};
 import {createEarthRanges} from './earth-ranges.js';
+import {landEcoregion} from './globe-land-colors.js';
+
+const ECOREGIONS={iberia:'mediterranean','north-african-coast':'mediterranean',patagonia:'steppe',
+  'central-asia':'steppe',tibet:'steppe','new-zealand':'meadow'};
 
 export const EARTH_RADIUS=1600;
 export function projectEarth(longitude,latitude){return {x:EARTH_RADIUS*longitude*Math.PI/180,z:-EARTH_RADIUS*latitude*Math.PI/180};}
@@ -104,7 +108,7 @@ export function createEarthWorld({seed='earth-continental-railways',trainCount=2
       width:['amazonas','amazon','nile','congo','mississippi','yangtze','chang-jiang','ganges','brahmaputra'].includes(river.id)?2.1:1.1}))),
     mountains:createEarthRanges((lon,lat)=>{const p=projectEarth(lon,lat);return[p.x,p.z];},geography.landInterior),
     traffic:{trainCount,circuits},
-    biomes:{sites:structuredClone(geography.biomeSites),geography:{ocean:geography.ocean,landInterior:geography.landInterior,
+    biomes:{sites:geography.biomeSites.map(site=>({...site,ecoregion:ECOREGIONS[site.id]??landEcoregion(site)})),geography:{ocean:geography.ocean,landInterior:geography.landInterior,
       oceanShore:geography.oceanShore,lakes:geography.lakes,lakeShore:geography.lakeShore,ice:geography.ice}},
     geography:{name:geography.name,bbox:{...geography.bbox},projection:{...geography.projection},polarIce:geography.ice,
       sources:structuredClone(geography.sources),methodology:{...geography.methodology},

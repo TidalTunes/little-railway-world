@@ -77,10 +77,10 @@ export function buildMapWorld(parent,world){
   const stats={cityBatches:0,trainBatches:0,updatedCars:0,staticVertices:0,farTrains:false};
   const routeScale={value:1};
   let disposed=false;
-  const material=name=>{
+  const material=(name,vertexColors=false)=>{
     if(!materials.has(name))materials.set(name,new THREE.MeshBasicMaterial({
-      name:`map-${name}`,color:name==='terrain'?0xffffff:ownerColors.get(name)??PALETTE[name.replace('route-','')]??C[name]??C.trim,
-      vertexColors:name==='terrain',side:THREE.DoubleSide,toneMapped:false,
+      name:`map-${name}`,color:vertexColors||name==='terrain'?0xffffff:ownerColors.get(name)??PALETTE[name.replace('route-','')]??C[name]??C.trim,
+      vertexColors:vertexColors||name==='terrain',side:THREE.DoubleSide,toneMapped:false,
     }));
     const result=materials.get(name);
     if(name.startsWith('route-')&&!result.userData.routeShader){
@@ -170,7 +170,7 @@ export function buildMapWorld(parent,world){
 
   for(const [color,geometries] of batches){
     const geometry=mergeGeometries(geometries,false);ownedGeometries.add(geometry);
-    const mesh=new THREE.Mesh(geometry,material(color));mesh.name=`map-${color.replace('route-','')}`;staticRoot.add(mesh);
+    const mesh=new THREE.Mesh(geometry,material(color,!!geometry.attributes.color));mesh.name=`map-${color.replace('route-','')}`;staticRoot.add(mesh);
     stats.staticVertices+=geometry.attributes.position.count;
     geometries.forEach(geometry=>geometry.dispose());
   }

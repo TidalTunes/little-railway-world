@@ -91,20 +91,20 @@ test('map taps and close picking use bent train positions while follow and navig
   f.key('Home');f.update();assert.equal(f.view.selected,null);assert.equal(f.view.mode,'map');near(f.root.scale,new THREE.Vector3(1,1,1));
 });
 
-test('destination coverage camera is ready before detail visibility and never changes the displayed camera',t=>{
+test('destination coverage follows the current scale without mutating the displayed camera',t=>{
   const f=fixture(t,{ready:false}),{view}=f;
   const movement=new THREE.Vector3(-450,0,300);view.controls.target.add(movement);view.navigation.position.add(movement);
   view.navigation.zoom=8;view.navigation.updateProjectionMatrix();f.update();
-  assert.equal(view.mode,'map');assert.equal(view.blend,1);assert.equal(f.camera.zoom,8*.78);
+  assert.equal(view.mode,'world');assert.equal(view.blend,0);assert.equal(f.camera.zoom,8);
   const position=f.camera.position.clone(),quaternion=f.camera.quaternion.clone();
   const coverage=view.coverageCamera,normal=surfaceNormal(f.world,-450,300);
   assert.ok(localViewAngle(coverage,normal)>.8,'world detail is requested at the destination orbit, not the temporary map angle');
   const target=surfacePoint(f.world,-450,view.controls.target.y,300).project(coverage);
-  assert.ok(Math.hypot(target.x,target.y)<1e-10);near(f.camera.position,position);assert.ok(f.camera.quaternion.angleTo(quaternion)<1e-8);
+  assert.ok(Math.hypot(target.x,target.y)<1e-10);near(f.camera.position,position);assert.ok(f.camera.quaternion.angleTo(quaternion)<1e-7);
   const localAngle=localViewAngle(coverage,normal);
-  view.navigation.zoom=32;view.navigation.updateProjectionMatrix();
+  view.navigation.zoom=32;view.navigation.updateProjectionMatrix();f.update();
   assert.ok(Math.abs(localViewAngle(view.coverageCamera,normal)-localAngle)<1e-8,'coverage retains the same orbit at close zoom');
-  assert.equal(view.coverageCamera.zoom,8*.78,'a fast close jump still prepares the widest detailed footprint');
+  assert.equal(view.coverageCamera.zoom,32,'coverage shrinks to the current close view, rather than retaining the entire entry footprint');
 });
 
 test('chart panning and bounds remain finite far from the sphere origin, and replacement planar worlds regain flattening',t=>{
@@ -140,7 +140,7 @@ test('real train instances are culled and picked in sphere coordinates at a dist
   rail.updateView(f.camera);assert.equal(rail.stats.visibleCars,0,'remote chart coordinates must not bypass physical frustum culling');
 });
 
-test('spherical coverage requests the destination chart cells before the displayed map transitions',async t=>{
+test('spherical coverage requests only the local destination chart cells during dynamic loading',async t=>{
   const f=fixture(t,{ready:false}),{view}=f;
   Object.assign(f.world,{cities:[],mountains:[],stations:[]});
   const movement=new THREE.Vector3(720,0,-320);view.controls.target.add(movement);view.navigation.position.add(movement);
@@ -150,13 +150,13 @@ test('spherical coverage requests the destination chart cells before the display
     requests.push(request);return{bounds:{minX:request.x-48,maxX:request.x+48,minZ:request.z-48,maxZ:request.z+48},meshes:[]};
   }});
   t.after(()=>renderer.dispose());
-  assert.equal(view.blend,1);
+  assert.equal(view.blend,0);
   renderer.update(f.camera,{target:view.controls.target,coverageCamera:view.coverageCamera,mapBlend:0});
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(requests.length>0&&requests.length<=2);
   assert.ok(requests.some(request=>Math.abs(request.x-720)<=48&&Math.abs(request.z+320)<=48),
     'the nearest requested cell owns the chart-space destination, not its bent world x/z');
-  assert.ok(renderer.stats.requiredChunks>4&&renderer.stats.requiredChunks<=40,
-    `entry coverage prepares a bounded region before a close jump (${renderer.stats.requiredChunks} cells)`);
+  assert.ok(renderer.stats.requiredChunks>0&&renderer.stats.requiredChunks<=4,
+    `close coverage prepares the visible local region (${renderer.stats.requiredChunks} cells)`);
   assert.equal(renderer.stats.coverageLimited,false);
 });

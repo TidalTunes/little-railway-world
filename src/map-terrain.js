@@ -29,7 +29,8 @@ function prepareGlobeTerrain(world,hydrology){
     const contours=mountain.mapContours??createMountainContours(mountain);
     return{id:mountain.id,low:cutWater(contours.low),high:cutWater(contours.high),snow:cutWater(contours.snow)};
   });
-  return{land,shores,river,ocean,mountains,colorField:{sites:world.biomes.sites??[],bounds:world.bounds,surface:world.surface}};
+  return{land,shores,river,ocean,mountains,colorField:{sites:world.biomes.sites??[],bounds:world.bounds,surface:world.surface,
+    ocean,shoreWidth:world.biomes.shoreWidth}};
 }
 
 /**
@@ -50,5 +51,6 @@ export function prepareMapTerrain(world){
     return {id:mountain.id,low:clipping.intersection(contours.low,land),
       high:clipping.intersection(contours.high,land),snow:clipping.intersection(contours.snow,land)};
   });
-  return {land,shores,river,ocean,mountains,colorField:{sites:world.biomes?.sites??[],bounds:world.bounds,surface:world.surface}};
+  return {land,shores,river,ocean,mountains,colorField:{sites:world.biomes?.sites??[],bounds:world.bounds,surface:world.surface,
+    ocean,shoreWidth:world.biomes?.shoreWidth}};
 }

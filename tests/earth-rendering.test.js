@@ -160,7 +160,7 @@ test('transition coverage unions exact destination cells across the date line',a
   assert.ok(union.size<64,'unioning nearby views across the seam must remain local');
 });
 
-test('cold pan preparation retains the displayed detail until its camera can advance',async()=>{
+test('cold pan preparation retains visible detail while destination coverage catches up',async()=>{
   const plane={...world,surface:null,outline:[[-800,-800],[800,-800],[800,800],[-800,800]]};
   function cameraAt(x){
     const camera=new THREE.OrthographicCamera(-20,20,20,-20,.1,500);
@@ -175,12 +175,12 @@ test('cold pan preparation retains the displayed detail until its camera can adv
   const visible=renderer.root.children.filter(chunk=>chunk.visible);assert.ok(visible.length);
   for(let i=0;i<15;i++){
     renderer.update(shown,{target:new THREE.Vector3(394,0,0),coverageCamera:destination,retainVisible:true,budgetMs:10});await tick();
-    assert.ok(visible.every(chunk=>chunk.parent===renderer.root),'loading the destination cannot evict the held view');
+    assert.ok(visible.every(chunk=>chunk.parent===renderer.root),'loading destination coverage cannot evict detail still visible in the current view');
     if(renderer.ready)break;
   }
   assert.equal(renderer.ready,true);
   renderer.updateVisibility(destination);
-  assert.ok(visible.every(chunk=>!chunk.visible),'the released camera refreshes visibility in the same frame');
+  assert.ok(visible.every(chunk=>!chunk.visible),'the current camera refreshes visibility in the same frame');
   assert.ok(renderer.root.children.some(chunk=>chunk.visible),'ready destination cells become visible immediately');
   renderer.update(destination,{target:new THREE.Vector3(394,0,0),retainVisible:true,budgetMs:10});
   assert.ok(visible.every(chunk=>chunk.parent===null),'old cells become evictable when the displayed camera advances');

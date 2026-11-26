@@ -260,15 +260,16 @@ test('continental framing starts as a map and still reaches a train-scale follow
   assert.equal(f.view.selected, null); assert.equal(f.view.mode, 'map');
 });
 
-test('pending detail holds the visible zoom at entry, then resumes the requested zoom smoothly', t => {
+test('pending detail does not change the displayed zoom or tilt trajectory', t => {
   let ready = false;
   const f = fixture(t, {isDetailReady: () => ready});
   f.zoom(1.2);
-  assert.equal(f.view.mode, 'world'); assert.equal(f.view.blend, 1);
-  assert.equal(f.camera.zoom,.78);assert.equal(f.view.navigation.zoom,1.2);
-  ready = true; f.update();
-  assert.ok(f.view.blend > 0 && f.view.blend < 1);
-  f.settle(); assert.equal(f.view.blend, 0);assert.equal(f.camera.zoom,1.2);
+  assert.equal(f.view.mode, 'world'); assert.equal(f.view.blend, 0);
+  assert.equal(f.camera.zoom,1.2);assert.equal(f.view.navigation.zoom,1.2);
+  assert.equal(f.canvas.dataset.detailLoading,'true');
+  const position=f.camera.position.clone();ready = true; f.update();
+  nearVector(f.camera.position,position);assert.equal(f.camera.zoom,1.2);
+  assert.equal(f.canvas.dataset.detailLoading,'false');
 });
 
 test('WASD pans screen-relative at every zoom without changing the orbit, and Home cancels held motion',t=>{
@@ -279,7 +280,7 @@ test('WASD pans screen-relative at every zoom without changing the orbit, and Ho
     for(const [key,axis,sign] of [['d','x',-1],['a','x',1],['w','y',-1],['s','y',1]]){
       const fixedPoint=view.controls.target.clone(),offset=view.navigation.position.clone().sub(fixedPoint);
       const quaternion=view.chartCamera.quaternion.clone();
-      f.key(key);f.canvas.dispatchEvent(event('keyup',{key}));f.update();
+      f.key(key);f.update();f.canvas.dispatchEvent(event('keyup',{key}));
       const screen=fixedPoint.project(f.camera);
       assert.ok(screen[axis]*sign>0,'a stationary ground point moves opposite the requested pan');
       assert.ok(Math.abs(screen[axis==='x'?'y':'x'])<1e-8,'pan follows one screen axis');

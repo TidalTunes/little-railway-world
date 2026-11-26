@@ -64,7 +64,8 @@ test('complete overview centers the whole sphere on the authored home location a
   assert.ok(new THREE.Vector3(1,0,0).applyQuaternion(view.chartCamera.quaternion).dot(new THREE.Vector3(1,0,0))>.99999999,
     'overview shares the north-up heading of the local view');
   const before=view.controls.target.clone();assert.equal(f.key('d').defaultPrevented,true);f.key('d','keyup');
-  assert.ok(view.controls.target.x-before.x>1,'even a press and release between frames visibly rotates the globe');
+  near(view.controls.target,before);
+  f.update();near(view.controls.target,before);
   f.key('Home');f.key('d');
   let previous=view.controls.target.x,travel=0;
   for(let i=0;i<600;i++){f.update();travel+=wrap(view.controls.target.x-previous);previous=view.controls.target.x;}
@@ -96,7 +97,7 @@ test('globe drag rotates, held latitude stops safely at the poles, and local WAS
   f.key('Home');f.update();f.tap(f.train.parts[1]);f.update();assert.equal(view.selected,'front');assert.equal(view.mode,'close');
   const follow=view.controls.target.clone(),right=new THREE.Vector3(1,0,0).applyQuaternion(view.chartCamera.quaternion);right.y=0;right.normalize();
   right.applyMatrix4(surfaceFrame(f.world,follow.x,follow.z));
-  const offset=view.navigation.position.clone().sub(follow);f.key('a');f.key('a','keyup');f.update();
+  const offset=view.navigation.position.clone().sub(follow);f.key('a');f.update();f.key('a','keyup');
   const movement=view.controls.target.clone().sub(follow);
   const physical=surfaceTangent(f.world,follow.x,follow.y,follow.z,movement.x,0,movement.z).normalize();
   assert.equal(view.selected,null);assert.ok(physical.dot(right)<-.99999999);
@@ -112,7 +113,7 @@ test('WASD pans the core and close views in screen directions while preserving t
       const screenAxis=new THREE.Vector3(axis==='right'?1:0,axis==='up'?1:0,0).applyQuaternion(view.chartCamera.quaternion);
       screenAxis.y=0;screenAxis.normalize();
       screenAxis.applyMatrix4(surfaceFrame(f.world,target.x,target.z));
-      f.key(key);f.key(key,'keyup');f.update();
+      f.key(key);f.update();f.key(key,'keyup');
       const movement=view.controls.target.clone().sub(target);
       const physical=surfaceTangent(f.world,target.x,target.y,target.z,movement.x,0,movement.z).normalize();
       assert.ok(physical.dot(screenAxis)*sign>.99999999);
@@ -130,7 +131,7 @@ test('high-latitude isometric WASD motion projects along the visible screen axes
     view.navigation.position.copy(start).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/3,Math.PI/4));
     f.update();
     const camera=f.camera.clone(),before=surfacePoint(f.world,start.x,start.y,start.z).project(camera);
-    f.key(key);f.key(key,'keyup');
+    f.key(key);f.update();f.key(key,'keyup');
     const delta=view.controls.target.clone().sub(start);
     // A short symmetric displacement independently measures the physical
     // tangent, without a curvature-sized chord error from the whole pan step.
@@ -206,4 +207,39 @@ test('back hemisphere trains cannot be selected through the globe and following 
   assert.ok(Math.abs(wrap(view.controls.target.x-(period/2-4)))<2,'first follow frame must move a small step across the seam');
   f.update(240);assert.ok(Math.abs(wrap(view.controls.target.x-(-period/2+4)))<1e-5);
   assert.ok(f.camera.position.toArray().every(Number.isFinite));
+});
+
+test('WASD accelerates and brakes smoothly without injecting motion on keydown',t=>{
+  const f=fixture(t,{reduced:false}),{view}=f;
+  view.navigation.zoom=12;view.navigation.updateProjectionMatrix();f.update(240);
+  const before=view.controls.target.clone();f.key('d');near(view.controls.target,before);
+  const steps=[];
+  for(let i=0;i<12;i++){const x=view.controls.target.x;f.update();steps.push(view.controls.target.x-x);}
+  assert.ok(steps[0]>0&&steps[0]<steps[6]*.25,'first frame starts gently');
+  assert.ok(steps.every((step,i)=>!i||step>steps[i-1]),'held movement accelerates continuously');
+  f.key('d','keyup');const coast=[];
+  for(let i=0;i<12;i++){const x=view.controls.target.x;f.update();coast.push(view.controls.target.x-x);}
+  assert.ok(coast[0]>0&&coast[0]<steps.at(-1),'release starts braking without snapping to rest');
+  assert.ok(coast.every((step,i)=>!i||step<coast[i-1]),'braking slows each successive frame');
+  f.update(100);const stopped=view.controls.target.clone();f.update(60);near(view.controls.target,stopped,1e-7);
+});
+
+test('smoothed keyboard travel is identical at 30, 60 and 144 Hz including the braking distance',t=>{
+  const f=fixture(t,{reduced:false}),{view}=f;
+  const run=hz=>{
+    f.key('Home');view.navigation.zoom=12;view.navigation.updateProjectionMatrix();f.update(240);
+    f.key('d');f.update(hz,1/hz);f.key('d','keyup');f.update(hz,1/hz);
+    return view.controls.target.clone();
+  };
+  const reference=run(60);near(run(30),reference,1e-7);near(run(144),reference,1e-7);
+});
+
+test('Home, focus loss and hidden pages discard keyboard momentum immediately',t=>{
+  const f=fixture(t,{reduced:false}),{view}=f;
+  for(const release of [()=>f.window.dispatchEvent(new Event('blur')),()=>f.canvas.dispatchEvent(new Event('blur')),
+    ()=>{f.document.hidden=true;f.document.dispatchEvent(new Event('visibilitychange'));}]){
+    f.document.hidden=false;f.key('Home');f.key('d');f.update(30);release();
+    const stop=view.controls.target.clone();f.update(60);near(view.controls.target,stop);
+  }
+  f.document.hidden=false;f.key('Home');f.key('w');f.update(30);f.key('Home');f.update(60);near(view.controls.target,f.home);
 });

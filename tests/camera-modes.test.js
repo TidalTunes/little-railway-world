@@ -8,6 +8,7 @@ import {
   mapBlendForZoom,
   shouldStopFollowing,
   fitZoomForSpan,
+  smoothZoom,
 } from '../src/camera-modes.js';
 
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-12,
@@ -93,4 +94,19 @@ test('world-span framing fits both landscape and portrait extents without changi
   assert.equal(fitZoomForSpan({viewWidth:100,viewHeight:100,spanWidth:1,spanHeight:1}), 9);
   assert.equal(fitZoomForSpan(), FOLLOW_ZOOM);
   assert.equal(fitZoomForSpan({viewWidth:Infinity,viewHeight:90,spanWidth:30,spanHeight:20,fallback:2.5}), 2.5);
+});
+
+test('proportional zoom easing is frame-rate independent and never overshoots its destination',()=>{
+  for(const [start,target] of [[1,90],[90,.5],[.85,1],[1,1.16]]){
+    const after=(hz,seconds)=>{let value=start;for(let i=0;i<hz*seconds;i++)value=smoothZoom(value,target,1/hz);return value;};
+    for(const seconds of [.5,1,2]){
+      const reference=after(60,seconds);
+      for(const hz of [30,144])assert.ok(Math.abs(after(hz,seconds)-reference)<1e-9);
+      assert.ok(reference>=Math.min(start,target)&&reference<=Math.max(start,target));
+    }
+    assert.equal(smoothZoom(start,target,1/60,true),target);
+    assert.equal(smoothZoom(start,target,0),start);
+  }
+  assert.ok(smoothZoom(1,1.16,1/60)>1.02,'small wheel/key steps respond on the next frame');
+  assert.equal(smoothZoom(1,1.16,2),1.16);
 });

@@ -3,6 +3,7 @@ import { createViewController } from './view-controller.js';
 import { createViewCompositor } from './view-compositor.js';
 import { buildMapWorld } from './map-world.js';
 import { createWorldRenderer } from './world-renderer.js';
+import {createDetailBase} from './detail-base.js';
 import { makeTrains } from './railway.js';
 import { generateWorld,validateWorld } from './world-model.js';
 import { createStressWorld } from './stress-world.js';
@@ -33,7 +34,7 @@ const fill=new THREE.DirectionalLight(color(.85,.035,218),.65);fill.position.set
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(2000,2000),new THREE.MeshStandardMaterial({color:C.backdrop,roughness:1}));
 ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;scene.add(ground);
 
-let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,worker,pendingWorker;
+let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 let paused=reducedMotion.matches;
@@ -129,20 +130,21 @@ async function loadWorld(input={}){
   const version=++loadingVersion,config=structuredClone(input);loadStarted=performance.now();
   canvas.dataset.loading='true';delete canvas.dataset.error;
   pendingWorker?.dispose();const nextWorker=createWorldWorker();pendingWorker=nextWorker;
-  let nextMap,nextRailway,nextDetail,nextShell,root;
+  let nextMap,nextRailway,nextDetail,nextShell,nextBase,root;
   try{
     const generated=await nextWorker.request('generate',config);
     if(version!==loadingVersion)throw new DOMException('World replaced','AbortError');
     const next=generated.world;root=new THREE.Group();
     nextMap=buildMapWorld(new THREE.Group(),next);
+    nextBase=createDetailBase(root,nextMap.root.getObjectByName('map-static'),next);
     nextShell=createSurfaceShell(next);
     if(nextShell){root.add(nextShell.detail);nextMap.root.add(nextShell.map);}
     nextRailway=makeTrains(root,next);
     nextDetail=createWorldRenderer(root,next,{requestChunk:region=>nextWorker.request('chunk',region),uploadMesh:mesh=>geometryUploader.upload(mesh)});
-    disposeLife();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
+    disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
-    mapWorld=nextMap;surfaceShell=nextShell;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
+    mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
@@ -151,7 +153,7 @@ async function loadWorld(input={}){
     clearMeasurements();return model;
   }catch(error){
     if(version===loadingVersion){canvas.dataset.loading='false';pendingWorker=null;}
-    nextShell?.dispose();nextDetail?.dispose();nextRailway?.dispose();nextMap?.dispose();root?.removeFromParent();
+    nextBase?.dispose();nextShell?.dispose();nextDetail?.dispose();nextRailway?.dispose();nextMap?.dispose();root?.removeFromParent();
     nextWorker.dispose();throw error;
   }
 }
@@ -185,7 +187,7 @@ function metrics(now,interval,cpu){
     drawCalls:String(renderer.info.render.calls),triangles:String(renderer.info.render.triangles),
     geometries:String(renderer.info.memory.geometries),activeTrains:String(active),
     visibleTrains:String(railway.stats?.visibleTrains??0),detailChunks:String(detail.stats?.chunks??detail.stats?.loadedChunks??0),
-    detailReady:String(detail.ready),detailRequired:String(detail.stats.requiredChunks??0),
+    detailReady:String(detail.ready),detailSettled:String(detail.settled),detailRevealing:String(detail.stats.revealingChunks),detailBase:String(detailBase.root.visible),detailRequired:String(detail.stats.requiredChunks??0),
     detailPending:String(detail.stats.pendingChunks??0),detailBytes:String(detail.stats.bytes??0),
     detailLimited:String(detail.stats.coverageLimited??false),detailErrors:String(detail.stats.errors??0),
     transitionCpuMax:transitionCpuMax.toFixed(2),transitionFrameMax:transitionFrameMax.toFixed(2),transitionFrames:String(transitionSamples),
@@ -205,10 +207,9 @@ function frame(now){
     view.updateNavigation(dt);
     detail.update(camera,{mapBlend:view.wantsDetail?0:1,target:controls.target,budgetMs:2,
       coverageCameras:view.coverageCameras,retainVisible:view.blend<1});
-    if(detail.ready&&!shaderReady&&!shaderJob){
+    if(!shaderReady&&!shaderJob){
       const version=loadingVersion;
       renderer.shadowMap.enabled=true;
-      railway.updateView(camera,{mapBlend:view.blend,focus:view.renderTarget,prewarm:true});
       if(!life&&model.cities.length<=32){life=ambience(worldRoot,model);life.update(time);}
       shaderJob=compositor.prepare(scene,mapScene,camera)
         .then(()=>{if(version===loadingVersion)shaderReady=true;})
@@ -216,7 +217,8 @@ function frame(now){
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
     view.updatePresentation(dt);
-    detail.updateVisibility(camera);
+    detail.updateVisibility(camera,{dt,reveal:shaderReady&&view.blend<.999,reducedMotion:reducedMotion.matches});
+    detailBase.root.visible=!detail.settled;
     railway.updateView(camera,{mapBlend:view.blend,focus:view.renderTarget});
     if(view.blend<.999){
       fitShadows();

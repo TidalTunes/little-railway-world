@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {C} from './palette.js';
+import {createGlobeLandField,sampleGlobeLand} from './globe-land-colors.js';
 
 const fields=new WeakMap();
 const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
@@ -17,6 +18,9 @@ function fieldFor(world){
   const source=world.terrainSource??world,sites=source.biomes?.sites??source.sites;
   if(!sites?.length)return null;
   if(!fields.has(sites)){
+    if(source.surface?.complete){
+      const field={globe:createGlobeLandField(source,sites)};fields.set(sites,field);return field;
+    }
     const extent=Math.hypot(source.bounds?.width??130,source.bounds?.depth??95);
     const width=Math.min(22,Math.max(4.5,extent*.011));
     const colors={farmland:C.grass.clone().lerp(C.farmland,.43),forest:C.grass.clone().lerp(C.forestFloor,.78),
@@ -31,6 +35,7 @@ function fieldFor(world){
 export function terrainColor(world,x,z,{map=false,target=new THREE.Color()}={}){
   const field=fieldFor(world);
   if(!field)return target.copy(C.grass);
+  if(field.globe)return sampleGlobeLand(field.globe,x,z,target);
   const {sites,width,distances,period}=field;
   const noise=(xx,zz,scale)=>{
     if(!period)return terrainNoise(xx,zz,scale);

@@ -1,18 +1,29 @@
 import * as THREE from 'three';
 import {C} from './palette.js';
-import {surfaceFor,surfacePoint,warpGeometryToSurface} from './world-surface.js';
+import {surfaceFor,surfacePoint,surfaceCoordinates,warpGeometryToSurface} from './world-surface.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {globeMapLighting} from './globe-lighting.js';
+import {oceanColor} from './ocean-colors.js';
 
 function createPlanet(world){
   const radius=world.surface.radius,detail=new THREE.Group(),map=new THREE.Group(),resources=[];
   detail.name=map.name='earth-ocean';
   // One closed ocean sphere seals the antimeridian and poles. Land keeps its
   // exact coastline above it; the whole ocean needs no polygon triangulation.
+  let oceanColors;
   for(const [group,elevation]of [[map,-.65],[detail,-4.5]]){
     const geometry=new THREE.SphereGeometry(radius+elevation,256,128);
     geometry.translate(0,-radius,0);
-    const material=globeMapLighting(new THREE.MeshBasicMaterial({color:C.ocean,toneMapped:false}),radius);
+    if(!oceanColors){
+      const position=geometry.attributes.position,point=new THREE.Vector3(),chart={},sample=new THREE.Color();
+      oceanColors=new Float32Array(position.count*3);
+      for(let i=0;i<position.count;i++){
+        point.fromBufferAttribute(position,i);surfaceCoordinates(world,point,chart);
+        oceanColor(world,chart.x,chart.z,sample);sample.toArray(oceanColors,i*3);
+      }
+    }
+    geometry.setAttribute('color',new THREE.BufferAttribute(oceanColors,3));
+    const material=globeMapLighting(new THREE.MeshBasicMaterial({color:0xffffff,vertexColors:true,toneMapped:group===detail}),radius);
     resources.push(geometry,material);group.add(new THREE.Mesh(geometry,material));
   }
   let disposed=false;
@@ -52,8 +63,8 @@ export function createSurfaceShell(world){
   const plane=new THREE.ShapeGeometry(shape);plane.rotateX(-Math.PI/2);plane.translate(0,-depth,0);
   const bottom=tessellateSurfaceGeometry(plane,64);plane.dispose();warpGeometryToSurface(bottom,world);geometries.push(bottom);
   for(const [group,height]of [[detail,-3.4],[map,0]]){
-    const edgeMaterial=new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide,toneMapped:false});
-    const bottomMaterial=new THREE.MeshBasicMaterial({color:dark,side:THREE.DoubleSide,toneMapped:false});materials.push(edgeMaterial,bottomMaterial);
+    const edgeMaterial=new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide,toneMapped:group===detail});
+    const bottomMaterial=new THREE.MeshBasicMaterial({color:dark,side:THREE.DoubleSide,toneMapped:group===detail});materials.push(edgeMaterial,bottomMaterial);
     group.add(new THREE.Mesh(edge(height),edgeMaterial),new THREE.Mesh(bottom,bottomMaterial));
   }
   let disposed=false;

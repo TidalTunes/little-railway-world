@@ -154,7 +154,7 @@ test('adjacent regional banks measure the global shoreline rather than the artif
   }
 });
 
-test('regional eviction frees old geometry while keeping shared materials alive until final disposal',async()=>{
+test('regional eviction frees old geometry and independently fading chunk materials',async()=>{
   const base=generateWorld({density:0}),world={...base,cities:[],mountains:[],stations:[],outline:[[-500,-500],[500,-500],[500,500],[-500,500]]};
   const renderer=createWorldRenderer(new THREE.Group(),world,{size:48,maxChunks:4,maxVisibleChunks:4,
     requestChunk:request=>Promise.resolve(flatPacket(request))});
@@ -171,7 +171,7 @@ test('regional eviction frees old geometry while keeping shared materials alive 
   }
   await load(192);assert.ok(renderer.stats.loadedChunks<=4);
   assert.ok(oldGeometries.every(geometry=>events.get(geometry)===1));
-  assert.ok([...oldMaterials].every(material=>events.get(material)===0),'new chunks keep their shared material reference');
+  assert.ok([...oldMaterials].every(material=>events.get(material)===1),'evicted chunks release their own fade materials');
   renderer.dispose();assert.ok([...oldMaterials].every(material=>events.get(material)===1));
 });
 

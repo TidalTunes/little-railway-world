@@ -34,89 +34,71 @@ function fixture(t,{ready=true,reduced=false}={}){
 const near=(actual,expected,tolerance=1e-9)=>assert.ok(Math.abs(actual-expected)<tolerance,`${actual} differs from ${expected}`);
 const sameVector=(actual,expected)=>assert.ok(actual.distanceTo(expected)<1e-8,`${actual.toArray()} differs from ${expected.toArray()}`);
 
-test('detail blend is determined by visible zoom, independent of elapsed time and readiness',t=>{
+test('detail blend remains a pure function of displayed zoom during every animation frame',t=>{
   const f=fixture(t);
   for(const zoom of [.6,.78,.89,1,1.5,.89]){
-    f.request(zoom);f.update();near(f.camera.zoom,zoom*scale);
-    const expected=mapBlendForZoom(zoom),position=f.camera.position.clone(),quaternion=f.camera.quaternion.clone();
-    near(f.view.blend,expected);
-    f.update(90,1/30);near(f.view.blend,expected);sameVector(f.camera.position,position);
-    assert.ok(f.camera.quaternion.angleTo(quaternion)<1e-7);
-    if(zoom>.78){
-      f.setReady(false);f.update(90);near(f.camera.zoom,zoom*scale);near(f.view.blend,expected);
-      f.setReady(true);f.update();
+    f.request(zoom);
+    for(let frame=0;frame<180;frame++){
+      f.setReady(frame%3===0);f.update();
+      near(f.view.blend,mapBlendForZoom(f.camera.zoom/scale));
+      assert.equal(f.canvas.dataset.zoom,f.camera.zoom.toFixed(3));
     }
+    near(f.camera.zoom,zoom*scale);
   }
 });
 
-test('cold fast zoom waits at the fixed entry scale and automatically continues without another input',t=>{
-  const f=fixture(t,{ready:false});f.request(3.2);f.update();
-  near(f.camera.zoom,entry);near(f.view.navigation.zoom,3.2*scale);assert.equal(f.view.blend,1);
-  assert.equal(f.view.waitingForDetail,true);near(f.view.coverageCamera.zoom,entry);
-  f.update(180,1/30);near(f.camera.zoom,entry);assert.equal(f.view.blend,1);
-  f.setReady(true);f.update();
-  assert.ok(f.camera.zoom>entry&&f.camera.zoom<3.2*scale,'catch-up is smooth and retains the requested destination');
-  assert.equal(f.view.waitingForDetail,false);near(f.view.blend,mapBlendForZoom(f.camera.zoom/scale));
-  f.update(180);near(f.camera.zoom,3.2*scale);assert.equal(f.view.blend,0);
-  assert.equal(f.canvas.dataset.zoom,f.camera.zoom.toFixed(3));
+test('cold and warm zoom trajectories are identical, without stopping at the detail boundary',t=>{
+  const f=fixture(t,{ready:false});
+  const run=()=>{
+    f.view.reset();f.request(3.2);const frames=[];
+    for(let frame=0;frame<240;frame++){
+      f.update();frames.push({zoom:f.camera.zoom,blend:f.view.blend,position:f.camera.position.clone()});
+    }
+    return frames;
+  };
+  const cold=run();f.setReady(true);const warm=run();
+  let crossing=-1;
+  for(let i=0;i<cold.length;i++){
+    near(cold[i].zoom,warm[i].zoom);near(cold[i].blend,warm[i].blend);sameVector(cold[i].position,warm[i].position);
+    if(i&&cold[i-1].zoom<entry&&cold[i].zoom>=entry)crossing=i;
+  }
+  assert.ok(crossing>0);assert.ok(cold[crossing+1].zoom>cold[crossing].zoom,'the first detailed frame keeps moving');
+  near(cold.at(-1).zoom,3.2*scale);assert.equal(f.view.waitingForDetail,false);
 });
 
-test('cold and warm transitions have exactly the same blend at the same displayed scale',t=>{
-  const f=fixture(t,{ready:false});f.request(.89);f.update(120);
-  f.setReady(true);f.update(180);const delayed=f.view.blend;
-  f.request(.5);f.update();f.request(.89);f.update();
-  near(f.camera.zoom,.89*scale);near(f.view.blend,delayed);near(delayed,.5);
-});
-
-test('an uncached pan retains the detailed camera while coverage prepares the requested target',t=>{
-  const f=fixture(t);f.request(2);f.update();
-  const position=f.camera.position.clone(),quaternion=f.camera.quaternion.clone(),target=f.view.renderTarget.clone();
-  f.setReady(false);f.pan(400,-250);f.update(60);
-  sameVector(f.camera.position,position);sameVector(f.view.renderTarget,target);near(f.camera.zoom,2*scale);
-  assert.ok(f.camera.quaternion.angleTo(quaternion)<1e-7);assert.equal(f.view.blend,0);assert.equal(f.view.waitingForDetail,true);
-  const requested=surfacePoint(f.world,f.view.controls.target.x,f.view.controls.target.y,f.view.controls.target.z).project(f.view.coverageCamera);
-  near(requested.x,0);near(requested.y,0);
-  f.setReady(true);f.update();sameVector(f.view.renderTarget,f.view.controls.target);
+test('an uncached pan and zoom-out move immediately while coverage follows the local target',t=>{
+  const f=fixture(t,{ready:false,reduced:true});f.request(3);f.update();
+  const position=f.camera.position.clone();f.pan(400,-250);f.request(2);f.update();
+  sameVector(f.view.renderTarget,f.view.controls.target);near(f.camera.zoom,2*scale);
   assert.ok(f.camera.position.distanceTo(position)>100);assert.equal(f.view.blend,0);
-});
-
-test('zooming back to the map cancels pending entry and never restores stale requested zoom',t=>{
-  const f=fixture(t,{ready:false});f.request(3);f.update();assert.equal(f.view.waitingForDetail,true);
-  f.request(.5);f.pan(200,100);f.update();
-  near(f.camera.zoom,.5*scale);assert.equal(f.view.blend,1);assert.equal(f.view.waitingForDetail,false);
-  sameVector(f.view.renderTarget,f.view.controls.target);
-  f.setReady(true);f.update(120);near(f.camera.zoom,.5*scale);near(f.view.navigation.zoom,.5*scale);
-});
-
-test('uncached detailed zoom-out retains the complete frame until the wider footprint is ready',t=>{
-  const f=fixture(t);f.request(3);f.update();const target=f.view.renderTarget.clone();
-  f.setReady(false);f.pan(400,200);f.update();f.request(2);f.update();
-  near(f.camera.zoom,3*scale);near(f.view.navigation.zoom,2*scale);
-  sameVector(f.view.renderTarget,target);assert.equal(f.view.blend,0);
   near(f.view.coverageCamera.zoom,2*scale);
-  f.setReady(true);f.update(180);near(f.camera.zoom,2*scale);sameVector(f.view.renderTarget,f.view.controls.target);
+  const requested=surfacePoint(f.world,f.view.controls.target.x,f.view.controls.target.y,f.view.controls.target.z).project(f.view.coverageCamera);
+  near(requested.x,0);near(requested.y,0);assert.equal(f.canvas.dataset.detailLoading,'true');
+  const after=f.camera.position.clone();f.setReady(true);f.update();sameVector(f.camera.position,after);
 });
 
-test('navigation and region readiness are resolved before the same frame presents detail',t=>{
-  const f=fixture(t,{ready:false});f.request(.34);f.update();assert.equal(f.view.wantsDetail,false);
+test('reversing zoom replaces the pending destination immediately, even while terrain loads',t=>{
+  const f=fixture(t,{ready:false});f.request(3);f.update(70);const previous=f.camera.zoom;
+  f.request(.5);f.pan(200,100);f.update();
+  assert.ok(f.camera.zoom<previous);sameVector(f.view.renderTarget,f.view.controls.target);
+  f.setReady(true);f.update(180);near(f.camera.zoom,.5*scale);near(f.view.navigation.zoom,.5*scale);
+});
+
+test('prefetch is bounded in overview and scales down with the actual detailed camera',t=>{
+  const f=fixture(t,{ready:false,reduced:true});f.request(.34);f.update();assert.equal(f.view.wantsDetail,false);
   f.request(.36);f.view.updateNavigation(1/60);assert.equal(f.view.wantsDetail,true);
   near(f.view.coverageCamera.zoom,entry);f.view.updatePresentation(1/60);assert.equal(f.view.blend,1);
-  f.request(1.2);f.pan(-200,300);f.view.updateNavigation(1/60);
-  near(f.view.coverageCamera.zoom,entry);f.setReady(true);f.view.updatePresentation(1/60);
-  near(f.camera.zoom,1.2*scale);assert.equal(f.view.blend,0);sameVector(f.view.renderTarget,f.view.controls.target);
+  f.request(2);f.update();near(f.view.coverageCamera.zoom,2*scale);
+  f.request(4);f.update();near(f.view.coverageCamera.zoom,4*scale);
 });
 
-test('proposed coverage exactly matches the next presented camera throughout resumed zoom and tilt',t=>{
-  const f=fixture(t,{ready:false});f.request(.95);f.update();
-  f.setReady(true);f.pan(300,-180);
-  for(let frame=0;frame<80;frame++){
-    const dt=1/60;
-    f.view.updateNavigation(dt);
+test('proposed coverage exactly matches the next presented camera throughout zoom and tilt',t=>{
+  const f=fixture(t,{ready:false});f.request(.78);f.update(240);f.request(.95);f.pan(300,-180);
+  for(let frame=0;frame<120;frame++){
+    const dt=1/60;f.view.updateNavigation(dt);
     const beforePosition=f.camera.position.clone(),beforeZoom=f.camera.zoom;
     const proposed=f.view.coverageCameras[1].clone();
     sameVector(f.camera.position,beforePosition);near(f.camera.zoom,beforeZoom);
-    const target=surfacePoint(f.world,f.view.controls.target.x,f.view.controls.target.y,f.view.controls.target.z).project(proposed);
-    near(target.x,0);near(target.y,0);
     f.view.updatePresentation(dt);
     near(f.camera.zoom,proposed.zoom);sameVector(f.camera.position,proposed.position);
     assert.ok(f.camera.quaternion.angleTo(proposed.quaternion)<1e-7,'coverage includes the precise next tilt');
@@ -125,17 +107,20 @@ test('proposed coverage exactly matches the next presented camera throughout res
   near(f.camera.zoom,.95*scale);
 });
 
-
-test('a distant cold follow request traverses the full tilt interval over multiple frames',t=>{
-  const f=fixture(t,{ready:false});f.request(8);f.update();f.setReady(true);
+test('distant requests traverse the tilt interval smoothly even when all detail is cold',t=>{
+  const f=fixture(t,{ready:false});f.request(8);
   let transitionFrames=0,previousZoom=f.camera.zoom;
-  for(let frame=0;frame<240;frame++){
-    f.view.updateNavigation(1/60);const proposed=f.view.coverageCameras[1].clone();f.view.updatePresentation(1/60);
-    near(f.camera.zoom,proposed.zoom);
-    assert.ok(f.camera.zoom/previousZoom<=Math.exp(1/60)+1e-8,'resumed zoom cannot jump over the tilt interval');
+  for(let frame=0;frame<300;frame++){
+    f.update();
+    assert.ok(f.camera.zoom/previousZoom<=Math.exp(1.8/60)+1e-8,'proportional zoom speed is bounded');
     if(f.view.blend>0&&f.view.blend<1)transitionFrames++;
     previousZoom=f.camera.zoom;
   }
-  assert.ok(transitionFrames>=12,'the automatic tilt remains visible even for the largest follow jump');
+  assert.ok(transitionFrames>=8,'a large request must not skip the full tilt interval');
   near(f.camera.zoom,8*scale);assert.equal(f.view.blend,0);
+});
+
+test('reduced motion skips camera animation without waiting for detail',t=>{
+  const f=fixture(t,{ready:false,reduced:true});f.request(3.2);f.update();
+  near(f.camera.zoom,3.2*scale);assert.equal(f.view.blend,0);
 });

@@ -74,3 +74,19 @@ export function fitZoomForSpan({
   return clampZoom(Math.min(viewWidth / (spanWidth * margin),
     viewHeight / (spanHeight * margin)), fallback);
 }
+
+/** Ease proportional scale, with a finite travel speed for distant follow
+ * requests. This is the exact solution of a capped first-order response in
+ * log zoom, so 30/60/144 Hz produce the same camera after equal elapsed time. */
+export function smoothZoom(current,target,seconds,reduced=false){
+  if(reduced)return target;
+  const dt=Math.max(0,Number.isFinite(seconds)?seconds:0);
+  if(!dt||current===target)return current;
+  const start=Math.log(current),end=Math.log(target),error=Math.abs(end-start);
+  const rate=14,speed=1.8,threshold=speed/rate;
+  const cappedTime=Math.max(0,(error-threshold)/speed);
+  const travel=dt<=cappedTime?speed*dt:
+    error-Math.min(error,threshold)*Math.exp(-rate*(dt-cappedTime));
+  const next=Math.exp(start+Math.sign(end-start)*travel);
+  return Math.abs(next-target)<1e-6?target:next;
+}

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { CAMERA_ZOOM,modeForZoom,mapBlendForZoom,shouldStopFollowing,fitZoomForSpan } from './camera-modes.js';
+import { CAMERA_ZOOM,modeForZoom,mapBlendForZoom,shouldStopFollowing,fitZoomForSpan,smoothZoom } from './camera-modes.js';
 import { C } from './palette.js';
 import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent } from './world-surface.js';
 
@@ -18,7 +18,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   // for the map or train view without feeding automatic motion into OrbitControls.
   const navigation=camera.clone(),chartCamera=camera.clone(),coverageChart=camera.clone(),coverageView=camera.clone(),proposedChart=camera.clone(),proposedView=camera.clone(),presentation=camera.clone();
   const presentationTarget=new THREE.Vector3(0,1.3,0);
-  let waitingForDetail=false,resumingZoom=false,navigationDelta=0;
+  let navigationDelta=0;
   const coverageViews=[coverageView,proposedView];
   const controls=new OrbitControls(navigation,canvas);
   Object.assign(controls,{enableDamping:true,dampingFactor:.075,panSpeed:.7,rotateSpeed:.45,
@@ -36,11 +36,13 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   const tangentFrame=new THREE.Matrix4(),surfaceTarget=new THREE.Vector3(),surfaceOffset=new THREE.Vector3();
   const surfaceUp=new THREE.Vector3(),viewDirection=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3();
   const keyboardRight=new THREE.Vector3(),keyboardUp=new THREE.Vector3();
+  const keyboardVelocity=new THREE.Vector2(),keyboardIntent=new THREE.Vector2(),keyboardTravel=new THREE.Vector2();
   const chartBounds=new WeakMap();
   const domState={};
   const ringGeometry=new THREE.RingGeometry(.94,1,64);ringGeometry.rotateX(-Math.PI/2);
-  const ringMaterial=new THREE.MeshBasicMaterial({color:C.trim,transparent:true,opacity:.9,depthWrite:false,toneMapped:false,side:THREE.DoubleSide});
+  const ringMaterial=new THREE.MeshBasicMaterial({color:C.trim,transparent:true,opacity:.9,depthWrite:false,toneMapped:true,side:THREE.DoubleSide});
   const ring=new THREE.Mesh(ringGeometry,ringMaterial),mapRing=new THREE.Mesh(ringGeometry,ringMaterial.clone());
+  mapRing.material.toneMapped=false;
   ring.visible=mapRing.visible=false;scene.add(ring);mapScene.add(mapRing);
   ring.renderOrder=3;mapRing.renderOrder=10;
 
@@ -110,23 +112,20 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     spanWidth:40,spanHeight:32,padding:.1}));}
   function select(train){
     if(!train?.state.active)return;
-    flushControls();selected=train;hovered=null;zoomGoal=followZoom();
+    releaseKeys();flushControls();selected=train;hovered=null;zoomGoal=followZoom();
     if(reducedMotion.matches){navigation.zoom=zoomGoal;navigation.updateProjectionMatrix();zoomGoal=null;}
   }
   function reset(){
-    clearSelection();heldKeys.clear();hovered=null;flushControls();
+    clearSelection();releaseKeys();hovered=null;flushControls();
     navigation.position.copy(homePosition);controls.target.copy(homeTarget);
     navigation.zoom=1;navigation.updateProjectionMatrix();controls.update();
     constrainTarget();presentation.copy(navigation);presentationTarget.copy(controls.target);
-    waitingForDetail=!isDetailReady()&&navigation.zoom>CAMERA_ZOOM.mapBlendEnd*zoomScale;
-    resumingZoom=waitingForDetail;
-    if(waitingForDetail)presentation.zoom=CAMERA_ZOOM.mapBlendEnd*zoomScale;
     presentation.updateProjectionMatrix();blend=mapBlendForZoom(presentation.zoom/zoomScale);
     mode=modeForZoom(presentation.zoom/zoomScale);ring.visible=mapRing.visible=false;
     updateCamera();updateDOM();
   }
   function updateDOM(){
-    const values={view:mode,following:selected?.state.id??'',zoom:presentation.zoom.toFixed(3),requestedZoom:navigation.zoom.toFixed(3),detailWaiting:String(waitingForDetail),mapBlend:blend.toFixed(3)};
+    const values={view:mode,following:selected?.state.id??'',zoom:presentation.zoom.toFixed(3),requestedZoom:navigation.zoom.toFixed(3),detailLoading:String(blend<1&&!isDetailReady()),mapBlend:blend.toFixed(3)};
     for(const key in values)if(domState[key]!==values[key])canvas.dataset[key]=domState[key]=values[key];
   }
   function screenPosition(train,part=centerOf(train),target=projected){
@@ -197,18 +196,17 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
     controls.touches.TWO=THREE.TOUCH.DOLLY_PAN;
   }
-  function moveKeyboard(horizontal,verticalAmount,seconds){
+  function moveKeyboard(horizontal,verticalAmount){
     if(!horizontal&&!verticalAmount)return;
-    const length=Math.hypot(horizontal,verticalAmount);horizontal/=length;verticalAmount/=length;
     clearSelection();
     const surface=surfaceFor(getWorld());
-    const span=Math.max(navigation.right-navigation.left,navigation.top-navigation.bottom)/navigation.zoom;
+    const span=Math.max(navigation.right-navigation.left,navigation.top-navigation.bottom)/presentation.zoom;
     const speed=surface?.complete?Math.min(surface.radius*.95,span*.30):span*.30;
     // Project the displayed screen axes onto the ground chart at every zoom.
     // Translating both target and camera preserves the orbit instead of turning.
     keyboardRight.set(1,0,0).applyQuaternion(chartCamera.quaternion);keyboardRight.y=0;keyboardRight.normalize();
     keyboardUp.set(0,1,0).applyQuaternion(chartCamera.quaternion);keyboardUp.y=0;keyboardUp.normalize();
-    delta.copy(keyboardRight).multiplyScalar(horizontal*speed*seconds).addScaledVector(keyboardUp,-verticalAmount*speed*seconds);
+    delta.copy(keyboardRight).multiplyScalar(horizontal*speed).addScaledVector(keyboardUp,-verticalAmount*speed);
     if(surface?.complete&&surface.projection.type==='equirectangular'){
       // The camera uses an orthonormal tangent frame, while chart longitude
       // shrinks by cos(latitude) on the sphere. Invert that metric so a
@@ -222,7 +220,22 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     controls.target.add(delta);navigation.position.add(delta);
     constrainTarget();
   }
-  function releaseKeys(){heldKeys.clear();}
+  function updateKeyboard(dt){
+    keyboardIntent.set(Number(heldKeys.has('d'))-Number(heldKeys.has('a')),Number(heldKeys.has('s'))-Number(heldKeys.has('w')));
+    if(keyboardIntent.lengthSq()>1)keyboardIntent.normalize();
+    if(reducedMotion.matches){
+      keyboardVelocity.copy(keyboardIntent);keyboardTravel.copy(keyboardIntent).multiplyScalar(dt);
+    }else{
+      const rate=keyboardIntent.lengthSq()?10:14,decay=Math.exp(-rate*dt);
+      // Integrate the exponential velocity curve, rather than taking a frame's
+      // final velocity as its average. Travel therefore does not depend on FPS.
+      keyboardTravel.copy(keyboardVelocity).sub(keyboardIntent).multiplyScalar((1-decay)/rate).addScaledVector(keyboardIntent,dt);
+      keyboardVelocity.sub(keyboardIntent).multiplyScalar(decay).add(keyboardIntent);
+      if(!keyboardIntent.lengthSq()&&keyboardVelocity.lengthSq()<1e-24)keyboardVelocity.set(0,0);
+    }
+    moveKeyboard(keyboardTravel.x,keyboardTravel.y);
+  }
+  function releaseKeys(){heldKeys.clear();keyboardVelocity.set(0,0);keyboardTravel.set(0,0);}
   function keyUp(event){heldKeys.delete(event.key.toLowerCase());}
   canvas.addEventListener('keyup',keyUp);window.addEventListener('keyup',keyUp);
   canvas.addEventListener('blur',releaseKeys);window.addEventListener('blur',releaseKeys);
@@ -256,11 +269,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     const letter=event.key.toLowerCase();
     if(['w','a','s','d'].includes(letter)){
       if(!heldKeys.has(letter)){
-        heldKeys.add(letter);flushControls();
-        // A brief key tap gives feedback even if keyup arrives before a frame;
-        // held movement is time based and does not depend on OS repeat rate.
-        moveKeyboard(letter==='a'?-1:letter==='d'?1:0,letter==='w'?-1:letter==='s'?1:0,.06);
-        controls.update();
+        heldKeys.add(letter);clearSelection();flushControls();
       }
     }else if(event.key===' ')onPause();
     else if(event.key==='Home')reset();
@@ -298,7 +307,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
         navigation.updateProjectionMatrix();
       }
       if(selected&&(!selected.state.active||(zoomGoal===null&&shouldStopFollowing(navigation.zoom/zoomScale))))selected=null;
-      moveKeyboard(Number(heldKeys.has('d'))-Number(heldKeys.has('a')),Number(heldKeys.has('s'))-Number(heldKeys.has('w')),Math.min(.1,Math.max(0,dt)));
+      updateKeyboard(Math.min(.1,Math.max(0,dt)));
       configureInput();controls.update();
       if(selected){
         followTarget.copy(centerOf(selected).position);followTarget.y=.75;
@@ -308,36 +317,12 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       }
       constrainTarget();
   }
-  function resumedZoom(dt){
-    if(reducedMotion.matches)return navigation.zoom;
-    const previous=presentation.zoom,requested=navigation.zoom;
-    // Catch up in proportional zoom steps. A large follow request must not
-    // skip the whole tilt interval on the first frame after loading finishes.
-    const step=Math.exp(Math.max(0,dt));
-    const next=THREE.MathUtils.clamp(THREE.MathUtils.lerp(previous,requested,ease(10,dt,false)),previous/step,previous*step);
-    return Math.abs(next-requested)<.002?requested:next;
-  }
+  function nextZoom(dt){return smoothZoom(presentation.zoom,navigation.zoom,dt,reducedMotion.matches);}
   function updatePresentation(dt){
-    const entry=CAMERA_ZOOM.mapBlendEnd*zoomScale,ready=isDetailReady();
-    waitingForDetail=navigation.zoom>entry&&!ready;
-    if(navigation.zoom<=entry){
-      // Returning to the overview always cancels a pending detail entry.
-      presentation.copy(navigation);presentationTarget.copy(controls.target);resumingZoom=false;
-    }else if(ready){
-      const nextZoom=resumingZoom?resumedZoom(dt):navigation.zoom;
-      presentation.copy(navigation);presentationTarget.copy(controls.target);
-      presentation.zoom=nextZoom;
-      if(presentation.zoom===navigation.zoom)resumingZoom=false;
-    }else{
-      resumingZoom=true;
-      if(presentation.zoom<=entry){
-        // Keep the visible map at the same geographic scale while a fast input
-        // waits for geometry. Requested zoom remains intact in navigation.
-        presentation.copy(navigation);presentationTarget.copy(controls.target);presentation.zoom=entry;
-      }
-      // Already detailed: retain the complete presented camera while the next
-      // region loads. Never flatten or zoom out because a cache entry is cold.
-    }
+    const zoom=nextZoom(dt);
+    // Streaming never drives navigation. The always-available world surface
+    // remains under progressively arriving scenery at every scale and target.
+    presentation.copy(navigation);presentationTarget.copy(controls.target);presentation.zoom=zoom;
     presentation.updateProjectionMatrix();
     blend=mapBlendForZoom(presentation.zoom/zoomScale);
     mode=modeForZoom(presentation.zoom/zoomScale,mode);configureInput();updateCamera();
@@ -374,16 +359,17 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     update(dt){updateNavigation(dt);updatePresentation(dt);},
     get coverageCamera(){
       buildChartCamera(coverageChart,0);
-      // Prepare the widest detailed footprint before crossing the boundary,
-      // including a rapid jump straight to train-follow or a close zoom.
-      coverageChart.zoom=Math.max(CAMERA_ZOOM.mapBlendEnd*zoomScale,Math.min(navigation.zoom,presentation.zoom));
+      // Prefetch a bounded local footprint while still in the overview. Once
+      // detailed, keep the requested region proportional to the visible scale.
+      coverageChart.zoom=Math.max(CAMERA_ZOOM.mapBlendEnd*zoomScale,presentation.zoom);
       coverageChart.updateProjectionMatrix();
       return bendCamera(coverageView,coverageChart);
     },
     get coverageCameras(){
       this.coverageCamera;
       const entry=CAMERA_ZOOM.mapBlendEnd*zoomScale;
-      const proposedZoom=Math.max(entry,resumingZoom?resumedZoom(navigationDelta):navigation.zoom);
+      const proposedZoom=nextZoom(navigationDelta);
+      if(proposedZoom<entry){proposedView.copy(coverageView);return coverageViews;}
       buildChartCamera(proposedChart,mapBlendForZoom(proposedZoom/zoomScale));
       proposedChart.zoom=proposedZoom;proposedChart.updateProjectionMatrix();
       bendCamera(proposedView,proposedChart);
@@ -392,7 +378,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     setScale(value){zoomScale=Math.max(1,Number(value)||1);controls.maxZoom=CAMERA_ZOOM.max*zoomScale;},
     get zoomScale(){return zoomScale;},
     get wantsDetail(){return navigation.zoom/zoomScale>CAMERA_ZOOM.detailPrefetch||blend<1||selected!==null;},
-    get waitingForDetail(){return waitingForDetail;},get renderTarget(){return presentationTarget;},
+    get waitingForDetail(){return false;},get renderTarget(){return presentationTarget;},
     setHome(){homePosition.copy(navigation.position);homeTarget.copy(controls.target);reset();},
     get mode(){return mode;},get blend(){return blend;},get selected(){return selected?.state.id??null;},
   };

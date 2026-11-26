@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
 import {surfaceFor,surfaceCoordinates,surfacePoint} from './world-surface.js';
 
@@ -11,7 +12,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   // footprint. Portrait views, shallow orbits and polar chart cells can need
   // more cells than the LRU target; only an explicit caller cap limits demand.
   const root=new THREE.Group();root.name='local-world-detail';parent.add(root);
-  const cache=new Map(),pending=new Map(),incoming=new Map(),materials=new Map(),wanted=new Map(),required=new Map(),failures=new Map();
+  const cache=new Map(),pending=new Map(),incoming=new Map(),wanted=new Map(),required=new Map(),failures=new Map();
   const frustum=new THREE.Frustum(),coverageFrustum=new THREE.Frustum(),projection=new THREE.Matrix4(),direction=new THREE.Vector3();
   const point=new THREE.Vector3(),box=new THREE.Box3(),targetPoint=new THREE.Vector3();
   const surface=surfaceFor(world),ray=new THREE.Ray(),hit=new THREE.Vector3(),chart={};
@@ -20,19 +21,24 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   let frame=0,disposed=false,coverageChecked=false;
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
-  const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,bytes:0,errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0};
-  const materialFor=description=>{
-    const key=JSON.stringify(description);let entry=materials.get(key);
-    if(!entry){entry={material:new THREE.MeshStandardMaterial({name:description.name,
-      color:new THREE.Color().fromArray(description.color),roughness:description.roughness,
-      metalness:description.metalness,side:description.side,flatShading:true,vertexColors:description.vertexColors}),refs:0};materials.set(key,entry);}
-    entry.refs++;return {key,material:entry.material};
+  const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,bytes:0,errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0,revealingChunks:0};
+  const materialFor=(description,job)=>{
+    const key=JSON.stringify(description);let material=job.materials.get(key);
+    if(!material){
+      material=applyDetailReveal(new THREE.MeshStandardMaterial({name:description.name,
+        color:new THREE.Color().fromArray(description.color),roughness:description.roughness,
+        metalness:description.metalness,side:description.side,flatShading:true,vertexColors:description.vertexColors}),job.reveal);
+      job.materials.set(key,material);
+    }
+    return material;
   };
+  function releaseResources(chunk){
+    chunk.root.traverse(mesh=>{if(mesh.isMesh)mesh.geometry.dispose();});
+    for(const material of chunk.materials.values())material.dispose();
+    chunk.depthMaterial?.dispose();
+  }
   function release(chunk){
-    chunk.root.traverse(mesh=>{
-      if(!mesh.isMesh)return;mesh.geometry.dispose();
-      const entry=materials.get(mesh.userData.materialKey);if(entry&&!--entry.refs){entry.material.dispose();materials.delete(mesh.userData.materialKey);}
-    });
+    releaseResources(chunk);
     root.remove(chunk.root);cache.delete(chunk.key);stats.bytes-=chunk.bytes;stats.triangles-=chunk.triangles;
   }
   function hydrate(deadline){
@@ -53,12 +59,12 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         }else geometry.boundingSphere=new THREE.Sphere(new THREE.Vector3((b.minX+b.maxX)/2,maxHeight/2,(b.minZ+b.maxZ)/2),
           Math.hypot(b.maxX-b.minX,maxHeight+8,b.maxZ-b.minZ)/2);
         job.triangles+=(data.index?.length??data.position.length/3)/3;
-        const material=materialFor(data.material),mesh=new THREE.Mesh(geometry,material.material);
+        const mesh=new THREE.Mesh(geometry,materialFor(data.material,job));
         installGeometryBVH(mesh,data.bvh);
         const buffers=new Set([data.position.buffer,data.normal?.buffer,data.color?.buffer,data.index?.buffer,
           ...geometryBVHTransfers(data.bvh)].filter(Boolean));
         job.bytes+=[...buffers].reduce((n,buffer)=>n+buffer.byteLength,0);
-        mesh.userData.materialKey=material.key;mesh.castShadow=true;mesh.receiveShadow=true;job.root.add(mesh);
+        mesh.customDepthMaterial=job.depthMaterial;mesh.castShadow=true;mesh.receiveShadow=true;job.root.add(mesh);
         if(performance.now()>=deadline)return;
       }
     }
@@ -71,19 +77,17 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       const chunk={key,root:job.root,bounds:rendered
         ?new THREE.Box3(new THREE.Vector3().fromArray(rendered.min),new THREE.Vector3().fromArray(rendered.max))
         :new THREE.Box3(new THREE.Vector3(b.minX,-4,b.minZ),new THREE.Vector3(b.maxX,maxHeight,b.maxZ)),
-        last:frame,bytes:job.bytes,triangles:job.triangles};
+        last:frame,bytes:job.bytes,triangles:job.triangles,reveal:job.reveal,progress:0,
+        materials:job.materials,depthMaterial:job.depthMaterial};
       root.add(job.root);cache.set(key,chunk);incoming.delete(key);
       stats.bytes+=job.bytes;stats.triangles+=job.triangles;stats.loadedChunks=cache.size;
     }
   }
   function releaseIncoming(job){
     job.cancelled=true;
-    job.root.traverse(mesh=>{
-      if(!mesh.isMesh)return;mesh.geometry.dispose();
-      const entry=materials.get(mesh.userData.materialKey);
-      if(entry&&!--entry.refs){entry.material.dispose();materials.delete(mesh.userData.materialKey);}
-    });
+    releaseResources(job);
   }
+
   function warmOne(){
     if(!uploadMesh)return;
     for(const [key,job]of incoming){
@@ -109,9 +113,11 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     stats.requestedChunks++;
     const job=Promise.resolve().then(()=>requestChunk(coordinates));
     pending.set(key,job);stats.pendingChunks=pending.size+incoming.size;
-    Promise.resolve(job).then(packet=>{pending.delete(key);if(!disposed){
+    Promise.resolve(job).then(packet=>{pending.delete(key);if(!disposed&&wanted.has(key)){
       const group=new THREE.Group();group.name=`detail-${key}`;
-      incoming.set(key,{packet,root:group,next:0,uploaded:0,warming:false,bytes:0,triangles:0});
+      const reveal={value:0};
+      incoming.set(key,{packet,root:group,next:0,uploaded:0,warming:false,bytes:0,triangles:0,
+        reveal,materials:new Map(),depthMaterial:createDetailDepthMaterial(reveal)});
     }},error=>{
       pending.delete(key);if(disposed)return;failures.set(key,error);stats.errors++;root.userData.lastError=String(error?.message??error);
     }).finally(()=>{stats.pendingChunks=pending.size+incoming.size;});
@@ -216,14 +222,21 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     }
     return {minX,maxX,minZ,maxZ};
   }
-  function updateVisibility(camera){
+  function updateVisibility(camera,{dt=0,reveal=true,reducedMotion=false}={}){
     if(disposed)return;
     parent.updateWorldMatrix(true,false);camera.updateMatrixWorld();
     projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(projection);
-    stats.visibleChunks=0;
+    stats.visibleChunks=stats.revealingChunks=0;
     for(const chunk of cache.values()){
       box.copy(chunk.bounds).applyMatrix4(parent.matrixWorld);chunk.root.visible=frustum.intersectsBox(box);
-      if(chunk.root.visible)stats.visibleChunks++;
+      if(chunk.root.visible){
+        stats.visibleChunks++;
+        if(reveal){
+          chunk.progress=reducedMotion?1:Math.min(1,chunk.progress+Math.max(0,dt)/.38);
+          chunk.reveal.value=chunk.progress*chunk.progress*(3-2*chunk.progress);
+        }
+        if(chunk.progress<1)stats.revealingChunks++;
+      }
     }
   }
   function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false}={}){
@@ -273,6 +286,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       }
     }
     stats.prefetchChunks=wanted.size-Math.min(required.size,maxVisibleChunks);
+    // Ignore obsolete worker results before spending a frame hydrating/uploading
+    // them. A moving camera always gives the newest visible cells priority.
+    for(const [key,job]of incoming)if(!wanted.has(key)){releaseIncoming(job);incoming.delete(key);}
     const started=performance.now();hydrate(started+budgetMs);warmOne();publishReady();
     updateVisibility(camera);
     for(const chunk of cache.values())if(wanted.has(chunk.key)||(retainVisible&&chunk.root.visible))chunk.last=frame;
@@ -298,5 +314,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     for(const job of incoming.values())releaseIncoming(job);
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
   }
-  return {root,update,updateVisibility,stats,dispose,get ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}};
+  function ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}
+  return {root,update,updateVisibility,stats,dispose,get ready(){return ready();},
+    get settled(){return ready()&&[...required.keys()].every(key=>{const chunk=cache.get(key);return !chunk.root.visible||chunk.progress>=1;});}};
 }

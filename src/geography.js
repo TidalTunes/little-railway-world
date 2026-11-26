@@ -10,6 +10,8 @@ import { mountainMeshData, mountainSnowHeight, mountainSurfaceHeight } from './m
 import {mountainSurfaceColor,mountainTrees} from './mountain-cover.js';
 import {tree} from './assets.js';
 import {colorTerrainGeometry} from './terrain-colors.js';
+import {oceanColor,shoreColor} from './ocean-colors.js';
+import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 
 const TUNNEL_RADIUS = 1.08;
 const TUNNEL_SPRING = 1.80;
@@ -61,18 +63,29 @@ export function buildTerrain(parent,world){
   }
   for(const rings of banks){
     const geometry=new THREE.ShapeGeometry(polygonShape(rings));geometry.rotateX(-Math.PI/2);
-    const pos=geometry.attributes.position;
+    const pos=geometry.attributes.position,colors=new Float32Array(pos.count*3),color=new THREE.Color();
     for(let i=0;i<pos.count;i++){
       const x=pos.getX(i),z=pos.getZ(i);
       const riverSlope=riverBankDistance(world,x,z)/.8;
       const oceanSlope=hasWaterBiome?-biomeDistance(world.terrainSource??world,'ocean',x,z)/(world.biomes.shoreWidth??.9):Infinity;
       pos.setY(i,waterY+THREE.MathUtils.clamp(Math.min(riverSlope,oceanSlope),0,1)*(-waterY)+.015);
+      shoreColor(world,x,z,{target:color});color.toArray(colors,i*3);
     }
-    geometry.computeVertexNormals();mesh(parent,geometry,'sand');
+    geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));
+    geometry.computeVertexNormals();mesh(parent,geometry,M.terrainVertex);
   }
   surface(parent,riverWater,waterY+.03,'waterLight');
   if(ocean.length){
-    surface(parent,ocean,waterY+.035,'ocean');
+    if(world.surface?.complete)for(const rings of ocean){
+      const input=new THREE.ShapeGeometry(polygonShape(rings));input.rotateX(-Math.PI/2);
+      const geometry=tessellateSurfaceGeometry(input,24);input.dispose();
+      const position=geometry.attributes.position,colors=new Float32Array(position.count*3),color=new THREE.Color();
+      for(let i=0;i<position.count;i++){
+        oceanColor(world,position.getX(i),position.getZ(i),color);color.toArray(colors,i*3);
+      }
+      geometry.setAttribute('color',new THREE.BufferAttribute(colors,3));geometry.computeVertexNormals();
+      mesh(parent,geometry,M.terrainVertex,0,waterY+.035,0);
+    }else surface(parent,ocean,waterY+.035,'ocean');
   }
   // Only the actual island edge gets trim and spillways. Clip those original
   // edges into a local cell, rather than decorating artificial chunk borders.

@@ -6,6 +6,7 @@ import {generateWorld} from '../src/world-model.js';
 import {makeTrains} from '../src/railway.js';
 import {createWorldRenderer} from '../src/world-renderer.js';
 import {createSurfaceShell} from '../src/surface-shell.js';
+import {createViewCompositor} from '../src/view-compositor.js';
 import {surfacePoint,surfaceNormal,surfaceFrame,warpGeometryToSurface,EARTH_SURFACE_RADIUS} from '../src/world-surface.js';
 
 const surface={type:'sphere',radius:EARTH_SURFACE_RADIUS,projection:geography.projection,
@@ -89,4 +90,30 @@ test('spherical detail requests cover the geographic target and hydrate actual c
   assert.ok(new THREE.Raycaster(camera.position,new THREE.Vector3().subVectors(target,camera.position).normalize())
     .intersectObject(renderer.root,true).length>0,'the transformed surface is pickable with the actual camera');
   renderer.dispose();
+});
+
+test('complete and finite shells keep the compositor tone-mapping contract at the direct-render endpoints',()=>{
+  const draws=[],renderer={toneMappingExposure:1.15,setRenderTarget(){},render(source){draws.push(source);}};
+  const compositor=createViewCompositor(renderer),view=new THREE.Camera(),worldScene=new THREE.Scene(),mapScene=new THREE.Scene();
+  // During a blend the compositor applies ACES to the complete detailed frame,
+  // while preserving raw map colors. Direct-render endpoints must agree.
+  compositor.render(worldScene,mapScene,view,.5);
+  const blendShader=draws.at(-1).children[0].material.fragmentShader;
+  assert.match(blendShader,/worldColor=ACESFilmicToneMapping\(texture2D\(worldTexture/);
+  assert.match(blendShader,/mapColor=texture2D\(mapTexture/);
+  const radius=1600,complete={surface:{type:'sphere',complete:true,radius,origin:{longitude:0,latitude:0},
+    projection:{type:'equirectangular',radius,centralLongitude:0,centralLatitude:0}}};
+  try{
+    for(const source of [world,complete]){
+      const shell=createSurfaceShell(source);worldScene.add(shell.detail);mapScene.add(shell.map);
+      try{
+        shell.detail.traverse(mesh=>{if(mesh.isMesh)assert.equal(mesh.material.toneMapped,true,
+          'direct detail applies the same ACES transform as a near-complete blend');});
+        shell.map.traverse(mesh=>{if(mesh.isMesh)assert.equal(mesh.material.toneMapped,false,
+          'direct map keeps the same untonemapped colors as a near-complete map blend');});
+        compositor.render(worldScene,mapScene,view,0);assert.equal(draws.at(-1),worldScene);
+        compositor.render(worldScene,mapScene,view,1);assert.equal(draws.at(-1),mapScene);
+      }finally{shell.dispose();}
+    }
+  }finally{compositor.dispose();}
 });

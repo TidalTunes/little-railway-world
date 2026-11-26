@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { tunnelCutter, createMountainGeometry, buildMountains, buildTerrain } from '../src/geography.js';
 import { generateWorld, sampleLine } from '../src/world-model.js';
-import { M } from '../src/palette.js';
+import { M, C } from '../src/palette.js';
 
 const rockMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
 const railY = .42;
@@ -207,8 +207,8 @@ test('river excavation keeps water, sloped banks and dry land separate at arbitr
     scene.updateMatrixWorld(true);
     for (const along of [-10, 0, 10]) {
       for (const side of [-1, 1]) {
-        for (const [offset, material, height] of [[0, M.waterLight, -1.17],
-          [3.1 * side, M.sand, -.585], [4 * side, M.terrainVertex, .018]]) {
+        for (const [offset, role, material, height] of [[0, 'water', M.waterLight, -1.17],
+          [3.1 * side, 'bank', M.terrainVertex, -.585], [4 * side, 'land', M.terrainVertex, .018]]) {
           const x = direction.x * along + direction.z * offset;
           const z = direction.z * along - direction.x * offset;
           const hits = rayHits(scene, new THREE.Vector3(x, 10, z), new THREE.Vector3(x, -4, z));
@@ -217,10 +217,23 @@ test('river excavation keeps water, sloped banks and dry land separate at arbitr
             `bearing ${angle}, along ${along}, offset ${offset}: material matches geography`);
           assert.ok(Math.abs(hits[0].point.y - height) < .002,
             `bearing ${angle}, offset ${offset}: surface elevation is continuous`);
+          if (role === 'bank') {
+            const {geometry, material:bankMaterial} = hits[0].object;
+            assert.equal(bankMaterial.vertexColors, true, 'shore shading uses the per-vertex coastal palette');
+            assert.equal(bankMaterial.color.getHex(), 0xffffff, 'the material must not tint its shore colors twice');
+            const colors = geometry.getAttribute('color');
+            assert.equal(colors?.count, geometry.getAttribute('position').count);
+            for (const index of [hits[0].face.a, hits[0].face.b, hits[0].face.c]) {
+              const actual = new THREE.Color().fromBufferAttribute(colors, index);
+              assert.ok(Math.max(Math.abs(actual.r-C.sand.r), Math.abs(actual.g-C.sand.g), Math.abs(actual.b-C.sand.b)) < 1e-6,
+                `bearing ${angle}, along ${along}: inland river banks retain their sand color`);
+            }
+          }
         }
       }
     }
     const outside = rayHits(scene, new THREE.Vector3(23, 10, 23), new THREE.Vector3(23, -4, 23));
     assert.equal(outside.length, 0, 'terrain remains clipped to its authored island boundary');
+    scene.traverse(mesh => mesh.geometry?.dispose());
   }
 });

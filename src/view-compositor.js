@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
 
 // Crossfade complete renders so the change of representation has no transparent
 // geometry sorting, disappearing roofs, or doubled shadows.
@@ -26,18 +27,30 @@ export function createViewCompositor(renderer){
   const scene=new THREE.Scene(),quad=new THREE.Mesh(new THREE.PlaneGeometry(2,2),material);
   quad.frustumCulled=false;scene.add(quad);
   const camera=new THREE.Camera();
-  let depthProxies;
-  function shadowProxies(){
-    if(depthProxies)return depthProxies;
+  let proxies,disposed=false;
+  function shaderProxies(){
+    if(proxies)return proxies;
     const geometry=new THREE.BufferGeometry();
     geometry.setAttribute('position',new THREE.Float32BufferAttribute([0,0,0,1,0,0,0,0,1],3));
     geometry.setAttribute('normal',new THREE.Float32BufferAttribute([0,1,0,0,1,0,0,1,0],3));
+    geometry.setAttribute('color',new THREE.Float32BufferAttribute([1,1,1,1,1,1,1,1,1],3));
+    // The first regional packet and train instances may arrive after the user
+    // starts zooming. Hold their representative shader variants ahead of time,
+    // using the real scene's light/shadow configuration and one tiny triangle.
+    const surfaces=[THREE.FrontSide,THREE.DoubleSide].map(side=>new THREE.Mesh(geometry,
+      applyDetailReveal(new THREE.MeshStandardMaterial({side,flatShading:true,vertexColors:true}),{value:1})));
+    surfaces.push(new THREE.InstancedMesh(geometry,
+      new THREE.MeshStandardMaterial({side:THREE.FrontSide,flatShading:true,vertexColors:true}),1));
+    for(const proxy of surfaces){proxy.castShadow=true;proxy.receiveShadow=true;}
     // Three's PCF shadow pass uses BasicDepthPacking and reverses FrontSide
-    // art to BackSide. Normals affect its shader key even without lighting.
-    // Hold distinct materials so async readiness tracks both shader programs.
-    const regular=new THREE.Mesh(geometry,new THREE.MeshDepthMaterial({side:THREE.BackSide}));
-    const instanced=new THREE.InstancedMesh(geometry,new THREE.MeshDepthMaterial({side:THREE.BackSide}),1);
-    return depthProxies={geometry,objects:[regular,instanced]};
+    // art to BackSide while leaving DoubleSide art double-sided. Normals affect
+    // its shader key even without lighting; keep a distinct material per key.
+    const depths=[THREE.BackSide,THREE.DoubleSide].map(side=>{
+      const material=createDetailDepthMaterial({value:1});material.side=side;
+      return new THREE.Mesh(geometry,material);
+    });
+    depths.push(new THREE.InstancedMesh(geometry,new THREE.MeshDepthMaterial({side:THREE.BackSide}),1));
+    return proxies={geometry,surfaces,depths};
   }
   let width=1,height=1,allocatedWidth=1,allocatedHeight=1;
   function allocate(){
@@ -84,22 +97,24 @@ export function createViewCompositor(renderer){
       // Await each variant before compiling the same materials for the screen:
       // Three's async readiness check follows material.currentProgram.
       if(world&&view)await compile(worldTarget,world,view);
+      if(world&&view)for(const proxy of shaderProxies().surfaces)await compile(worldTarget,proxy,view,world);
       if(world&&shadows){
         let shadowCamera;
         world.traverseVisible(object=>{if(!shadowCamera&&object.castShadow&&object.isDirectionalLight)shadowCamera=object.shadow.camera;});
         // compileAsync only prepares ordinary surface materials. Prepare the
-        // two private shadow-depth variants separately, without rendering them.
-        if(shadowCamera)for(const proxy of shadowProxies().objects)await compile(worldTarget,proxy,shadowCamera,world);
+        // private shadow-depth variants separately, without rendering them.
+        if(shadowCamera)for(const proxy of shaderProxies().depths)await compile(worldTarget,proxy,shadowCamera,world);
       }
       if(map&&view)await compile(mapTarget,map,view);
       await compile(null,scene,camera);
       if(world&&view)await compile(null,world,view);
+      if(world&&view)for(const proxy of shaderProxies().surfaces)await compile(null,proxy,view,world);
     },
     render(world,map,view,blend){
       if(blend<=.001){renderer.setRenderTarget(null);renderer.render(world,view);return;}
       if(blend>=.999){renderer.setRenderTarget(null);renderer.render(map,view);return;}
-      // The overview never pays for two multisampled half-float framebuffers.
-      // Allocate them only when both representations are actually on screen.
+      // Preparation normally allocates these ahead of the first transition.
+      // Also handle a resize or a caller that has not requested preparation.
       allocate();
       renderer.setRenderTarget(worldTarget);renderer.render(world,view);
       renderer.setRenderTarget(mapTarget);renderer.render(map,view);
@@ -107,11 +122,12 @@ export function createViewCompositor(renderer){
       renderer.render(scene,camera);
     },
     dispose(){
+      if(disposed)return;disposed=true;
       worldTarget.dispose();mapTarget.dispose();quad.geometry.dispose();material.dispose();
-      if(depthProxies){
-        depthProxies.geometry.dispose();
-        for(const proxy of depthProxies.objects){proxy.material.dispose();if(proxy.isInstancedMesh)proxy.dispose();}
-        depthProxies=undefined;
+      if(proxies){
+        proxies.geometry.dispose();
+        for(const proxy of [...proxies.surfaces,...proxies.depths]){proxy.material.dispose();if(proxy.isInstancedMesh)proxy.dispose();}
+        proxies=undefined;
       }
     },
   };
