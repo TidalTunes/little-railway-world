@@ -7,6 +7,7 @@ import {createDetailBase} from './detail-base.js';
 import { makeTrains } from './railway.js';
 import { generateWorld,validateWorld } from './world-model.js';
 import { createStressWorld } from './stress-world.js';
+import { createLaunchWorld } from './world-presets.js';
 import { createWorldWorker } from './world-worker-client.js';
 import { createGeometryUploader } from './geometry-uploader.js';
 import { localAmbience } from './ambience.js';
@@ -86,7 +87,8 @@ function fitWorld(){
   const width=Math.max(...xs)-Math.min(...xs),depth=Math.max(...zs)-Math.min(...zs);
   const radius=Math.hypot(width,depth),height=Math.max(0,...model.mountains.map(m=>m.height));
   ground.visible=!surfaceFor(model);
-  view.setScale(Math.max(1,radius/410));
+  const startInDetail=model.camera?.startInDetail===true;
+  view.setScale(startInDetail?1:Math.max(1,radius/410));
   controls.target.set((Math.max(...xs)+Math.min(...xs))/2,1.3,(Math.max(...zs)+Math.min(...zs))/2);
   const direction=model.camera?.northUp?new THREE.Vector3(0,125,180).normalize():cameraDirection;
   navigation.position.copy(controls.target).addScaledVector(direction,radius*1.5+height);
@@ -110,7 +112,7 @@ function fitWorld(){
     }
   }
   frameWidth=x*2+Math.max(10,x*.20);frameHeight=y*2+Math.max(10,y*.20);
-  view.setScale(Math.max(view.zoomScale,frameHeight/230));
+  view.setScale(startInDetail?1:Math.max(view.zoomScale,frameHeight/230));
   resize();view.setHome();
 }
 function fitShadows(){
@@ -266,25 +268,7 @@ window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),generateWorld,validateWorld,createStressWorld,
 });
-const parameters=new URLSearchParams(location.search),layout=parameters.get('layout')??(parameters.has('cities')?'classic':'earth');
+const parameters=new URLSearchParams(location.search);
 try{
-  let input;
-  if(layout==='stress')input=createStressWorld({cities:parameters.has('cities')?Number(parameters.get('cities')):256,
-    trains:parameters.has('trains')?Number(parameters.get('trains')):2048,seed:parameters.get('seed')??'continental-railway'});
-  else if(layout==='earth'){
-    const {createEarthWorld}=await import('./earth-world.js');
-    input=createEarthWorld({...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
-      ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})});
-  }
-  else if(layout==='europe'){
-    const {createEuropeWorld}=await import('./europe-world.js');
-    input=createEuropeWorld({...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
-      ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})});
-  }
-  else if(['crossroads','showcase'].includes(layout)){
-    const response=await fetch(new URL(`./worlds/${layout}.json`,location.href));
-    if(!response.ok)throw new Error('Could not load the authored world');input=await response.json();
-    if(parameters.has('seed'))input.seed=parameters.get('seed');
-  }else input={seed:parameters.get('seed')??27,cityCount:Number(parameters.get('cities'))||8};
-  await loadWorld(input);
+  await loadWorld(await createLaunchWorld(parameters,location.href));
 }catch(error){reportError(error);}
