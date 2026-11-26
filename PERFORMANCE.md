@@ -89,15 +89,15 @@ uniform-only updates measured approximately 0.02 ms. These are local measurement
 not guarantees for other devices or imported worlds. An isolated 1280×720 browser check of the refined Westhaven scene measured
 5.9 ms CPU and 9.2 ms frame intervals at the 95th percentile, with 6,125 nearby
 instances. The first V transition peaked at 5.0 ms CPU and a 9.3 ms frame interval,
-with no pending chunk requests. At overview scale the locator replaces subpixel
-character parts, saving roughly 55 draws while retaining the same location.
+with no pending chunk requests. At overview scale a single locator replaces the subpixel
+figure, retaining its position while skipping the character meshes.
 
 The close-detail polish keeps those four vegetation batches. Exact foothill
 grounding adds six grass-only `vec4` instance attributes (0.92 MB at full capacity,
 14 attribute locations including the existing matrix and color). Facet indexes
 and root heights are cached; ordinary frames only change uniforms. Actual island
 plans measured 27–39 ms cold and 8.7–10.2 ms on cached five-unit refreshes.
-Articulated sheep retain the same fauna batches and 48-animal cap. All town-clock
+The simplified player uses 17 meshes including its axe and contact shadow, down from 32. Its walk and swing animate existing transforms with no effects or extra batches. Sheep use six instances each (fleece, head and four solid legs), down from fourteen, retaining the same three sheep batches and 48-animal cap. All town-clock
 hands use one additional draw, capped at 256 faces and updated at 12 Hz. Farm
 boundary geometry stays within the existing 1,000-triangle per-field budget.
 

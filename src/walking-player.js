@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import {M} from './palette.js';
-import {footstep,solveLeg} from './leg-motion.js';
 import {worldSurface,pointSegmentDistance} from './world-model.js';
 import {polylineTree} from './spatial-index.js';
 import {surfaceQuerySegments} from './surface-query.js';
@@ -10,56 +9,51 @@ export const WALKING=Object.freeze({height:.96,radius:.17,speed:2.65,sprintSpeed
   stepHeight:.32,maxSlope:.78,cameraDistance:3.6,cameraHeight:.65,spawnRailClearance:4.5,fov:54,near:.045,far:140});
 const solids=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
 const tau=Math.PI*2,clamp=THREE.MathUtils.clamp;
-const legLength=.19,restHip=.389,ankleHeight=.032;
+const swingDuration=.58;
+const ease=t=>t*t*(3-2*t);
 const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
 
-/** A single articulated, human-scale traveller. The world never gets rescaled
- * or copied for this view; the same .75-unit station passengers set the scale. */
+/** One small painted figure, shared by every camera layer. Broad shapes and
+ * single-piece limbs keep the silhouette legible even from the strategy view. */
 function traveller(parent){
   const root=new THREE.Group();root.name='walking-traveller';parent.add(root);
-  const body=new THREE.Group();root.add(body);
-  const box=new THREE.BoxGeometry(1,1,1),sphere=new THREE.IcosahedronGeometry(1,1),cap=new THREE.CylinderGeometry(.118,.125,.07,8);
-  const geometries=[box,sphere,cap];
+  const body=new THREE.Group();body.name='traveller-body';root.add(body);
+  const box=new THREE.BoxGeometry(1,1,1),sphere=new THREE.SphereGeometry(1,10,6);
+  const coat=new THREE.CylinderGeometry(.145,.195,.36,6);
+  const cap=new THREE.CylinderGeometry(.167,.181,.10,10);
+  // The blade is one tapered, closed prism. Its wooden handle meets the socket
+  // inside the head, and the gripping mitten remains attached to the same arm.
+  const bladeShape=new THREE.Shape();
+  bladeShape.moveTo(.038,-.045);bladeShape.lineTo(.038,.045);
+  bladeShape.lineTo(-.17,.10);bladeShape.lineTo(-.17,-.10);bladeShape.closePath();
+  const blade=new THREE.ExtrudeGeometry(bladeShape,{depth:.065,bevelEnabled:false,steps:1});
+  blade.rotateY(Math.PI/2);blade.translate(-.0325,0,0);
+  const geometries=[box,sphere,coat,cap,blade];
   function part(group,name,x,y,z,w,h,d,material,geometry=box){
     const mesh=new THREE.Mesh(geometry,material);mesh.name=name;mesh.position.set(x,y,z);mesh.scale.set(w,h,d);
     mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);return mesh;
   }
-  part(body,'traveller-coat',0,.515,0,.29,.30,.19,M.teal);
-  part(body,'coat-hem',0,.375,0,.32,.075,.22,M.teal);
-  part(body,'shirt-collar',0,.67,.021,.15,.045,.15,M.trim);
-  part(body,'scarf',0,.654,.12,.095,.07,.035,M.gold);
-  part(body,'scarf-tail',.055,.563,.125,.055,.16,.025,M.gold);
-  part(body,'traveller-face',0,.77,.005,.105,.12,.10,M.peach,sphere);
-  part(body,'traveller-hair',0,.831,-.025,.19,.055,.15,M.timber);
-  part(body,'traveller-cap',0,.874,0,1,1,1,M.redLight,cap);
-  part(body,'cap-brim',0,.845,.09,.20,.028,.12,M.roof);
-  part(body,'cap-badge',0,.878,.117,.047,.032,.012,M.gold);
-  for(const side of [-1,1])part(body,'eye',side*.038,.785,.097,.017,.023,.012,M.window);
-  part(body,'backpack',0,.52,-.145,.23,.26,.14,M.roof);
-  part(body,'backpack-flap',0,.641,-.165,.245,.055,.145,M.roofLight);
-  part(body,'backpack-buckle',0,.565,-.221,.043,.06,.012,M.gold);
-  for(const side of [-1,1])part(body,'backpack-strap',side*.106,.535,.103,.032,.26,.018,M.timber);
-  const arms=[],elbows=[],legs=[],knees=[],ankles=[];
+  part(body,'traveller-coat',0,.385,0,1,1,1,M.teal,coat);
+  part(body,'traveller-face',0,.723,.008,.174,.178,.153,M.peach,sphere);
+  part(body,'traveller-cap',0,.862,-.006,1,1,1,M.redLight,cap);
+  part(body,'cap-brim',0,.824,.13,.28,.035,.15,M.redLight);
+  for(const side of [-1,1])part(body,'eye',side*.055,.738,.151,.022,.027,.014,M.window);
+  const arms=[],legs=[];
   for(const side of [-1,1]){
-    const arm=new THREE.Group();arm.name=side<0?'left-arm':'right-arm';arm.position.set(side*.18,.625,0);body.add(arm);arms.push(arm);
-    part(arm,'upper-sleeve',0,-.065,0,.095,.14,.11,M.teal);
-    const elbow=new THREE.Group();elbow.name=side<0?'left-elbow':'right-elbow';elbow.position.y=-.13;arm.add(elbow);elbows.push(elbow);
-    part(elbow,'lower-sleeve',0,-.05,0,.085,.11,.10,M.teal);
-    part(elbow,'hand',0,-.12,.006,.075,.07,.075,M.peach);
-    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.085,restHip,0);root.add(leg);legs.push(leg);
-    part(leg,'upper-trousers',0,-legLength/2,0,.105,legLength+.01,.12,M.roofBlue);
-    const knee=new THREE.Group();knee.name=side<0?'left-knee':'right-knee';knee.position.y=-legLength;leg.add(knee);knees.push(knee);
-    part(knee,'lower-trousers',0,-legLength/2,0,.10,legLength+.01,.115,M.roofBlue);
-    const ankle=new THREE.Group();ankle.name=side<0?'left-ankle':'right-ankle';ankle.position.y=-legLength;knee.add(ankle);ankles.push(ankle);
-    part(ankle,'boot',0,-.026,.035,.12,.065,.19,M.timber);
-    part(ankle,'boot-sole',0,-.061,.035,.125,.012,.195,M.metal);
+    const arm=new THREE.Group();arm.name=side<0?'left-arm':'right-arm';arm.position.set(side*.18,.53,0);body.add(arm);arms.push(arm);
+    part(arm,'sleeve',0,-.075,0,.105,.19,.12,M.teal);
+    part(arm,'mitten',0,-.185,.008,.062,.062,.064,M.peach,sphere);
+    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.082,.20,0);root.add(leg);legs.push(leg);
+    part(leg,'trousers',0,-.08,0,.112,.20,.125,M.roofBlue);
+    part(leg,'boot',0,-.185,.025,.133,.10,.18,M.timber);
   }
-  // A tiny contact shadow anchors the traveller even outside the sun's moving
-  // shadow map. It is one transparent primitive, never a dynamic texture.
+  const axe=new THREE.Group();axe.name='traveller-axe';axe.position.set(0,-.185,.008);arms[1].add(axe);
+  part(axe,'axe-handle',0,-.105,0,.037,.33,.041,M.timber);
+  part(axe,'axe-head',0,-.225,0,1,1,1,M.rail,blade);
   const shadowMaterial=new THREE.MeshBasicMaterial({color:0x173c37,transparent:true,opacity:.16,depthWrite:false});
   const shadowGeometry=new THREE.CircleGeometry(.24,16);geometries.push(shadowGeometry);
   const shadow=new THREE.Mesh(shadowGeometry,shadowMaterial);shadow.matrixAutoUpdate=false;shadow.name='traveller-contact-shadow';parent.add(shadow);
-  return{root,body,arms,elbows,legs,knees,ankles,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
+  return{root,body,arms,legs,axe,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
 }
 
 /** Render-space rays and physical surface offsets agree with the shared world
@@ -74,10 +68,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   const collisionDelta={},stepPoint={},samplePoint={},moveOrigin={},groundTarget=new THREE.Vector3();
   const routeTree=polylineTree(world.lines??[]),railA={},railB={};
   const meshCenter=new THREE.Vector3(),meshSphere=new THREE.Sphere();
-  let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0,runBlend=0,poseSpeed=0,locomoting=false;
+  let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0,runBlend=0,poseSpeed=0,swingTime=swingDuration,swingDown=false;
   let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0;
-  const steps=[{},{}],limb={},contactDelta={},contacts=[{active:false,x:0,z:0},{active:false,x:0,z:0}];
-  const stats={steps:0,blocked:0,raycasts:0,obstacles:0,meshes:0,meshSelections:0};
+  const stats={steps:0,swings:0,blocked:0,raycasts:0,obstacles:0,meshes:0,meshSelections:0};
 
   function refreshScene(force=false){
     const nextMeshes=getTerrainMeshes()??[];
@@ -209,56 +202,34 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     matrix.decompose(art.root.position,art.root.quaternion,art.root.scale);
     const moving=clamp(speed/.7,0,1),running=THREE.MathUtils.smoothstep(speed,WALKING.speed*.97,WALKING.sprintSpeed*.96);
     runBlend+=(running-runBlend)*(dt>0?1-Math.exp(-12*dt):1);
-    const stance=THREE.MathUtils.lerp(.5,.32,runBlend),stride=THREE.MathUtils.lerp(.25,.26,runBlend),lift=THREE.MathUtils.lerp(.065,.17,runBlend);
-    // A supporting foot traverses 2*stride while its phase covers stance*tau.
-    // Distance drives that exact ratio, so increasing travel speed lengthens
-    // the run rather than dragging a support foot along the ground.
-    if(!locomoting&&travelled>1e-5){
-      // Start halfway through support with the foot already under the hip,
-      // rather than demanding a full stride from a foot planted at rest.
-      gait=Math.PI*stance;locomoting=true;contacts.forEach(contact=>contact.active=false);
-    }
-    if(moving<.05)locomoting=false;
-    if(grounded)gait+=travelled*Math.PI*stance/stride;
+    // Distance drives a small toy-like shuffle. Each leg stays a single solid
+    // piece; its top remains concealed in the coat instead of exposing joints.
+    if(grounded)gait+=travelled*tau/THREE.MathUtils.lerp(1.05,1.42,runBlend);
+    art.body.position.y=grounded?Math.abs(Math.sin(gait))*.008*moving:0;
+    art.body.rotation.x=grounded?runBlend*moving*.07:0;
+    art.body.rotation.z=grounded?Math.sin(gait)*moving*.025:0;
+    art.body.rotation.y=0;
     for(let side=0;side<2;side++){
-      const foot=footstep(gait+side*Math.PI,{stance,stride,lift,weight:moving},steps[side]),contact=contacts[side];
-      if(grounded&&foot.support&&moving>.1){
-        if(!contact.active){
-          const across=side===0?-.085:.085;
-          surfaceOffset(world,position.x,position.z,Math.sin(heading)*foot.z+Math.cos(heading)*across,
-            Math.cos(heading)*foot.z-Math.sin(heading)*across,contact);
-          contact.active=true;
-        }else{
-          // Lock the contact in surface space through acceleration and the
-          // walk/run blend; reparameterizing a gait must not move a planted foot.
-          surfaceDisplacement(world,position,contact,contactDelta);
-          foot.z=contactDelta.x*Math.sin(heading)+contactDelta.z*Math.cos(heading);
-        }
-      }else contact.active=false;
-      art.ankles[side].userData.supporting=contact.active;
+      const phase=gait+side*Math.PI;
+      const angle=grounded?Math.sin(phase)*(.27+runBlend*.13)*moving:(side===0?-.16:.16);
+      const lift=grounded?Math.max(0,Math.cos(phase))*(.028+runBlend*.025)*moving:.025;
+      const leg=art.legs[side];leg.rotation.x=angle;
+      // Compensate the tilted boot's lowest corner. Even this deliberately
+      // simple step keeps the solid feet above the shared supporting surface.
+      leg.position.y=-.035+.235*Math.cos(angle)+(Math.sin(angle)>0?.115:.065)*Math.abs(Math.sin(angle))+lift;
+      art.arms[side].rotation.x=grounded?-Math.sin(phase)*(side===0?.24:.10)*moving:-.2;
+      art.arms[side].rotation.z=side===0?-.06:.10;
     }
-    // The pelvis lowers over extended support legs. During the run's flight
-    // phase it rises while the recovering knees fold underneath the body.
-    let hipHeight=restHip;
-    if(grounded){
-      for(const foot of steps)if(foot.support)hipHeight=Math.min(hipHeight,ankleHeight+Math.sqrt(Math.max(.001,(legLength*2-.005)**2-foot.z**2)));
-      if(steps.every(foot=>!foot.support))hipHeight+=Math.min(steps[0].y,steps[1].y)*.35;
-    }
-    art.body.position.y=grounded?hipHeight-.365:0;
-    art.body.rotation.x=grounded?runBlend*moving*.16:Math.min(.12,Math.max(-.1,-velocity.y*.025));
-    art.body.rotation.z=grounded?Math.sin(gait)*moving*.018:0;
-    for(let side=0;side<2;side++){
-      const phase=gait+side*Math.PI,foot=steps[side];
-      art.legs[side].position.y=grounded?hipHeight:restHip;
-      if(grounded){
-        solveLeg(hipHeight,ankleHeight+foot.y,foot.z,legLength,legLength,limb);
-        art.legs[side].rotation.x=limb.hip;art.knees[side].rotation.x=limb.knee;art.ankles[side].rotation.x=limb.ankle;
-      }else{
-        art.legs[side].rotation.x=side===0?-.35:.12;art.knees[side].rotation.x=side===0?.8:.38;
-        art.ankles[side].rotation.x=-.18;
-      }
-      art.arms[side].rotation.x=grounded?Math.sin(phase)*(.34+runBlend*.3)*moving:-.35;
-      art.elbows[side].rotation.x=grounded?-.12-runBlend*(.95+.18*Math.cos(phase))*moving:-.7;
+    if(swingTime<swingDuration){
+      // Three readable poses: raise, chop, settle. No hit effect or game state.
+      const t=swingTime/swingDuration;
+      let arc;
+      if(t<.34)arc=-2.65*ease(t/.34);
+      else if(t<.57)arc=THREE.MathUtils.lerp(-2.65,-.65,((t-.34)/.23)**2);
+      else arc=-.65*(1-ease((t-.57)/.43));
+      const weight=Math.sin(t*Math.PI);
+      art.arms[1].rotation.x=arc;art.arms[1].rotation.z=.10+weight*.13;
+      art.body.rotation.y=-weight*.10;
     }
     rigidSurfacePoseMatrix(world,position.x,Math.min(position.y,floorHeight)+.036,position.z,angle,matrix);
     art.shadow.matrix.copy(matrix).multiply(shadowTilt);art.shadow.matrixWorldNeedsUpdate=true;
@@ -309,6 +280,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     orbit=wrap(orbit+(Number.isFinite(input.lookX)?input.lookX:0));
     pitch=clamp(pitch+(Number.isFinite(input.lookY)?input.lookY:0),Math.PI/18,Math.PI*65/180);
     const wantsJump=Boolean(input.jump);if(wantsJump&&!jumpDown&&grounded){velocity.y=WALKING.jumpSpeed;grounded=false;}jumpDown=wantsJump;
+    const wantsSwing=Boolean(input.swing);
+    if(wantsSwing&&!swingDown&&swingTime>=swingDuration){swingTime=0;stats.swings++;}
+    swingDown=wantsSwing;swingTime=Math.min(swingDuration,swingTime+dt);
     let forward=clamp(input.forward??0,-1,1),right=clamp(input.right??0,-1,1),length=Math.hypot(forward,right);
     if(length>1){forward/=length;right/=length;}
     const speed=input.sprint?WALKING.sprintSpeed:WALKING.speed;
@@ -336,17 +310,17 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   }
 
   return{root,camera,position,velocity,stats,prepareSpawn,update,
-    get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get pitch(){return pitch;},
+    get swinging(){return swingTime<swingDuration;},get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get pitch(){return pitch;},
     enter(focus,initialHeading=0,{respawn=false}={}){
       if(disposed)return false;
       if(initialized&&!respawn){active=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;}
       const spawn=prepareSpawn(focus);if(!spawn)return false;
       Object.assign(position,spawn);velocity.x=velocity.y=velocity.z=0;heading=orbit=bodyTurn=Number.isFinite(initialHeading)?initialHeading:0;
       floorHeight=spawn.y-.035;
-      pitch=Math.PI/10;accumulator=0;jumpDown=false;poseSpeed=runBlend=gait=0;locomoting=false;contacts.forEach(contact=>contact.active=false);grounded=true;active=initialized=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;
+      pitch=Math.PI/10;accumulator=0;jumpDown=false;poseSpeed=runBlend=gait=0;swingTime=swingDuration;swingDown=false;grounded=true;active=initialized=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;
     },
-    exit(){active=false;root.visible=false;poseSpeed=runBlend=0;locomoting=false;contacts.forEach(contact=>contact.active=false);setPose(0,0);velocity.x=velocity.y=velocity.z=0;jumpDown=false;return{...position};},
+    exit(){active=false;root.visible=false;poseSpeed=runBlend=0;swingTime=swingDuration;swingDown=false;setPose(0,0);velocity.x=velocity.y=velocity.z=0;jumpDown=false;return{...position};},
     resize(aspect){camera.aspect=Math.max(.01,Number.isFinite(aspect)?aspect:1);camera.updateProjectionMatrix();},
-    dispose(){if(disposed)return;disposed=true;active=false;root.removeFromParent();art.dispose();root.clear();},
+    dispose(){if(disposed)return;disposed=true;active=false;swingTime=swingDuration;swingDown=false;root.removeFromParent();art.dispose();root.clear();},
   };
 }

@@ -4,6 +4,7 @@ import {Group,Matrix4,Vector3} from 'three';
 import {createLocalLife,LIFE_LIMITS,selectLocalLife,fireflyHabitat} from '../src/local-life.js';
 import {surfaceChartCoordinates,surfacePoint,surfaceDistance} from '../src/world-surface.js';
 import {styleUniforms} from '../src/scene-style.js';
+import {SHEEP} from '../src/sheep-art.js';
 
 const plane={};
 const globe={surface:{type:'sphere',radius:1600,complete:true,origin:{longitude:0,latitude:0},
@@ -187,24 +188,26 @@ test('fireflies inhabit irregular low clusters with independent flashes and stab
   life.update(5,{placements:[],focus:{x:300,z:300},night:1});assert.equal(glows.count,0,'retired habitats free the fixed budget');life.dispose();
 });
 
-test('sheep upper legs enter their fleece, joints stay connected and supporting hooves stay planted',()=>{
+test('sheep shuffle on four solid attached legs while the fleece stays grounded',()=>{
   const sheep={kind:'sheep',id:'leg-check',x:0,z:0,y:0,radius:2.1,roamRadius:1.4};
-  const life=createLocalLife(new Group(),plane),legs=life.root.getObjectByName('grazing-sheep-feet');
-  const top=new Vector3(),bottom=new Vector3(),nextTop=new Vector3();let stepping=0,planted=0;
+  const life=createLocalLife(new Group(),plane),legs=life.root.getObjectByName('grazing-sheep-feet'),wool=life.root.getObjectByName('grazing-sheep-wool');
+  const top=new Vector3(),bottom=new Vector3();let stepping=0,planted=0;
+  assert.equal(legs.instanceMatrix.count,LIFE_LIMITS.sheep*4,'leg storage stays capped at four pieces per animal');
   for(let frame=0;frame<400;frame++){
     life.update(frame*.1,{placements:[sheep],focus:sheep});
-    assert.equal(legs.count,12,'four connected upper/lower/hoof assemblies share one batch');
+    assert.equal(legs.count,4,'four simple solid legs share one batch');
+    const body=matrix(wool),bodyInverse=body.clone().invert();let supporting=0;
+    assert.ok(Math.abs(body.elements[13]-.31)<1e-7,'the fleece does not float or bob above its legs');
     for(let leg=0;leg<4;leg++){
-      const upper=matrix(legs,leg*3),lower=matrix(legs,leg*3+1),hoof=matrix(legs,leg*3+2);
-      top.set(0,.5,0).applyMatrix4(upper);assert.ok(top.y>.24,'upper leg penetrates the underside of the fleece');
-      bottom.set(0,-.5,0).applyMatrix4(upper);nextTop.set(0,.5,0).applyMatrix4(lower);
-      assert.ok(bottom.distanceTo(nextTop)<.009,'both segments overlap at the actual knee');
-      bottom.set(0,-.5,0).applyMatrix4(lower);nextTop.set(0,0,0).applyMatrix4(hoof);
-      assert.ok(bottom.distanceTo(nextTop)<.01,'hoof remains attached to the lower leg');
-      bottom.set(0,-.5,0).applyMatrix4(hoof);
-      assert.ok(bottom.y>-.0001,'hoof never clips below pasture');
-      if(bottom.y<.001)planted++;else if(bottom.y>.01)stepping++;
+      const transform=matrix(legs,leg);
+      top.set(0,.5,0).applyMatrix4(transform);
+      assert.ok(Math.abs(top.y-SHEEP.legHeight)<1e-7,'leg attachment keeps a fixed height through the shuffle');
+      assert.ok(top.applyMatrix4(bodyInverse).length()<.94,'the top remains inside the fleece instead of detaching');
+      bottom.set(0,-.5,0).applyMatrix4(transform);
+      assert.ok(bottom.y>-.0001&&bottom.y<SHEEP.stepLift+.0001,'steps are small and never penetrate the pasture');
+      if(bottom.y<.001){planted++;supporting++;}else if(bottom.y>.01)stepping++;
     }
+    assert.ok(supporting>=2,'a diagonal pair remains on the ground throughout every step');
   }
-  assert.ok(planted>400&&stepping>50,'hoof support alternates with a visible recovery arc');life.dispose();
+  assert.ok(planted>400&&stepping>50,'quiet grazing alternates with restrained visible steps');life.dispose();
 });

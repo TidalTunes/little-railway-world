@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import {SHEEP,sheepHeadGeometry} from './sheep-art.js';
-import {footstep,solveLeg} from './leg-motion.js';
 import {C,M} from './palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {surfaceFor,surfacePoint,surfaceOffset,surfaceDistance,chartHeadingForSurface,rigidSurfacePoseMatrix} from './world-surface.js';
@@ -12,7 +11,7 @@ const flockKinds=new Set(['tree','house','apartment','civic','tower','plaza']);
 const insectKinds=new Set(['tree','farmPatch','plaza']);
 const tau=Math.PI*2;
 const flockFeather=24,fireflyFeather=18;
-const sheepPhases=[0,Math.PI,Math.PI*1.5,Math.PI*.5];
+const sheepPhases=[0,Math.PI,Math.PI,0];
 function seedOf(item){
   const text=String(item.id??`${item.kind}:${item.x.toFixed(3)}:${item.z.toFixed(3)}`);
   let hash=2166136261;for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619);
@@ -106,7 +105,7 @@ export function createLocalLife(parent,world){
   }
   const wool=batch('grazing-sheep-wool',new THREE.IcosahedronGeometry(1,1),M.white,LIFE_LIMITS.sheep);
   const heads=batch('grazing-sheep-heads',sheepHeadGeometry(),M.roofBlue,LIFE_LIMITS.sheep);
-  const feet=batch('grazing-sheep-feet',new THREE.BoxGeometry(1,1,1),M.metal,LIFE_LIMITS.sheep*12);
+  const feet=batch('grazing-sheep-feet',new THREE.BoxGeometry(1,1,1),M.metal,LIFE_LIMITS.sheep*4);
   const birdMaterial=applySceneStyle(M.roofBlue.clone());ownedMaterials.push(birdMaterial);
   const birdBodies=batch('local-swallow-bodies',new THREE.IcosahedronGeometry(1,0).scale(.07,.065,.21),birdMaterial,LIFE_LIMITS.flocks*3,false);
   const wingMaterial=applySceneStyle(M.roofBlue.clone());wingMaterial.side=THREE.DoubleSide;ownedMaterials.push(wingMaterial);
@@ -155,7 +154,7 @@ export function createLocalLife(parent,world){
   const pose=new THREE.Matrix4(),part=new THREE.Matrix4(),composed=new THREE.Matrix4(),orientation=new THREE.Quaternion(),position=new THREE.Vector3(),scale=new THREE.Vector3(),point={};
   const axisX=new THREE.Vector3(1,0,0),axisZ=new THREE.Vector3(0,0,1),focusPoint=new THREE.Vector3(),lastFocus=new THREE.Vector3(Infinity,0,0),renderedFocus=new THREE.Vector3(Infinity,0,0);
   let selected={sheep:[],flocks:[],insects:[]},flocks=[],glowPatches=[],previousPlacements=null,previousRevision=-1,lastTime=NaN,frozenTime=null,previousReducedMotion=false;
-  const grazing={},hoof={},joint={},hoofStride={stance:SHEEP.stance,stride:SHEEP.stride,lift:.045,weight:0};
+  const grazing={};
   const stats={sheep:0,birds:0,butterflies:0,fireflies:0,instances:0,selections:0,updates:0,drawCalls:batches.length};
   function frame(item,dx,dz,height,angle,physicalHeading=false){
     surfaceOffset(world,item.x,item.z,dx,dz,point);
@@ -212,19 +211,17 @@ export function createLocalLife(parent,world){
       frame(item,dx,dz,item.y??0,heading,true);
       pose.scale(scale.setScalar(item.scale??1));
       instance(wool,sheepCount,0,.31,-.035,.23,.22,.30);
-      const graze=(1-walking)*(.45+Math.sin(time*.8+phase)*.13);
+      const graze=(1-walking)*(.32+Math.sin(time*.6+phase)*.04);
       instance(heads,sheepCount,0,.34-graze*.08,.25,1,1,1,graze);
-      hoofStride.weight=walking;
-      const stridePhase=distance/((item.scale??1)*SHEEP.stride*2/SHEEP.stance)*tau;
+      const stridePhase=distance/((item.scale??1)*SHEEP.stepLength)*tau;
       for(let j=0;j<4;j++){
         const x=j%2?.12:-.12,z=j<2?-.14:.14;
-        footstep(stridePhase+sheepPhases[j],hoofStride,hoof);
-        solveLeg(SHEEP.hip,SHEEP.ankle+hoof.y,hoof.z,SHEEP.upper,SHEEP.lower,joint);
-        const kneeY=SHEEP.hip-Math.cos(joint.hip)*SHEEP.upper,kneeZ=z-Math.sin(joint.hip)*SHEEP.upper;
-        instance(feet,sheepCount*12+j*3,x,(SHEEP.hip+kneeY)/2,(z+kneeZ)/2,.05,SHEEP.upper+.008,.055,joint.hip);
-        const ankleY=kneeY-Math.cos(joint.hip+joint.knee)*SHEEP.lower,ankleZ=kneeZ-Math.sin(joint.hip+joint.knee)*SHEEP.lower;
-        instance(feet,sheepCount*12+j*3+1,x,(kneeY+ankleY)/2,(kneeZ+ankleZ)/2,.045,SHEEP.lower+.008,.05,joint.hip+joint.knee);
-        instance(feet,sheepCount*12+j*3+2,x,ankleY,ankleZ+.006,.065,.036,.078);
+        // Four solid pegs make a small, toy-like shuffle. Raising a foot shortens
+        // its hidden upper section, so every leg stays attached without joints.
+        const step=stridePhase+sheepPhases[j],lift=Math.max(0,Math.sin(step))*SHEEP.stepLift*walking;
+        const forward=Math.cos(step)*SHEEP.stride*walking;
+        instance(feet,sheepCount*4+j,x,(SHEEP.legHeight+lift)/2,z+forward,
+          SHEEP.legWidth,SHEEP.legHeight-lift,SHEEP.legDepth);
       }
       sheepCount++;
     }
@@ -268,7 +265,7 @@ export function createLocalLife(parent,world){
         glowVisibility.setX(flyCount++,visibility*(.06+.94*flash));
       }
     }
-    wool.count=heads.count=sheepCount;feet.count=sheepCount*12;birdBodies.count=birdCount;birdWings.count=birdCount*2;
+    wool.count=heads.count=sheepCount;feet.count=sheepCount*4;birdBodies.count=birdCount;birdWings.count=birdCount*2;
     butterflyWings.count=butterflyCount*2;fireflies.count=flyCount;
     for(const batch of batches)if(batch.count)batch.instanceMatrix.needsUpdate=true;
     if(birdCount)for(const batch of [birdBodies,birdWings])batch.geometry.attributes.lifeVisibility.needsUpdate=true;

@@ -37,7 +37,7 @@ function fixture(t,{initialActive=false}={}){
   return {input,canvas,window,document,captured,released,key:(key,properties={})=>canvas.dispatch('keydown',{key,...properties}),
     get active(){return active;},get toggles(){return toggles;},get exits(){return exits;},get bubbleKeys(){return bubbleKeys;},get focusCount(){return focusCount;}};
 }
-const empty={forward:0,right:0,jump:false,sprint:false,lookX:0,lookY:0};
+const empty={forward:0,right:0,jump:false,sprint:false,swing:false,lookX:0,lookY:0};
 
 test('V toggles once per press in capture phase while modifier shortcuts and Tab remain available',t=>{
   const f=fixture(t);
@@ -49,6 +49,7 @@ test('V toggles once per press in capture phase while modifier shortcuts and Tab
   assert.equal(f.key('Tab').defaultPrevented,false);
   f.key('v');assert.equal(f.active,false);assert.equal(f.toggles,2);
   assert.equal(f.key('w').defaultPrevented,false);assert.deepEqual(f.input.sample(),empty);
+  assert.equal(f.key('e').defaultPrevented,false);assert.deepEqual(f.input.sample(),empty);
 });
 
 test('walking captures movement, jumping and strategy shortcuts without invoking a Space pause',t=>{
@@ -96,14 +97,72 @@ test('a quick Space tap between animation frames delivers one jump and held Spac
   assert.equal(f.input.sample().jump,false,'focus loss drops a queued jump');
 });
 
+test('E swings once per press, including a quick tap, without repeating while held',t=>{
+  const f=fixture(t,{initialActive:true});
+  assert.equal(f.key('E').defaultPrevented,true);
+  f.canvas.dispatch('keyup',{key:'E'});
+  assert.deepEqual(f.input.sample(),{...empty,swing:true});
+  assert.deepEqual(f.input.sample(),empty);
+  f.key('e');assert.equal(f.input.sample().swing,true);
+  f.key('e',{repeat:true});assert.equal(f.input.sample().swing,false);
+  f.key('e');assert.equal(f.input.sample().swing,false,'duplicate keydown cannot queue a second swing');
+  f.window.dispatch('keyup',{key:'e'});
+  f.key('e');assert.equal(f.input.sample().swing,true);
+  assert.deepEqual(f.bubbleKeys,[]);
+});
+
+test('primary clicks and touch taps queue one swing with a five pixel tolerance',t=>{
+  for(const pointerType of ['mouse','touch']){
+    const f=fixture(t,{initialActive:true});
+    f.canvas.dispatch('pointerdown',{pointerType,button:0,clientX:100,clientY:200});
+    assert.equal(f.input.sample().swing,false,'a held pointer has not clicked yet');
+    f.canvas.dispatch('pointermove',{clientX:103,clientY:204});
+    f.window.dispatch('pointerup',{button:0,clientX:103,clientY:204});
+    assert.equal(f.input.sample().swing,true);
+    assert.deepEqual(f.input.sample(),empty);
+    assert.deepEqual(f.released,[1]);
+  }
+});
+
+test('orbit drags, canceled gestures, secondary buttons and other pointers never swing',t=>{
+  for(const cancel of ['pointercancel','lostpointercapture']){
+    const f=fixture(t,{initialActive:true});
+    f.canvas.dispatch('pointerdown');
+    (cancel==='pointercancel'?f.window:f.canvas).dispatch(cancel);
+    f.window.dispatch('pointerup');
+    assert.deepEqual(f.input.sample(),empty);
+  }
+  for(const properties of [{button:2},{isPrimary:false}]){
+    const f=fixture(t,{initialActive:true});
+    f.canvas.dispatch('pointerdown',properties);f.window.dispatch('pointerup',properties);
+    assert.deepEqual(f.input.sample(),empty);
+  }
+  const f=fixture(t,{initialActive:true});
+  f.canvas.dispatch('pointerdown',{clientX:100,clientY:200});
+  f.canvas.dispatch('pointermove',{clientX:106,clientY:200});
+  f.canvas.dispatch('pointermove',{clientX:100,clientY:200});
+  f.window.dispatch('pointerup',{clientX:100,clientY:200});
+  assert.equal(f.input.sample().swing,false,'returning an orbit drag to its start cannot become a click');
+  f.canvas.dispatch('pointerdown');
+  f.window.dispatch('pointerup',{clientX:6});
+  assert.equal(f.input.sample().swing,false,'release displacement counts even without a final move event');
+  f.canvas.dispatch('pointerdown',{pointerId:1});
+  f.canvas.dispatch('pointerdown',{pointerId:2,isPrimary:false});
+  f.window.dispatch('pointerup',{pointerId:2});
+  assert.equal(f.input.sample().swing,false,'another pointer cannot end the active gesture');
+  assert.deepEqual([...f.captured],[1]);
+  f.window.dispatch('pointercancel',{pointerId:1});
+});
+
 test('blur, hidden pages, exit and disposal clear held controls and release an active orbit',t=>{
   for(const clear of [f=>f.canvas.dispatch('blur'),f=>f.window.dispatch('blur'),f=>{
     f.document.hidden=true;f.document.dispatch('visibilitychange');
-  },f=>f.key('Home'),f=>f.input.dispose()]){
+  },f=>f.key('Home'),f=>f.key('v'),f=>f.input.clear(),f=>f.input.dispose()]){
     const f=fixture(t,{initialActive:true});
-    f.key('w');f.key(' ');f.canvas.dispatch('pointerdown',{pointerId:4});
+    f.key('w');f.key(' ');f.key('e');f.canvas.dispatch('pointerdown',{pointerId:4});
     f.canvas.dispatch('pointermove',{pointerId:4,clientX:30,clientY:40});
     clear(f);assert.deepEqual(f.input.sample(),empty);assert.equal(f.captured.size,0);assert.deepEqual(f.released,[4]);
+    f.window.dispatch('pointerup',{pointerId:4});assert.equal(f.input.sample().swing,false,'release after reset cannot attack');
   }
   const f=fixture(t,{initialActive:true});f.input.dispose();
   assert.equal(f.key('v').defaultPrevented,false);assert.equal(f.toggles,0);

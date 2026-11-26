@@ -46,7 +46,7 @@ export function createCharacterMarker(scene,mapScene,world){
       if(projectedBase.z < -1||projectedBase.z>1||Math.abs(projectedBase.x)>1.08||Math.abs(projectedBase.y)>1.08)return;
       const height=Math.abs(projectedTop.y-projectedBase.y)*viewportHeight/2;
       // Retain a broad overlap with the locator's 4–12px fade. Below five
-      // pixels an articulated person cannot add useful detail, so the caller
+      // pixels a small figure cannot add useful detail, so the caller
       // may skip its individual mesh and shadow draws while keeping the same
       // persistent scene object and its location pin.
       characterReadable=height>=5;

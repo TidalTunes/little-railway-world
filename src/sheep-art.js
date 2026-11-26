@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {box,ico} from './geometry.js';
 
-export const SHEEP=Object.freeze({hip:.245,upper:.12,lower:.12,ankle:.018,stance:.68,stride:.055});
+export const SHEEP=Object.freeze({legHeight:.26,legWidth:.065,legDepth:.078,stride:.045,stepLength:.20,stepLift:.026});
 
 export function sheepHeadGeometry(){
   const head=new THREE.IcosahedronGeometry(1,1).scale(.105,.12,.14),parts=[head];
@@ -15,12 +15,11 @@ export function sheepHeadGeometry(){
  * as its animated counterpart, so changing detail levels cannot alter scale. */
 export function buildSheepArt(parent){
   for(const x of [-.12,.12])for(const z of [-.14,.14]){
-    box(parent,x,.14,z,.05,.26,.055,'metal');
-    box(parent,x,.018,z+.006,.065,.036,.078,'metal');
+    box(parent,x,SHEEP.legHeight/2,z,SHEEP.legWidth,SHEEP.legHeight,SHEEP.legDepth,'metal');
   }
-  ico(parent,0,.31,-.035,.23,.22,.30,'white');
+  ico(parent,0,.31,-.035,.23,.22,.30,'white',1);
   box(parent,0,.305,.17,.13,.15,.13,'roofBlue');
-  ico(parent,0,.34,.25,.105,.12,.14,'roofBlue');
+  ico(parent,0,.34,.25,.105,.12,.14,'roofBlue',1);
   for(const side of [-1,1])box(parent,side*.128,.365,.23,.085,.035,.055,'roofBlue');
   return parent;
 }

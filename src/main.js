@@ -294,7 +294,7 @@ function metrics(now,interval,cpu){
     simulationCpu:(railway.stats.simulationMs??0).toFixed(2),poseCpu:(railway.stats.poseMs??0).toFixed(2),
     generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),
     walking:String(walkingMode),playerX:walker?.position.x.toFixed(3),playerY:walker?.position.y.toFixed(3),playerZ:walker?.position.z.toFixed(3),
-    playerGrounded:String(walker?.grounded),walkingInstances:String(walkingDetail?.stats.instances??0),
+    playerGrounded:String(walker?.grounded),playerSwings:String(walker?.stats.swings??0),walkingInstances:String(walkingDetail?.stats.instances??0),
     lifeInstances:String(life?.stats?.instances??life?.stats?.active??0),lifeSheep:String(life?.stats?.sheep??0),lifeBirds:String(life?.stats?.birds??0)});
 }
 function frame(now){
@@ -367,7 +367,7 @@ function frame(now){
     characterMarker.update({position:walker.position,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
       walking:walkingMode,walkingWeight,viewportHeight:innerHeight});
     // Keep the figure where it can be read; its fixed-size locator represents
-    // the same position once articulated limbs become subpixel geometry.
+    // the same position once the figure becomes subpixel geometry.
     walker.root.visible=walker.initialized&&(groundLayer||blend<.999&&characterMarker.characterReadable);
     canvas.dataset.view=walkingMode?'person':view.mode;
     canvas.dataset.cameraTransition=String(characterTransition.active);canvas.dataset.walkingWeight=walkingWeight.toFixed(3);

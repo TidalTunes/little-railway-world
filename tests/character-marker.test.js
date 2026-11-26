@@ -24,7 +24,7 @@ test('physical character takes over without an oversized locator in the walking 
   marker.update({position,initialized:false,camera,mapBlend:1});assert.equal(marker.mapRoot.visible,false);marker.dispose();
 });
 
-test('unreadable figures can skip their articulated draws while the locator preserves their position',()=>{
+test('unreadable figures can skip their individual draws while the locator preserves their position',()=>{
   const marker=createCharacterMarker(new THREE.Scene(),new THREE.Scene(),{}),position={x:0,y:.035,z:0};
   const camera=new THREE.OrthographicCamera(-60,60,40,-40,.1,800);
   camera.position.set(0,100,-100);camera.lookAt(0,.035,0);camera.updateMatrixWorld(true);
