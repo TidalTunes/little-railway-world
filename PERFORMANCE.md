@@ -66,6 +66,29 @@ The residential-density iteration removes the Earth preset’s fixed eight-unit 
 
 ## Architecture and limits
 
+The fourth camera layer reuses the same streamed terrain and asset batches. Its
+40-unit ground window is pinned while the strategy camera is active; switching
+with V changes cameras synchronously and reveals already uploaded chunks. Walking
+requests are bounded around the character, independently of the perspective
+horizon. Geometry outside that window remains subject to the existing cache
+budget. The saved Earth overview only prewarms the character neighborhood until
+strategy zoom requires its own detailed coverage.
+
+Nearby embellishments use seven fixed instanced batches, capped at 4,440
+instances. Shader variants and instance colors are prepared before entry;
+grass movement and distance fades use uniforms. Details refresh after five units
+of movement or an actual change to nearby source records. Distant chunk
+publications retain the existing matrices. Camera and movement rays use local
+mesh bounds and the existing worker-built BVHs, with a cached local mesh list.
+Player movement uses bounded 120 Hz physics steps; idle frames need only the
+camera obstruction ray. The sky adds one fullscreen triangle.
+
+A local 1280×720 browser check of the island's Westhaven neighborhood measured
+approximately 2.7–3.0 ms CPU and 9–10 ms frame time at the 95th percentile,
+with 1,705 nearby detail instances. Returning to the overview and re-entering
+retained all four resident island chunks with no pending requests. These are
+local measurements, not guarantees for other devices or imported worlds.
+
 - Biome queries use cached polygon and hole bounds, lazy ring/edge indexes, and bounded exact clearance searches. Regional clipping passes only intersecting polygons and holes to the Boolean sweep, then retains the exact local outline intersection.
 - Biome scenery samples a continuous seeded physical field with no scans over distant sites. Candidate and accepted-asset budgets bound each region. Meadow, scrub, dune, outcrop and frost patches each use one existing material and at most 150 authored triangles; curved grounding remains bounded. Regional ground colors share the fixed-size globe lookup with the map, so the extra ecological variety adds no overview geometry or per-frame scenery work.
 - Route and river queries use exact spatial indexes. Junction discovery prunes distant segments before intersection tests. Deterministic region generation reuses the same immutable network indexes.

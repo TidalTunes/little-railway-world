@@ -30,7 +30,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     minZoom:CAMERA_ZOOM.min,maxZoom:CAMERA_ZOOM.max,
     minPolarAngle:DETAIL_POLAR_ANGLE,maxPolarAngle:DETAIL_POLAR_ANGLE});
   controls.target.set(0,1.3,0);controls.update();
-  let mode='world',blend=0,selected=null,hovered=null,zoomGoal=null;
+  let mode='world',blend=0,selected=null,hovered=null,zoomGoal=null,inputEnabled=true;
   let zoomScale=1;
   let homePosition=new THREE.Vector3(),homeTarget=new THREE.Vector3();
   let lastPointer=null,gesture=null,gestureBlocked=false,hoverClock=0,inputPlan=null;
@@ -213,6 +213,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     const plan=blend===1&&mode==='map';
     if(inputPlan!==null&&plan!==inputPlan)flushControls();
     inputPlan=plan;
+    controls.enabled=inputEnabled;
     controls.enableRotate=!plan;controls.enablePan=plan&&!selected;controls.screenSpacePanning=false;
     controls.mouseButtons.LEFT=plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
@@ -272,16 +273,19 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   canvas.addEventListener('blur',releaseKeys);window.addEventListener('blur',releaseKeys);
   canvas.ownerDocument.addEventListener('visibilitychange',()=>{if(canvas.ownerDocument.hidden)releaseKeys();});
   canvas.addEventListener('pointerdown',event=>{
+    if(!inputEnabled)return;
     pointers.add(event.pointerId);
     if(pointers.size>1){gestureBlocked=true;gesture=null;}
     if(event.button===0&&pointers.size===1){gesture={id:event.pointerId,x:event.clientX,y:event.clientY,moved:false,touch:event.pointerType==='touch'};gestureBlocked=false;}
     zoomGoal=null;
   },{capture:true});
   canvas.addEventListener('pointermove',event=>{
+    if(!inputEnabled)return;
     if(gesture?.id===event.pointerId&&Math.hypot(event.clientX-gesture.x,event.clientY-gesture.y)>6)gesture.moved=true;
     lastPointer={x:event.clientX,y:event.clientY,touch:event.pointerType==='touch'};
   });
   function pointerEnd(event){
+    if(!inputEnabled)return;
     const tap=gesture?.id===event.pointerId&&!gesture.moved&&!gestureBlocked&&event.type==='pointerup'
       &&Math.hypot(event.clientX-gesture.x,event.clientY-gesture.y)<=6;
     const source=gesture;
@@ -293,9 +297,9 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   window.addEventListener('pointercancel',pointerEnd);
   canvas.addEventListener('pointerleave',()=>{hovered=null;lastPointer=null;canvas.style.cursor=selected?'default':'grab';});
   canvas.addEventListener('wheel',()=>{zoomGoal=null;},{passive:true});
-  canvas.addEventListener('dblclick',reset);
+  canvas.addEventListener('dblclick',()=>{if(inputEnabled)reset();});
   canvas.addEventListener('keydown',event=>{
-    if(event.altKey||event.metaKey||event.ctrlKey)return;
+    if(!inputEnabled||event.altKey||event.metaKey||event.ctrlKey)return;
     let handled=true;
     const letter=event.key.toLowerCase();
     if(['w','a','s','d'].includes(letter)){
@@ -327,6 +331,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     if(handled)event.preventDefault();
   });
   function updateNavigation(dt){
+      if(!inputEnabled)return;
       navigationDelta=dt;
       if(zoomGoal!==null){
         navigation.zoom=THREE.MathUtils.lerp(navigation.zoom,zoomGoal,ease(7,dt,reducedMotion.matches));
@@ -346,6 +351,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   }
   function nextZoom(dt){return smoothZoom(presentation.zoom,navigation.zoom,dt,reducedMotion.matches);}
   function updatePresentation(dt){
+    if(!inputEnabled)return;
     const zoom=nextZoom(dt);
     // Streaming never drives navigation. The always-available world surface
     // remains under progressively arriving scenery at every scale and target.
@@ -385,6 +391,21 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   }
   return {
     navigation,chartCamera,controls,reset,updateNavigation,updatePresentation,
+    setInputEnabled(enabled){
+      releaseKeys();clearSelection();hovered=null;lastPointer=null;gesture=null;pointers.clear();
+      flushControls();inputEnabled=Boolean(enabled);controls.enabled=inputEnabled;ring.visible=mapRing.visible=false;
+    },
+    // The walking player occupies this same chart. Return instantly to a
+    // useful overview centered on their real position, retaining orbit yaw.
+    overlook(point){
+      releaseKeys();clearSelection();flushControls();
+      delta.set(point.x-controls.target.x,(point.y??0)+1.3-controls.target.y,point.z-controls.target.z);
+      navigation.position.add(delta);controls.target.add(delta);
+      navigation.zoom=Math.min(navigation.zoom,zoomScale);navigation.updateProjectionMatrix();controls.update();
+      constrainTarget();presentation.copy(navigation);presentationTarget.copy(controls.target);
+      blend=mapBlendForZoom(presentation.zoom/zoomScale);mode=modeForZoom(presentation.zoom/zoomScale);
+      configureInput();updateCamera();updateDOM();
+    },
     update(dt){updateNavigation(dt);updatePresentation(dt);},
     get coverageCamera(){
       buildChartCamera(coverageChart,0);

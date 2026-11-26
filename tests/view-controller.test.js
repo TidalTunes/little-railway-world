@@ -305,3 +305,37 @@ test('WASD pans screen-relative at every zoom without changing the orbit, and Ho
   f.key('a');f.update();
   f.key('Home');f.settle();nearVector(view.controls.target,target);assert.equal(view.mode,'world');
 });
+
+test('walking input suspension stops strategy motion and shortcuts until the overview is enabled again',t=>{
+  const f=fixture(t),{view}=f;
+  f.key('d');f.update(.1);
+  view.setInputEnabled(false);
+  const target=view.controls.target.clone(),position=view.navigation.position.clone(),zoom=view.navigation.zoom;
+  for(const key of ['w',' ','Home','f','r','+','ArrowLeft'])assert.equal(f.key(key).defaultPrevented,false);
+  f.pointer('pointerdown',450,350);f.pointer('pointermove',550,400,{buttons:1});f.pointer('pointerup',550,400);
+  f.canvas.dispatchEvent(event('dblclick'));f.settle();
+  nearVector(view.controls.target,target);nearVector(view.navigation.position,position);
+  assert.equal(view.navigation.zoom,zoom);assert.equal(view.controls.enabled,false);
+  assert.equal(f.paused,false);assert.equal(f.regenerationCount,0);assert.equal(view.selected,null);
+  view.setInputEnabled(true);f.settle();
+  nearVector(view.controls.target,target);nearVector(view.navigation.position,position);
+  assert.equal(view.controls.enabled,true);
+  assert.equal(f.key(' ').defaultPrevented,true);assert.equal(f.paused,true);
+  f.key('w');f.update(.1);assert.ok(view.controls.target.distanceTo(target)>.01);
+});
+
+test('returning from walking overlooks the player immediately at a useful zoom and preserves orbit heading',t=>{
+  const f=fixture(t),{view}=f;f.zoom(3.2);
+  const offset=view.navigation.position.clone().sub(view.controls.target);
+  view.setInputEnabled(false);
+  const player=new THREE.Vector3(42,.25,-18),focus=new THREE.Vector3(42,1.55,-18);
+  view.overlook(player);
+  nearVector(view.controls.target,focus);nearVector(view.renderTarget,focus);
+  nearVector(view.navigation.position.clone().sub(view.controls.target),offset);
+  assert.equal(view.navigation.zoom,1);assert.equal(f.camera.zoom,1);
+  assert.equal(view.mode,'world');assert.equal(view.blend,0);assert.equal(view.controls.enabled,false);
+  assert.equal(f.canvas.dataset.view,'world');assert.equal(f.canvas.dataset.following,'');
+  view.setInputEnabled(true);f.settle();
+  nearVector(view.controls.target,focus);assert.equal(view.controls.enabled,true);
+  f.key('Home');f.settle();nearVector(view.controls.target,new THREE.Vector3(0,1.3,0));
+});

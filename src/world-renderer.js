@@ -21,6 +21,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const patchBounds=new THREE.Box3(),cellSphere=new THREE.Sphere(),pole=new THREE.Vector3();
   let frame=0,disposed=false,coverageChecked=false;
   let lifePlacements=[],lifeSignature='',lifeRevision=0;
+  let placements=[],collisionPlacements=[],cityStreets=[],terrainMeshes=[],placementRevision=0,residentDirty=true;
+  const solidKinds=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
+  const nonSolidStyles=new Set(['water','surf','window','lamp']);
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];
   // City/station dimensions are physical; authored mountain radii are still
@@ -48,6 +51,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   function release(chunk){
     releaseResources(chunk);
     root.remove(chunk.root);cache.delete(chunk.key);stats.bytes-=chunk.bytes;stats.triangles-=chunk.triangles;
+    residentDirty=true;placementRevision++;
   }
   function hydrate(deadline){
     for(const [key,job]of incoming){
@@ -86,8 +90,10 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         ?new THREE.Box3(new THREE.Vector3().fromArray(rendered.min),new THREE.Vector3().fromArray(rendered.max))
         :new THREE.Box3(new THREE.Vector3(b.minX,-4,b.minZ),new THREE.Vector3(b.maxX,maxHeight,b.maxZ)),
         last:frame,bytes:job.bytes,triangles:job.triangles,reveal:job.reveal,progress:0,
-        materials:job.materials,depthMaterial:job.depthMaterial,lifePlacements:job.packet.lifePlacements??[]};
+        materials:job.materials,depthMaterial:job.depthMaterial,lifePlacements:job.packet.lifePlacements??[],
+        placements:job.packet.placements??[],cityStreets:job.packet.cityStreets??[],cellBounds:job.packet.cellBounds??job.packet.bounds};
       root.add(job.root);cache.set(key,chunk);incoming.delete(key);
+      residentDirty=true;placementRevision++;
       stats.bytes+=job.bytes;stats.triangles+=job.triangles;stats.loadedChunks=cache.size;
     }
   }
@@ -191,6 +197,12 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     const start=((min-extent.minX)%period+period)%period+extent.minX,end=start+max-min;
     return end<=extent.maxX?[[start,end]]:[[start,extent.maxX],[extent.minX,end-period]];
   }
+  function cameraRay(camera,x,y){
+    ray.origin.set(x,y,-1).unproject(camera);
+    if(camera.isPerspectiveCamera)ray.direction.set(x,y,1).unproject(camera).sub(ray.origin).normalize();
+    else ray.direction.copy(direction);
+    return ray;
+  }
   function footprint(coverageCamera,target){
     coverageCamera.updateMatrixWorld();coverageCamera.getWorldDirection(direction);
     projection.multiplyMatrices(coverageCamera.projectionMatrix,coverageCamera.matrixWorldInverse);coverageFrustum.setFromProjectionMatrix(projection);
@@ -201,7 +213,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       // Both the ground and tallest scenery can enter the frustum. Sample its
       // edges and centre against the real sphere, then request chart cells.
       for(const height of [-4,maxHeight])for(const x of [-1,0,1])for(const y of [-1,0,1]){
-        ray.origin.set(x,y,-1).unproject(coverageCamera);ray.direction.copy(direction);shell.radius=surface.radius+height;
+        cameraRay(coverageCamera,x,y);shell.radius=surface.radius+height;
         if(!ray.intersectSphere(shell,hit)){missed=true;continue;}
         patchBounds.expandByPoint(hit);
         surfaceCoordinates(world,hit,chart);
@@ -236,8 +248,11 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         minX-=padding;maxX+=padding;minZ-=padding;maxZ+=padding;
       }
     }else for(const x of [-1,1])for(const y of [-1,1]){
-      point.set(x,y,0).unproject(coverageCamera);
-      const t=Math.abs(direction.y)>1e-5?-point.y/direction.y:0;point.addScaledVector(direction,t);
+      cameraRay(coverageCamera,x,y);
+      const t=Math.abs(ray.direction.y)>1e-5?-ray.origin.y/ray.direction.y:-1;
+      // A perspective top edge may point into the sky. Its finite far point
+      // is conservative; groundOnly coverage below is the bounded walking path.
+      ray.at(t>=0?t:coverageCamera.far,point);
       minX=Math.min(minX,point.x);maxX=Math.max(maxX,point.x);minZ=Math.min(minZ,point.z);maxZ=Math.max(maxZ,point.z);
     }
     return {minX,maxX,minZ,maxZ};
@@ -263,11 +278,13 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     const signature=lifeChunks.map(chunk=>chunk.key).join('|');
     if(signature!==lifeSignature){lifeSignature=signature;lifePlacements=lifeChunks.flatMap(chunk=>chunk.lifePlacements);lifeRevision++;}
   }
-  function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false}={}){
+  function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false,
+    groundFocus,groundRadius=45,groundOnly=false}={}){
     if(disposed)return;frame++;root.visible=mapBlend<.999;
-    if(!root.visible&&!prewarm)return;
+    if(!root.visible&&!prewarm&&!groundFocus)return;
     const footprints=[];
-    if(target)targetPoint.copy(target);
+    if(groundOnly&&groundFocus)targetPoint.set(groundFocus.x,groundFocus.y??0,groundFocus.z);
+    else if(target)targetPoint.copy(target);
     const candidate=(x,z)=>({key:`${x}:${z}`,x:x+size/2,z:z+size/2,size,
       distance:surface?surfaceDistance(world,targetPoint,{x:x+size/2,z:THREE.MathUtils.clamp(z+size/2,extent.minZ,extent.maxZ)})**2
         :longitudeDelta(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
@@ -275,13 +292,23 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     // The transition can protect both its widest destination and the current
     // displayed footprint. Union cells, not chart rectangles: a date-line
     // crossing must never turn two neighbouring footprints into a whole world.
-    for(const coverage of coverageCameras?.length?coverageCameras:[coverageCamera]){
-      const bounds=footprint(coverage,target),{minX,maxX,minZ,maxZ}=bounds;
+    const requestedFootprints=[];
+    // Pinning the hidden player's neighborhood does not opt the far overview
+    // into strategy detail: its footprint can span the entire planet.
+    if((root.visible||prewarm)&&(!groundOnly||!groundFocus))for(const coverage of coverageCameras?.length?coverageCameras:[coverageCamera])
+      requestedFootprints.push({bounds:footprint(coverage,target),coverage});
+    if(groundFocus){
+      const radius=surfaceChartRadius(world,groundFocus.x,groundFocus.z,Math.max(.001,groundRadius));
+      requestedFootprints.push({bounds:{minX:groundFocus.x-radius,maxX:groundFocus.x+radius,minZ:groundFocus.z-radius,maxZ:groundFocus.z+radius}});
+    }
+    for(const {bounds,coverage}of requestedFootprints){
+      const {minX,maxX,minZ,maxZ}=bounds;
+      if(coverage){projection.multiplyMatrices(coverage.projectionMatrix,coverage.matrixWorldInverse);coverageFrustum.setFromProjectionMatrix(projection);}
       if(!target&&!footprints.length)targetPoint.set((minX+maxX)/2,0,(minZ+maxZ)/2);
       footprints.push(bounds);
       for(const [left,right]of longitudeRanges(minX,maxX))for(let x=Math.floor(left/size)*size;x<right;x+=size){
         for(let z=Math.floor(Math.max(extent.minZ,minZ)/size)*size;z<Math.min(extent.maxZ,maxZ);z+=size){
-          const entry=candidate(x,z);if(hasDetail(entry)&&intersectsCoverage(entry))required.set(entry.key,entry);
+          const entry=candidate(x,z);if(hasDetail(entry)&&(!coverage||intersectsCoverage(entry)))required.set(entry.key,entry);
         }
       }
       // Cities and mountains belong to their centre cell but may extend into a
@@ -341,8 +368,35 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     for(const task of pending.values())task.controller.abort();
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
     lifePlacements=[];lifeSignature='';lifeRevision++;
+    placements=[];collisionPlacements=[];cityStreets=[];terrainMeshes=[];residentDirty=false;placementRevision++;
+  }
+  function refreshResidents(){
+    if(!residentDirty)return;
+    placements=[];cityStreets=[];terrainMeshes=[];
+    for(const chunk of cache.values()){
+      placements.push(...chunk.placements);cityStreets.push(...chunk.cityStreets);
+      terrainMeshes.push(...chunk.root.children.filter(mesh=>!nonSolidStyles.has(mesh.material.userData.sceneStyle)));
+    }
+    collisionPlacements=placements.filter(p=>solidKinds.has(p.kind));residentDirty=false;
+  }
+  function hasCoverageAt(focus,radius=0){
+    if(disposed||!Number.isFinite(focus?.x)||!Number.isFinite(focus?.z))return false;
+    const pad=Math.max(.001,surfaceChartRadius(world,focus.x,focus.z,Math.max(0,radius)));
+    if(focus.z-pad<extent.minZ||focus.z+pad>extent.maxZ||!period&&(focus.x-pad<extent.minX||focus.x+pad>extent.maxX))return false;
+    for(const [left,right]of longitudeRanges(focus.x-pad,focus.x+pad))for(let x=Math.floor(left/size)*size;x<right;x+=size){
+      for(let z=Math.floor((focus.z-pad)/size)*size;z<focus.z+pad;z+=size){
+        const key=`${x}:${z}`;
+        if(hasDetail({key,x:x+size/2,z:z+size/2})&&!cache.has(key))return false;
+      }
+    }
+    return true;
   }
   function ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}
-  return {root,update,updateVisibility,stats,dispose,get lifePlacements(){return lifePlacements;},get lifeRevision(){return lifeRevision;},get ready(){return ready();},
+  return {root,update,updateVisibility,stats,dispose,hasCoverageAt,
+    get placements(){refreshResidents();return placements;},get placementRevision(){return placementRevision;},
+    get cityStreets(){refreshResidents();return cityStreets;},
+    getSceneryPlacements(){refreshResidents();return placements;},getCollisionPlacements(){refreshResidents();return collisionPlacements;},
+    getTerrainMeshes(){refreshResidents();return terrainMeshes;},
+    get lifePlacements(){return lifePlacements;},get lifeRevision(){return lifeRevision;},get ready(){return ready();},
     get settled(){return ready()&&[...required.keys()].every(key=>{const chunk=cache.get(key);return !chunk.root.visible||chunk.progress>=1;});}};
 }

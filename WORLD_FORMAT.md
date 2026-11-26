@@ -12,7 +12,7 @@ The fifty-city Europe preset remains available as `?layout=europe`. It uses a cu
 
 The pure `generateWorld()` function and `railway.loadWorld({})` still default to the classic eight-city generator. Loading the browser preset is a separate startup choice. A seed override changes generated variation while retaining an authored preset's city coordinates and levels.
 
-With the canvas focused, **R** changes the seed while preserving the current authoring settings. **Space** pauses motion. The browser console exposes:
+With the canvas focused, **R** changes the seed while preserving the current authoring settings. **Space** pauses motion in strategy views. **V** enters or leaves a persistent third-person traveller; there, **WASD** walks, **Shift** runs and **Space** jumps. Walking uses the same generated terrain and asset placements, with bounded additive detail around the traveller. The browser console exposes:
 
 ```js
 // Compile in a worker and display the coarse world; resolve to a copy of its plan.

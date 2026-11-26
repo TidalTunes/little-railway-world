@@ -87,7 +87,12 @@ export function compileDetailPacket(region,network){
     const lifePlacements=(region.placements??[]).flatMap(p=>p.kind==='farm'?farmLivestockPlacements(network,p):lifeKinds.has(p.kind)?[p]:[])
       .map(p=>({kind:p.kind,id:p.id,x:p.x,y:p.y??0,z:p.z,rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1,
         ...(Number.isFinite(p.roamRadius)?{roamRadius:p.roamRadius}:{})}));
-    return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,lifePlacements,renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
+    // Walking mode uses the same authored/generated objects as the overview.
+    // Send their small source records alongside the existing geometry, so
+    // collisions and nearby embellishments never regenerate a different town.
+    const placements=[...(region.placements??[]),...(region.stations??[]).map(p=>({...p,kind:'station'}))];
+    return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,lifePlacements,
+      placements,cityStreets:region.cityStreets??[],renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{if(node.geometry)node.geometry.dispose();
       for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});

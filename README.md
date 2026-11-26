@@ -4,7 +4,7 @@
 
 A text-free isometric railway simulation built with Three.js. Compact towns, simple low-poly silhouettes, and colorful trains stay readable from a wide view. Broad farmland, forest, plains, desert, ocean, and mountain regions give the miniature a sense of geography. Painted surface grain, crop rows, cacti, station lanterns, grazing sheep, swallows, butterflies, boats, and a balloon reward a closer look. Warm afternoon lighting gives way to blue moonlight, amber windows, fireflies, and stars with **N**; `?time=night` opens directly at night. The mode changes lighting on both representations without regenerating the world.
 
-Zoom between three views: a simplified network overview from far away, the isometric miniature at the middle distance, and a close isometric view. The overview keeps broad terrain, bold ivory-cased railways, moving trains, and owner-colored city stamps. City stamps span 25–39 screen pixels, train markers 6 × 15 pixels, and rail ink 3 pixels; dense city groups retain large priority stamps and small secondary dots that expand as the camera moves closer. Zoom out beyond the initial framing and the network gradually disappears, leaving a quiet landscape. Hidden markers skip drawing and uploads while trains continue their journeys. Click or tap a train to move closer and follow its journey. Both representations show the same running simulation.
+Explore four camera layers. Scroll between three strategy views: a simplified network overview from far away, the isometric miniature at the middle distance, and a close isometric view. The overview keeps broad terrain, bold ivory-cased railways, moving trains, and owner-colored city stamps. City stamps span 25–39 screen pixels, train markers 6 × 15 pixels, and rail ink 3 pixels; dense city groups retain large priority stamps and small secondary dots that expand as the camera moves closer. Zoom out beyond the initial framing and the network gradually disappears, leaving a quiet landscape. Hidden markers skip drawing and uploads while trains continue their journeys. Click or tap a train to move closer and follow its journey. Both representations show the same running simulation. Press **V** to step into that same world as a traveller, with a perspective camera, animated walking and jumping, and extra nearby scenery. Press **V** again to return to an overview centered on the character. Your position and camera heading are retained between visits. The first visit starts beside Westhaven station, clear of the tracks.
 
 The default map is a compact, flat island for developing the game. Eight towns share a scenic railway circuit through a farm valley, woodland, a mountain pass and a dune coast. A winding river, inland lake, sheltered bays and offshore islets give it varied geography. It opens directly in the detailed isometric view, with the whole island framed. Its authored geography and routes stay fixed across scenery seeds. Use `?layout=island` explicitly, or `?layout=island&trains=0` to inspect the environment without trains.
 
@@ -18,7 +18,7 @@ The continental stress preset opens as a map with 256 cities, 287 links, and 2,0
 
 Trains follow continuous circuits through stations, with each carriage sampled along the track. Straight city approaches and tangent-connected circular bends keep movement smooth. The deterministic planner accepts authored players, city levels, connections, rivers, mountains, and biome sites. `?layout=classic` retains the earlier eight-city generator; `?seed=68&cities=12` generates a classic twelve-city layout. `?layout=crossroads` loads the seven-city crossing preset.
 
-This remains an art and simulation prototype. There is no playable economy or world-editor UI.
+This is a world-exploration and simulation prototype. There is no playable economy or world-editor UI.
 
 ## Run and verify
 
@@ -43,20 +43,24 @@ The deploy script builds and publishes `dist/` to this repository's `gh-pages` b
 
 ## Inspect and author
 
-Scroll or pinch to move through all three views. Detailed views hold a fixed 45° angle above the local ground. Drag to rotate the heading around the ground focus; WASD moves that focus smoothly in screen-relative directions at a consistent physical speed. Zoom changes magnification without flattening the view. Dragging while following a train rotates around the train, while train bends leave the camera heading unchanged. Two-finger gestures rotate and pinch to zoom in detailed views. The fully zoomed-out map uses dragging to pan. Click or tap a visible train to follow it; click empty ground, press Escape, or zoom out to leave follow mode. Double-click resets to the fitted world view.
+Scroll or pinch to move through the three strategy views. **V** switches immediately into the fourth, third-person view. Walk with **WASD**, hold **Shift** to run, and press **Space** to jump. Drag to orbit around the character, or use the arrow keys. **V** or **Escape** returns to the overview. The character uses the same terrain, streets, buildings and railway geometry; nearby grass, flowers, crop stalks, tree roots and house trim are additive details. Buildings and water block movement; the camera retracts near walls. Entry reuses prewarmed local scenery, with bounded streaming as you explore.
+
+ Detailed views hold a fixed 45° angle above the local ground. Drag to rotate the heading around the ground focus; WASD moves that focus smoothly in screen-relative directions at a consistent physical speed. Zoom changes magnification without flattening the view. Dragging while following a train rotates around the train, while train bends leave the camera heading unchanged. Two-finger gestures rotate and pinch to zoom in detailed views. The fully zoomed-out map uses dragging to pan. Click or tap a visible train to follow it; click empty ground, press Escape, or zoom out to leave follow mode. Double-click resets to the fitted world view.
 
 The canvas receives keyboard focus on startup. Click it again if focus has moved elsewhere:
 
 | Key | Action |
 | --- | --- |
 | + / − | Zoom between map, world, and close views. |
-| W / A / S / D | Pan up / left / down / right at every zoom level, with smooth acceleration and braking. |
+| V | Switch between the persistent walking character and the overview. |
+| W / A / S / D | Pan the strategy focus; move relative to the camera in third person. |
+| Shift | Run while walking. |
 | Arrow keys | Left/right rotate the regional view; up/down pan. All four pan in map and close views. Panning releases a followed train. |
 | F | Follow the visible train nearest the view centre. |
 | [ / ] | Follow the previous or next active train. |
-| Escape | Stop following while retaining the current view. |
+| Escape | Return from walking, or stop following a train. |
 | Home | Reset to the fitted world view; continental worlds open as a map. |
-| Space | Pause or resume the simulation. |
+| Space | Jump in third person; pause or resume the simulation in strategy views. |
 | N | Fade between afternoon and night. |
 | R | Generate another seed. |
 
@@ -88,6 +92,8 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 | `src/spatial-index.js` / `src/geometry-bvh.js` | Exact planning queries and accelerated detailed selection. |
 | `src/map-world.js` | Simplified terrain and rail network, one owner-colored city glyph per settlement, and live train markers. |
 | `src/view-controller.js` / `src/camera-modes.js` | Three camera views, zoom boundaries, train selection, follow behavior, and input. |
+| `src/walking-player.js` / `src/walking-input.js` | Persistent articulated traveller, fixed-step walking and jumping, collisions, perspective camera, and isolated controls. |
+| `src/walking-detail.js` / `src/walking-sky.js` | Bounded additive nearby detail and a lightweight atmospheric walking sky. |
 | `src/view-compositor.js` | Transitions between complete map and miniature renders. |
 | `src/network-traffic.js` | Continuous circuit selection, carriage sampling, following gaps, and conflict reservations. |
 | `src/traffic.js` | Terminal-dwelling shuttles used when the network has no continuous circuit. |
