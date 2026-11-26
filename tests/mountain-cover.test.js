@@ -30,6 +30,10 @@ test('mountain toes match adjacent ground while high cliffs and excavated walls 
   assert.ok(colorsClose(cliff,C.rockDark),'steep high slopes are entirely exposed rock');
   const wall=mountainSurfaceColor(world,mountain,{x:0,y:2,z:0},{x:1,y:0,z:0},{surface:false});
   assert.ok(colorsClose(wall,C.rockLight),'cut walls are not painted with vegetation');
+  for(const y of [-1e-7,1e-7]){
+    const split=mountainSurfaceColor(world,mountain,{x:0,y:2,z:0},{x:1,y,z:0},{surface:false});
+    assert.ok(colorsClose(split,wall),'numerically vertical CSG fragments cannot produce striped stone');
+  }
   const roof=mountainSurfaceColor(world,mountain,{x:0,y:3,z:0},{x:0,y:-1,z:0},{surface:false});
   assert.ok(colorsClose(roof,C.rockDark),'downward tunnel ceilings retain shaded stone');
 });

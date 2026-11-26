@@ -114,3 +114,64 @@ test('the globe traveller moves in physical units and remains upright at high la
   assert.ok(normal.dot(player.camera.up)>.999999);assert.ok(player.camera.position.toArray().every(Number.isFinite));
   player.dispose();
 });
+
+test('running has articulated recovery, forward lean and grounded support instead of a faster walk',()=>{
+  const player=createWalkingPlayer(new Group(),flat());player.enter({x:0,z:0});
+  run(player,1,{forward:1});
+  const body=player.root.getObjectByName('traveller-coat').parent;
+  const walkElbow=player.root.getObjectByName('left-elbow').rotation.x;
+  assert.ok(Math.abs(body.rotation.x)<.01,'walking torso remains upright');
+  assert.ok(Math.abs(walkElbow)<.2,'walking arms have a relaxed elbow');
+  run(player,.5,{forward:1,sprint:true});
+  assert.ok(body.rotation.x>.12,'running leans into motion');
+  assert.ok(player.root.getObjectByName('left-elbow').rotation.x<-.8,'running pumps bent arms');
+  let flight=0,stance=0,recovery=0;const point=new Vector3();
+  for(let frame=0;frame<90;frame++){
+    player.update(1/120,{forward:1,sprint:true});player.root.updateMatrixWorld(true);
+    const soles=[];player.root.traverse(child=>{if(child.name==='boot-sole')soles.push(child);});
+    const heights=soles.map(sole=>{
+      point.set(0,-.5,0).applyMatrix4(sole.matrixWorld);return point.y;
+    });
+    assert.ok(Math.min(...heights)>-.001,'neither sole penetrates the ground');
+    if(Math.min(...heights)>.012)flight++;else stance++;
+    if(player.root.getObjectByName('left-knee').rotation.x>1.2)recovery++;
+  }
+  assert.ok(flight>5&&stance>20,'running alternates a visible flight interval with ground contact');
+  assert.ok(recovery>5,'the recovery leg folds at the knee');
+  player.dispose();
+});
+
+test('walking against an obstacle settles the gait rather than marching through the collision',()=>{
+  const world=flat({placements:[{kind:'house',x:0,z:3,y:0,rotation:0,scale:1}]});
+  const player=createWalkingPlayer(new Group(),world);player.enter({x:0,z:0});
+  run(player,3,{forward:1,sprint:true});
+  const rotations=()=>['left-leg','right-leg','left-knee','right-knee','left-elbow','right-elbow'].map(name=>player.root.getObjectByName(name).rotation.x);
+  const atRest=rotations();run(player,.5,{forward:1,sprint:true});
+  rotations().forEach((angle,i)=>assert.ok(Math.abs(angle-atRest[i])<1e-5,'blocked feet and arms settle to rest'));
+  player.dispose();
+});
+
+test('support feet stay planted in world space through walking, running and their blend',()=>{
+  for(const spherical of [false,true]){
+    const radius=1600,world=flat(spherical?{surface:{type:'sphere',radius,complete:true,origin:{longitude:0,latitude:0},
+      projection:{type:'equirectangular',radius,centralLongitude:0,centralLatitude:0}}}:{});
+    const player=createWalkingPlayer(new Group(),world),start=spherical?surfaceChartCoordinates(world,179.98,75):{x:0,z:0};
+    player.enter(start,Math.PI/2);
+    const soles=['left-ankle','right-ankle'].map(name=>player.root.getObjectByName(name));
+    const previous=[null,null];let checked=0,maxDrift=0,walkContacts=0,runContacts=0;
+    for(let frame=0;frame<480;frame++){
+      const sprint=frame>=160&&frame<320;
+      player.update(1/120,{forward:1,sprint});player.root.updateMatrixWorld(true);
+      soles.forEach((ankle,side)=>{
+        const support=ankle.userData.supporting,point=new Vector3().setFromMatrixPosition(ankle.matrixWorld);
+        if(support&&previous[side]){maxDrift=Math.max(maxDrift,point.distanceTo(previous[side]));checked++;}
+        if(support&&!previous[side]){if(sprint)runContacts++;else walkContacts++;}
+        previous[side]=support?point:null;
+      });
+    }
+    assert.ok(checked>200,'measure complete stance phases, including the transition');
+    assert.ok(maxDrift<.001,`support feet cannot skate with the root (maximum drift ${maxDrift})`);
+    assert.ok(walkContacts<=18&&runContacts<=9,'accurate planting does not require an implausibly rapid gait');
+    player.dispose();
+  }
+});

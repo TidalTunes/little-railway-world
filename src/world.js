@@ -26,9 +26,9 @@ export function buildWorld(parent,world,{terrain=true,rigidAssets=null,animatedL
     }else if(p.kind==='landmark'){
       const scale=p.scale??1;
       cylinder(root,p.x,(p.y??0)+.032*scale,p.z,1.95*scale,1.95*scale,.025*scale,'sand',12).userData.rigidSurfaceAsset=true;
-      landmark(root,{...p,palette});
+      landmark(root,{...p,palette,animatedClocks:animatedLife});
     }else if(p.kind==='apartment')apartment(root,{...p,palette});
-    else if(p.kind==='civic')civic(root,{...p,palette});
+    else if(p.kind==='civic')civic(root,{...p,palette,animatedClocks:animatedLife});
     else if(p.kind==='plaza')plaza(root,{...p,palette});
     else if(p.kind==='tower')tower(root,{...p,palette});
     else if(p.kind==='farm')farmPatch(root,{...p,animatedLife});

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Group,Matrix4,Vector3} from 'three';
-import {createLocalLife,LIFE_LIMITS,selectLocalLife} from '../src/local-life.js';
+import {createLocalLife,LIFE_LIMITS,selectLocalLife,fireflyHabitat} from '../src/local-life.js';
 import {surfaceChartCoordinates,surfacePoint,surfaceDistance} from '../src/world-surface.js';
 import {styleUniforms} from '../src/scene-style.js';
 
@@ -51,12 +51,12 @@ test('grazing sheep retain dimensions and remain inside their reserved physical 
 });
 
 test('day and night fauna animate deterministically, freeze when paused and honor reduced motion',()=>{
-  const placements=[{kind:'sheep',id:'sheep',x:0,z:0,y:0,radius:.7},{kind:'tree',id:'tree',x:14,z:0,y:0,radius:1},
+  const placements=[{kind:'sheep',id:'sheep',x:0,z:0,y:0,radius:.7},{kind:'tree',id:'tree-0',x:14,z:0,y:0,radius:1},
     {kind:'farmPatch',id:'farm',x:4,z:8,y:0,radius:4}];
   const life=createLocalLife(new Group(),plane),options={placements,focus:{x:0,z:0},revision:1};
   life.update(5,options);const atFive=snapshot(life),versions=life.root.children.map(batch=>batch.instanceMatrix.version);
-  assert.equal(life.stats.sheep,1);assert.equal(life.stats.birds,3);assert.equal(life.stats.butterflies,1);assert.equal(life.stats.fireflies,6);
-  assert.equal(life.stats.instances,11);
+  assert.equal(life.stats.sheep,1);assert.equal(life.stats.birds,3);assert.equal(life.stats.butterflies,1);assert.equal(life.stats.fireflies,placements.reduce((count,item)=>count+(['tree','farmPatch'].includes(item.kind)?fireflyHabitat(item).count:0),0));
+  assert.equal(life.stats.instances,5+life.stats.fireflies);
   life.update(5,{...options,night:1});assert.deepEqual(snapshot(life),atFive,'time frozen at pause');
   assert.deepEqual(life.root.children.map(batch=>batch.instanceMatrix.version),versions,'paused frames do not upload matrices');
   assert.equal(life.root.getObjectByName('woodland-fireflies').material.uniforms.night.value,1);
@@ -67,7 +67,7 @@ test('day and night fauna animate deterministically, freeze when paused and hono
   life.update(40,{...options,reducedMotion:true});assert.deepEqual(snapshot(life),frozen);
   const selections=life.stats.selections;life.update(41,{...options,detailBlend:0});assert.equal(life.root.visible,false);assert.equal(life.stats.selections,selections);
   life.update(42,{...options,placements:[],revision:2});assert.equal(life.root.visible,true);assert.equal(life.stats.sheep,0);
-  for(const batch of life.root.children)if(!batch.name.startsWith('local-swallow'))assert.equal(batch.count,0,'evicted ground scenery leaves no floating ground animals');
+  for(const batch of life.root.children)if(!batch.name.startsWith('local-swallow')&&batch.name!=='woodland-fireflies')assert.equal(batch.count,0,'evicted ground scenery leaves no floating ground animals');
   assert.equal(life.stats.birds,3,'birds keep flying when their ground chunk leaves the view');
   life.dispose();assert.equal(life.root.parent,null);
 });
@@ -163,4 +163,48 @@ test('cloned wing materials retain the shared painted-world shader and time unif
     assert.equal((material.customProgramCacheKey().match(/painted-world-v\d+/g)??[]).length,1,'clone receives exactly one style hook');
   }
   life.dispose();
+});
+
+
+test('fireflies inhabit irregular low clusters with independent flashes and stable streamed identities',()=>{
+  const placements=Array.from({length:40},(_,index)=>({kind:'tree',id:`firefly-habitat-${index}`,x:index%8*5,z:Math.floor(index/8)*5,y:0}));
+  const populations=placements.map(item=>fireflyHabitat(item).count);
+  assert.ok(populations.includes(0),'some trees have no fireflies');assert.ok(new Set(populations).size>=4,'occupied habitats differ in population');
+  const life=createLocalLife(new Group(),plane),glows=life.root.getObjectByName('woodland-fireflies');
+  life.update(4,{placements,focus:{x:10,z:10},night:1});
+  assert.ok(glows.count>8&&glows.count<=LIFE_LIMITS.fireflies);
+  const snapshot=Array.from(glows.instanceMatrix.array),centers=Array.from({length:glows.count},(_,i)=>new Vector3().setFromMatrixPosition(matrix(glows,i)));
+  assert.ok(centers.every(p=>p.y>.15&&p.y<2.1),'insects live below the canopy instead of making an artificial ceiling');
+  assert.ok(Math.max(...centers.map(p=>p.y))-Math.min(...centers.map(p=>p.y))>1,'height varies within and between clusters');
+  const visibility=glows.geometry.attributes.lifeVisibility;
+  assert.ok(new Set(Array.from(visibility.array.subarray(0,glows.count)).map(value=>Math.round(value*100))).size>8,'each insect flashes independently');
+  const count=glows.count;
+  life.update(4,{placements:[],revision:1,focus:{x:12,z:10},night:1});
+  assert.equal(glows.count,count);assert.deepEqual(Array.from(glows.instanceMatrix.array),snapshot,'ground tile eviction cannot teleport a glow');
+  life.update(4.01,{placements,revision:2,focus:{x:12,z:10},night:1});
+  centers.forEach((center,i)=>assert.ok(center.distanceTo(new Vector3().setFromMatrixPosition(matrix(glows,i)))<.01,'drift is continuous'));
+  assert.match(glows.material.vertexShader,/lifeVisibility/);assert.match(glows.material.fragmentShader,/night\*faunaVisibility/);
+  life.update(5,{placements:[],focus:{x:300,z:300},night:1});assert.equal(glows.count,0,'retired habitats free the fixed budget');life.dispose();
+});
+
+test('sheep upper legs enter their fleece, joints stay connected and supporting hooves stay planted',()=>{
+  const sheep={kind:'sheep',id:'leg-check',x:0,z:0,y:0,radius:2.1,roamRadius:1.4};
+  const life=createLocalLife(new Group(),plane),legs=life.root.getObjectByName('grazing-sheep-feet');
+  const top=new Vector3(),bottom=new Vector3(),nextTop=new Vector3();let stepping=0,planted=0;
+  for(let frame=0;frame<400;frame++){
+    life.update(frame*.1,{placements:[sheep],focus:sheep});
+    assert.equal(legs.count,12,'four connected upper/lower/hoof assemblies share one batch');
+    for(let leg=0;leg<4;leg++){
+      const upper=matrix(legs,leg*3),lower=matrix(legs,leg*3+1),hoof=matrix(legs,leg*3+2);
+      top.set(0,.5,0).applyMatrix4(upper);assert.ok(top.y>.24,'upper leg penetrates the underside of the fleece');
+      bottom.set(0,-.5,0).applyMatrix4(upper);nextTop.set(0,.5,0).applyMatrix4(lower);
+      assert.ok(bottom.distanceTo(nextTop)<.009,'both segments overlap at the actual knee');
+      bottom.set(0,-.5,0).applyMatrix4(lower);nextTop.set(0,0,0).applyMatrix4(hoof);
+      assert.ok(bottom.distanceTo(nextTop)<.01,'hoof remains attached to the lower leg');
+      bottom.set(0,-.5,0).applyMatrix4(hoof);
+      assert.ok(bottom.y>-.0001,'hoof never clips below pasture');
+      if(bottom.y<.001)planted++;else if(bottom.y>.01)stepping++;
+    }
+  }
+  assert.ok(planted>400&&stepping>50,'hoof support alternates with a visible recovery arc');life.dispose();
 });

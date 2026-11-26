@@ -6,7 +6,8 @@ import {riverBankDistance} from './hydrology.js';
 import {polylineTree,SpatialGrid,pointBox} from './spatial-index.js';
 import {surfaceFor,surfaceDistance,surfaceDisplacement,surfacePoint,rigidSurfacePoseMatrix} from './world-surface.js';
 import {fieldOutline,fieldContains,fieldFeatureFootprint,fieldDetailSeed,farmRandom} from './farm-layout.js';
-import {walkingGrassGeometry,addWalkingVegetationShader} from './walking-vegetation.js';
+import {walkingGrassGeometry,addWalkingVegetationShader,WALKING_GRASS_ROOTS} from './walking-vegetation.js';
+import {walkingGroundSampler} from './walking-ground.js';
 
 // These are embellishments of the existing world, never replacement terrain or
 // scenery. Stable world/asset coordinates and fixed GPU pools make entry cheap.
@@ -121,7 +122,18 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
   if(!surfaceFor(world)&&world.biomes){
     const obstacles=new SpatialGrid(5);
     for(const item of [...nearby,...(world.stations??[])])if(item.kind!=='sheep')obstacles.insert(item,pointBox(item.x,item.z,radiusOf(item)+.3));
-    const rails=polylineTree(world.lines??empty),roads=polylineTree(cityStreets),step=.60;
+    const rails=polylineTree(world.lines??empty),roads=polylineTree(cityStreets),step=.60,groundSampler=walkingGroundSampler(world);
+    // Excavation shoulders are wider than ballast. Covered tunnel roofs can
+    // still carry grass, while low portal faces and open cuttings remain clear.
+    const nearCut=(x,z,ground)=>ground.nearby.length&&rails.query(pointBox(x,z,2.50)).some(segment=>{
+      if(distanceToSegment(x,z,segment)>=2.50)return false;
+      const line=segment.line,lo=line.distances?.[segment.index]??0,hi=line.distances?.[segment.index+1]??line.length;
+      return (line.cuts??line.tunnels??empty).some(cut=>{
+        if(!ground.nearby.some(m=>m.id===cut.mountainId)||hi<(cut.cutStart??cut.start)-2||lo>(cut.cutEnd??cut.end)+2)return false;
+        const covered=(line.tunnels??empty).some(t=>t.mountainId===cut.mountainId&&t.start<cut.end&&t.end>cut.start);
+        return !covered||ground.height<Math.max(segment.a.y??.42,segment.b.y??.42)+3.6;
+      });
+    });
     const cx=Math.round(focus.x/WALKING_DETAIL_LIMITS.refreshDistance)*WALKING_DETAIL_LIMITS.refreshDistance;
     const cz=Math.round(focus.z/WALKING_DETAIL_LIMITS.refreshDistance)*WALKING_DETAIL_LIMITS.refreshDistance;
     const candidates=[];
@@ -140,26 +152,29 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
       groundCache?.set(id,null);
       const entries=[];
       const scatter=(kind,...args)=>{const item=add(kind,...args);entries.push([kind,item]);};
-      const biome=biomeAt(world,x,z);if(!['plains','forest','farmland','desert'].includes(biome))continue;
-      if(!fitsBiome(world,['plains','forest','farmland','desert'],x,z,.35)||riverBankDistance(world,x,z)<1.10)continue;
-      if((world.mountains??empty).some(m=>Math.hypot(m.x-x,m.z-z)<(m.radius??0)+.5))continue;
+      const biome=biomeAt(world,x,z);if(!['plains','forest','farmland','desert','mountain'].includes(biome))continue;
+      if(!fitsBiome(world,['plains','forest','farmland','desert','mountain'],x,z,.35)||riverBankDistance(world,x,z)<1.10)continue;
       if(obstacles.query(pointBox(x,z,.40)).some(p=>grassObstacle(p,x,z)))continue;
       // Physical ballast is 1.88 units wide. One blade envelope beyond that
       // edge (and each paved edge) leaves crisp verges without bare strips.
       if(rails.nearest(x,z,s=>distanceToSegment(x,z,s),1.34)<1.34)continue;
       if(roads.nearest(x,z,s=>distanceToSegment(x,z,s)-(s.line.width??1)/2,.40,1.5)<.40)continue;
-      const anchor={x,y:-.006,z,rotation:0,scale:1},choice=r();
-      if(biome==='desert'){
-        if(choice<.014)scatter('pebbles',anchor,id,0,.032,0,.07+r()*.11,.045+r()*.04,.06+r()*.10,r()*tau,'desertRock');
-        else if(choice<.045)scatter('grass',anchor,id,0,0,0,.38,.11+r()*.09,.38,r()*tau,'soilLight');
-      }else{
-        const patch=.5+.5*Math.sin(x*.21+Math.sin(z*.17))*Math.cos(z*.25-x*.08);
-        const height=(biome==='forest'?.13:.18)+patch*.09+r()*.04;
-        const color=biome==='forest'?'grassDark':patch>.65?'meadow':patch<.27?'grassDark':'grass';
-        scatter('grass',anchor,id,0,0,0,.65,height,.65,r()*tau,color);
-        if(choice<.012&&patch>.50&&biome!=='forest')scatter('flowers',anchor,`${id}:flower`,0,height*.82,0,.035,.025,.035,r()*tau);
-        else if(choice>.996)scatter('pebbles',anchor,`${id}:stone`,.13,.025,-.14,.07+r()*.08,.035+r()*.03,.07,r()*tau);
-      }
+      const ground=groundSampler.sample(x,z);if(nearCut(x,z,ground))continue;
+      const cover=groundSampler.vegetation(x,z,ground),choice=r();
+      const anchor={x,y:ground.height-.006,z,rotation:0,scale:1};
+      const patch=.5+.5*Math.sin(x*.21+Math.sin(z*.17))*Math.cos(z*.25-x*.08);
+      if(choice<cover.density){
+        const height=(.18+patch*.09+r()*.04)*cover.heightScale,rotation=r()*tau;
+        const item=add('grass',anchor,id,0,0,0,.65,height,.65,rotation,'grass');
+        item.colorRGB=cover.color;entries.push(['grass',item]);
+        if(ground.nearby.length){
+          const ca=Math.cos(rotation),sa=Math.sin(rotation);
+          // Each side of every blade root sits on its exact rendered facet.
+          // Sharing the tile centre's height would float roots across slopes.
+          item.rootHeights=WALKING_GRASS_ROOTS.map(([u,v])=>groundSampler.heightAt(x+(u*ca+v*sa)*item.sx,z+(-u*sa+v*ca)*item.sz,ground)-ground.height);
+        }
+        if(choice<.012&&patch>.50&&cover.density>.8)scatter('flowers',anchor,`${id}:flower`,0,height*.82,0,.035,.025,.035,r()*tau);
+      }else if(choice>.986&&cover.density<.3)scatter('pebbles',anchor,`${id}:stone`,0,.025,0,.07+r()*.08,.035+r()*.03,.07,r()*tau,'desertRock');
       if(groundCache){
         groundCache.set(id,entries);
       }
@@ -175,9 +190,10 @@ export function createWalkingDetail(parent,world){
   const root=new THREE.Group();root.name='walking-close-detail';root.visible=false;parent.add(root);
   const focusUniform={value:new THREE.Vector3()},timeUniform={value:0},playerUniform={value:new THREE.Vector3()},visibilityUniform={value:1};
   const batches={},pose=new THREE.Matrix4(),local=new THREE.Matrix4(),matrix=new THREE.Matrix4();
-  const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0);
+  const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0),color=new THREE.Color();
   for(const kind of kinds){
     const vegetation=kind==='grass'||kind==='crops',geometry=vegetation?walkingGrassGeometry({crop:kind==='crops'}):new THREE.IcosahedronGeometry(1,0);
+    if(kind==='grass')for(let i=0;i<6;i++)geometry.setAttribute(`grassRoots${i}`,new THREE.InstancedBufferAttribute(new Float32Array(WALKING_DETAIL_LIMITS.grass*4),4).setUsage(THREE.DynamicDrawUsage));
     const material=applySceneStyle(new THREE.MeshLambertMaterial({color:0xffffff,flatShading:!vegetation,side:vegetation?THREE.DoubleSide:THREE.FrontSide}));
     addWalkingVegetationShader(material,{focus:focusUniform,time:timeUniform,player:playerUniform,visibility:visibilityUniform},kind);
     const batch=new THREE.InstancedMesh(geometry,material,WALKING_DETAIL_LIMITS[kind]);batch.name=`walking-${kind}`;
@@ -221,8 +237,14 @@ export function createWalkingDetail(parent,world){
         const anchor=item.anchor;
         rigidSurfacePoseMatrix(world,anchor.x,anchor.y??0,anchor.z,anchor.rotation??0,pose);pose.scale(scale.setScalar(anchor.scale??1));
         position.set(item.x,item.y,item.z);scale.set(item.sx,item.sy,item.sz);rotation.setFromAxisAngle(up,item.rotation);
-        local.compose(position,rotation,scale);matrix.multiplyMatrices(pose,local);batch.setMatrixAt(index,matrix);batch.setColorAt(index,C[item.color]??C.grass);
+        local.compose(position,rotation,scale);matrix.multiplyMatrices(pose,local);batch.setMatrixAt(index,matrix);batch.setColorAt(index,item.colorRGB?color.fromArray(item.colorRGB):C[item.color]??C.grass);
+        if(kind==='grass')for(let component=0;component<6;component++){
+          const attr=batch.geometry.attributes[`grassRoots${component}`],values=item.rootHeights,offset=component*4;
+          const yScale=item.sy*(anchor.scale??1);
+          attr.setXYZW(index,(values?.[offset]??0)/yScale,(values?.[offset+1]??0)/yScale,(values?.[offset+2]??0)/yScale,(values?.[offset+3]??0)/yScale);
+        }
       }
+      if(kind==='grass')for(let component=0;component<6;component++)batch.geometry.attributes[`grassRoots${component}`].needsUpdate=true;
       batch.instanceMatrix.needsUpdate=true;if(batch.instanceColor)batch.instanceColor.needsUpdate=true;
     }
     lastFocus={x:focus.x,z:focus.z};

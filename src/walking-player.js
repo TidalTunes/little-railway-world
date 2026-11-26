@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {M} from './palette.js';
+import {footstep,solveLeg} from './leg-motion.js';
 import {worldSurface,pointSegmentDistance} from './world-model.js';
 import {polylineTree} from './spatial-index.js';
 import {surfaceQuerySegments} from './surface-query.js';
@@ -9,6 +10,7 @@ export const WALKING=Object.freeze({height:.96,radius:.17,speed:2.65,sprintSpeed
   stepHeight:.32,maxSlope:.78,cameraDistance:3.6,cameraHeight:.65,spawnRailClearance:4.5,fov:54,near:.045,far:140});
 const solids=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
 const tau=Math.PI*2,clamp=THREE.MathUtils.clamp;
+const legLength=.19,restHip=.389,ankleHeight=.032;
 const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
 
 /** A single articulated, human-scale traveller. The world never gets rescaled
@@ -37,22 +39,27 @@ function traveller(parent){
   part(body,'backpack-flap',0,.641,-.165,.245,.055,.145,M.roofLight);
   part(body,'backpack-buckle',0,.565,-.221,.043,.06,.012,M.gold);
   for(const side of [-1,1])part(body,'backpack-strap',side*.106,.535,.103,.032,.26,.018,M.timber);
-  const arms=[],legs=[];
+  const arms=[],elbows=[],legs=[],knees=[],ankles=[];
   for(const side of [-1,1]){
     const arm=new THREE.Group();arm.name=side<0?'left-arm':'right-arm';arm.position.set(side*.18,.625,0);body.add(arm);arms.push(arm);
-    part(arm,'sleeve',0,-.102,0,.095,.205,.115,M.teal);
-    part(arm,'hand',0,-.227,.006,.075,.08,.075,M.peach);
-    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.085,.365,0);root.add(leg);legs.push(leg);
-    part(leg,'trousers',0,-.145,0,.105,.275,.12,M.roofBlue);
-    part(leg,'boot',0,-.315,.035,.12,.10,.19,M.timber);
-    part(leg,'boot-sole',0,-.36,.035,.125,.025,.195,M.metal);
+    part(arm,'upper-sleeve',0,-.065,0,.095,.14,.11,M.teal);
+    const elbow=new THREE.Group();elbow.name=side<0?'left-elbow':'right-elbow';elbow.position.y=-.13;arm.add(elbow);elbows.push(elbow);
+    part(elbow,'lower-sleeve',0,-.05,0,.085,.11,.10,M.teal);
+    part(elbow,'hand',0,-.12,.006,.075,.07,.075,M.peach);
+    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.085,restHip,0);root.add(leg);legs.push(leg);
+    part(leg,'upper-trousers',0,-legLength/2,0,.105,legLength+.01,.12,M.roofBlue);
+    const knee=new THREE.Group();knee.name=side<0?'left-knee':'right-knee';knee.position.y=-legLength;leg.add(knee);knees.push(knee);
+    part(knee,'lower-trousers',0,-legLength/2,0,.10,legLength+.01,.115,M.roofBlue);
+    const ankle=new THREE.Group();ankle.name=side<0?'left-ankle':'right-ankle';ankle.position.y=-legLength;knee.add(ankle);ankles.push(ankle);
+    part(ankle,'boot',0,-.026,.035,.12,.065,.19,M.timber);
+    part(ankle,'boot-sole',0,-.061,.035,.125,.012,.195,M.metal);
   }
   // A tiny contact shadow anchors the traveller even outside the sun's moving
   // shadow map. It is one transparent primitive, never a dynamic texture.
   const shadowMaterial=new THREE.MeshBasicMaterial({color:0x173c37,transparent:true,opacity:.16,depthWrite:false});
   const shadowGeometry=new THREE.CircleGeometry(.24,16);geometries.push(shadowGeometry);
   const shadow=new THREE.Mesh(shadowGeometry,shadowMaterial);shadow.matrixAutoUpdate=false;shadow.name='traveller-contact-shadow';parent.add(shadow);
-  return{root,body,arms,legs,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
+  return{root,body,arms,elbows,legs,knees,ankles,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
 }
 
 /** Render-space rays and physical surface offsets agree with the shared world
@@ -64,11 +71,12 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   const position={x:0,y:0,z:0},velocity={x:0,y:0,z:0},matrix=new THREE.Matrix4(),frame=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
   const up=new THREE.Vector3(),groundPoint=new THREE.Vector3(),target=new THREE.Vector3(),desired=new THREE.Vector3(),direction=new THREE.Vector3();
   const forwardVector=new THREE.Vector3(),rightVector=new THREE.Vector3(),ray=new THREE.Raycaster(),hits=[];ray.firstHitOnly=true;
-  const collisionDelta={},stepPoint={},samplePoint={},groundTarget=new THREE.Vector3();
+  const collisionDelta={},stepPoint={},samplePoint={},moveOrigin={},groundTarget=new THREE.Vector3();
   const routeTree=polylineTree(world.lines??[]),railA={},railB={};
   const meshCenter=new THREE.Vector3(),meshSphere=new THREE.Sphere();
-  let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0;
+  let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0,runBlend=0,poseSpeed=0,locomoting=false;
   let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0;
+  const steps=[{},{}],limb={},contactDelta={},contacts=[{active:false,x:0,z:0},{active:false,x:0,z:0}];
   const stats={steps:0,blocked:0,raycasts:0,obstacles:0,meshes:0,meshSelections:0};
 
   function refreshScene(force=false){
@@ -194,16 +202,64 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     Object.assign(position,saved);refreshScene(true);return found;
   }
 
-  function setPose(dt,speed){
+  function setPose(dt,speed,travelled=0){
     heading+=wrap(bodyTurn-heading)*Math.min(1,dt*15);
     const angle=chartHeadingForSurface(world,position.x,position.z,heading);
     rigidSurfacePoseMatrix(world,position.x,position.y,position.z,angle,matrix);
     matrix.decompose(art.root.position,art.root.quaternion,art.root.scale);
-    const moving=Math.min(1,speed/WALKING.speed),stride=Math.sin(gait)*.62*moving;
-    art.body.position.y=grounded?Math.abs(Math.sin(gait))*moving*.016:0;
-    art.body.rotation.z=grounded?Math.sin(gait*.5)*moving*.025:0;
-    art.arms[0].rotation.x=grounded?stride:-.32;art.arms[1].rotation.x=grounded?-stride:-.32;
-    art.legs[0].rotation.x=grounded?-stride:.35;art.legs[1].rotation.x=grounded?stride:-.22;
+    const moving=clamp(speed/.7,0,1),running=THREE.MathUtils.smoothstep(speed,WALKING.speed*.97,WALKING.sprintSpeed*.96);
+    runBlend+=(running-runBlend)*(dt>0?1-Math.exp(-12*dt):1);
+    const stance=THREE.MathUtils.lerp(.5,.32,runBlend),stride=THREE.MathUtils.lerp(.25,.26,runBlend),lift=THREE.MathUtils.lerp(.065,.17,runBlend);
+    // A supporting foot traverses 2*stride while its phase covers stance*tau.
+    // Distance drives that exact ratio, so increasing travel speed lengthens
+    // the run rather than dragging a support foot along the ground.
+    if(!locomoting&&travelled>1e-5){
+      // Start halfway through support with the foot already under the hip,
+      // rather than demanding a full stride from a foot planted at rest.
+      gait=Math.PI*stance;locomoting=true;contacts.forEach(contact=>contact.active=false);
+    }
+    if(moving<.05)locomoting=false;
+    if(grounded)gait+=travelled*Math.PI*stance/stride;
+    for(let side=0;side<2;side++){
+      const foot=footstep(gait+side*Math.PI,{stance,stride,lift,weight:moving},steps[side]),contact=contacts[side];
+      if(grounded&&foot.support&&moving>.1){
+        if(!contact.active){
+          const across=side===0?-.085:.085;
+          surfaceOffset(world,position.x,position.z,Math.sin(heading)*foot.z+Math.cos(heading)*across,
+            Math.cos(heading)*foot.z-Math.sin(heading)*across,contact);
+          contact.active=true;
+        }else{
+          // Lock the contact in surface space through acceleration and the
+          // walk/run blend; reparameterizing a gait must not move a planted foot.
+          surfaceDisplacement(world,position,contact,contactDelta);
+          foot.z=contactDelta.x*Math.sin(heading)+contactDelta.z*Math.cos(heading);
+        }
+      }else contact.active=false;
+      art.ankles[side].userData.supporting=contact.active;
+    }
+    // The pelvis lowers over extended support legs. During the run's flight
+    // phase it rises while the recovering knees fold underneath the body.
+    let hipHeight=restHip;
+    if(grounded){
+      for(const foot of steps)if(foot.support)hipHeight=Math.min(hipHeight,ankleHeight+Math.sqrt(Math.max(.001,(legLength*2-.005)**2-foot.z**2)));
+      if(steps.every(foot=>!foot.support))hipHeight+=Math.min(steps[0].y,steps[1].y)*.35;
+    }
+    art.body.position.y=grounded?hipHeight-.365:0;
+    art.body.rotation.x=grounded?runBlend*moving*.16:Math.min(.12,Math.max(-.1,-velocity.y*.025));
+    art.body.rotation.z=grounded?Math.sin(gait)*moving*.018:0;
+    for(let side=0;side<2;side++){
+      const phase=gait+side*Math.PI,foot=steps[side];
+      art.legs[side].position.y=grounded?hipHeight:restHip;
+      if(grounded){
+        solveLeg(hipHeight,ankleHeight+foot.y,foot.z,legLength,legLength,limb);
+        art.legs[side].rotation.x=limb.hip;art.knees[side].rotation.x=limb.knee;art.ankles[side].rotation.x=limb.ankle;
+      }else{
+        art.legs[side].rotation.x=side===0?-.35:.12;art.knees[side].rotation.x=side===0?.8:.38;
+        art.ankles[side].rotation.x=-.18;
+      }
+      art.arms[side].rotation.x=grounded?Math.sin(phase)*(.34+runBlend*.3)*moving:-.35;
+      art.elbows[side].rotation.x=grounded?-.12-runBlend*(.95+.18*Math.cos(phase))*moving:-.7;
+    }
     rigidSurfacePoseMatrix(world,position.x,Math.min(position.y,floorHeight)+.036,position.z,angle,matrix);
     art.shadow.matrix.copy(matrix).multiply(shadowTilt);art.shadow.matrixWorldNeedsUpdate=true;
     art.shadow.material.opacity=.16/(1+Math.max(0,position.y-floorHeight)*1.6);
@@ -257,14 +313,15 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     if(length>1){forward/=length;right/=length;}
     const speed=input.sprint?WALKING.sprintSpeed:WALKING.speed;
     const x=(Math.sin(orbit)*forward-Math.cos(orbit)*right)*speed,z=(Math.cos(orbit)*forward+Math.sin(orbit)*right)*speed;
-    accumulator+=dt;
+    accumulator+=dt;let travelled=0;
     while(accumulator>=1/120-1e-12){
       const step=1/120;accumulator-=step;stats.steps++;
       const damp=1-Math.exp(-18*step);velocity.x+=(x-velocity.x)*damp;velocity.z+=(z-velocity.z)*damp;
       const dx=velocity.x*step,dz=velocity.z*step;
       if(Math.hypot(dx,dz)>.000001){
+        moveOrigin.x=position.x;moveOrigin.z=position.z;
         if(!move(dx,dz,step)){if(Math.abs(dx)>1e-8)move(dx,0,step);if(Math.abs(dz)>1e-8)move(0,dz,step);}
-        bodyTurn=Math.atan2(velocity.x,velocity.z);gait+=Math.hypot(dx,dz)*6.8;
+        bodyTurn=Math.atan2(velocity.x,velocity.z);travelled+=surfaceDistance(world,moveOrigin,position);
       }
       if(!grounded){
         velocity.y-=WALKING.gravity*step;position.y+=velocity.y*step;
@@ -273,7 +330,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
         if(position.y<=floor.height+.035&&velocity.y<=0){position.y=floor.height+.035;velocity.y=0;grounded=true;}
       }
     }
-    setPose(dt,Math.hypot(velocity.x,velocity.z));updateCamera(dt);
+    const actualSpeed=dt>0?travelled/dt:0;
+    poseSpeed+=(actualSpeed-poseSpeed)*(1-Math.exp(-24*dt));
+    setPose(dt,poseSpeed,travelled);updateCamera(dt);
   }
 
   return{root,camera,position,velocity,stats,prepareSpawn,update,
@@ -284,9 +343,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       const spawn=prepareSpawn(focus);if(!spawn)return false;
       Object.assign(position,spawn);velocity.x=velocity.y=velocity.z=0;heading=orbit=bodyTurn=Number.isFinite(initialHeading)?initialHeading:0;
       floorHeight=spawn.y-.035;
-      pitch=Math.PI/10;accumulator=0;jumpDown=false;grounded=true;active=initialized=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;
+      pitch=Math.PI/10;accumulator=0;jumpDown=false;poseSpeed=runBlend=gait=0;locomoting=false;contacts.forEach(contact=>contact.active=false);grounded=true;active=initialized=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;
     },
-    exit(){active=false;root.visible=false;velocity.x=velocity.y=velocity.z=0;jumpDown=false;return{...position};},
+    exit(){active=false;root.visible=false;poseSpeed=runBlend=0;locomoting=false;contacts.forEach(contact=>contact.active=false);setPose(0,0);velocity.x=velocity.y=velocity.z=0;jumpDown=false;return{...position};},
     resize(aspect){camera.aspect=Math.max(.01,Number.isFinite(aspect)?aspect:1);camera.updateProjectionMatrix();},
     dispose(){if(disposed)return;disposed=true;active=false;root.removeFromParent();art.dispose();root.clear();},
   };

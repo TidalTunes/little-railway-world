@@ -22,7 +22,7 @@ function sphericalPath(sphere,from,to){
   const startRadius=start.length(),endRadius=end.length();
   if(startRadius<1e-6||endRadius<1e-6)return null;
   start.divideScalar(startRadius);end.divideScalar(endRadius);
-  const axis=new THREE.Vector3().crossVectors(start,end),crossLength=axis.length(),cosine=clamp(start.dot(end),-1,1);
+  const axis=new THREE.Vector3().crossVectors(start,end),crossLength=axis.length(),cosine=THREE.MathUtils.clamp(start.dot(end),-1,1);
   let angle=Math.atan2(crossLength,cosine);
   if(crossLength>1e-12)axis.divideScalar(crossLength);
   else if(cosine<0){

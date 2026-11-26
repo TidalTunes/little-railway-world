@@ -22,6 +22,7 @@ import {createWalkingInput} from './walking-input.js';
 import {createWalkingSky} from './walking-sky.js';
 import {createCharacterTransition} from './character-transition.js';
 import {createCharacterMarker} from './character-marker.js';
+import {createClockHands} from './clock-hands.js';
 import './style.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
@@ -47,7 +48,7 @@ const ground=new THREE.Mesh(new THREE.PlaneGeometry(2000,2000),new THREE.MeshSta
 ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;scene.add(ground);
 
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
-let walker,walkingDetail,characterMarker,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
+let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
 let transitionMapStart=0,renderedMapBlend=0;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
@@ -226,7 +227,7 @@ async function loadWorld(input={}){
     walkingMode=false;walkingInput.clear();view.setInputEnabled(true);
     characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
     scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
-    walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();
+    walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();clockHands?.dispose();
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
@@ -238,6 +239,7 @@ async function loadWorld(input={}){
     walkSpawn=walker.prepareSpawn(model.cities[0]??controls.target);
     walkingDetail=createWalkingDetail(root,model);walkingBuffersReady=false;
     characterMarker=createCharacterMarker(scene,mapScene,model);
+    clockHands=createClockHands(root,model);
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
@@ -347,6 +349,8 @@ function frame(now){
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
     const renderFocus=groundLayer?walker.position:view.renderTarget;
+    clockHands.update(time,{focus:renderFocus,placements:detail.placements,revision:detail.placementRevision,
+      visible:blend<.999,reducedMotion:reducedMotion.matches});
     detail.updateVisibility(activeCamera,{dt,reveal:shaderReady&&blend<.999,reducedMotion:reducedMotion.matches||entryFrame});
     entryFrame=false;detailBase.root.visible=groundLayer||!detail.settled;
     railway.updateView(activeCamera,{mapBlend:blend,focus:renderFocus});

@@ -1,7 +1,9 @@
-import { Float32BufferAttribute } from 'three';
-import { box, cylinder, roof, group, ico, beam, v, polygon, extrudedPolygon } from './geometry.js';
+import { BufferGeometry, Float32BufferAttribute } from 'three';
+import { box, cylinder, roof, group, ico, beam, v, polygon, mesh } from './geometry.js';
 import { C, M } from './palette.js';
+import {buildClockFace, clockFaceSpecs} from './clock-design.js';
 import {farmRandom,fieldContains,fieldFeatureFootprint,fieldDetailSeed,fieldOutline} from './farm-layout.js';
+import {buildSheepArt} from './sheep-art.js';
 
 // Bounds include every roof, wheel and trim piece. Placement uses the footprint,
 // while detail stays inside it: an asset never silently occupies a neighbour.
@@ -16,7 +18,7 @@ export const ASSET_BOUNDS = Object.freeze({
   tower: { radius: 2.1, height: 8 },
   farmPatch: { width: 3, depth: 4, height: 1.6 },
   cactus: { radius: .70, height: 2.4 },
-  sheep: { width: .46, depth: .72, height: .53 },
+  sheep: { width: .46, depth: .80, height: .53 },
   person: { radius: .17, height: .75 },
   trainCar: { width: 1.12, depth: 2.4, height: 1.6 },
 });
@@ -51,7 +53,10 @@ export function house(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, 
   box(g, 0, .07, 0, w + .10, .14, d + .10, 'platform');
   box(g, 0, h / 2 + .12, 0, w, h, d, wall);
   box(g, 0, h + .12, 0, w + .06, .10, d + .06, trim);
-  roof(g, w + .24, d + .24, .51, h + .16, roofColor);
+  // A different ridge direction gives the narrow cottage its own silhouette,
+  // without a disconnected accent floating above the door.
+  if(type===1)roof(group(g,0,0,0,Math.PI/2),d+.24,w+.24,.51,h+.16,roofColor);
+  else roof(g, w + .24, d + .24, .51, h + .16, roofColor);
   const front = d / 2;
   box(g, 0, .53, front + .008, .34, .80, .024, palette?.dark??'timber').castShadow=false;
   frontWindow(g, -w * .29, .91, front,.36,.44,palette);
@@ -60,12 +65,25 @@ export function house(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, 
     frontWindow(group(g,side*w/2,0,0,side*Math.PI/2),0,.92,0,.36,.37,palette);
   }
   // One recognizable accent per house, rather than repeated tiny ornament.
-  if (type === 1) {
-    box(g, 0, 1.16, front + .035, .65, .10, .12, roofColor);
-  } else if (type !== 2) {
+  if (type === 0 || type === 3) {
     box(g, -.49, 1.97, -.35, .24, .50, .28, palette?.dark??'roofDark');
     box(g, -.49, 2.22, -.35, .29, .08, .33, trim);
   }
+  return g;
+}
+
+/** A complete little bench: timber slats sit on two continuous metal frames.
+ * Its back uprights meet the legs, while neither crosses a seating surface. */
+export function bench(parent,{x=0,y=0,z=0,rotation=0,width=1.25,timber='timber'}={}){
+  const g=group(parent,x,y,z,rotation);g.name='bench';
+  for(const side of [-1,1]){
+    const xx=side*(width/2-.17);
+    box(g,xx,.145,.115,.055,.29,.055,'metal');
+    box(g,xx,.28,-.160,.055,.56,.055,'metal');
+    box(g,xx,.255,-.0225,.055,.055,.33,'metal');
+  }
+  for(const zz of [-.105,0,.105])box(g,0,.295,zz,width,.055,.09,timber);
+  for(const yy of [.405,.515])box(g,0,yy,-.130,width,.085,.05,timber);
   return g;
 }
 
@@ -80,20 +98,21 @@ export function station(parent, { x = 0, y = 0, z = 0, rotation = 0, color = 'pl
   box(g, -1.45, .74, .298, .50, 1.07, .024, dark).castShadow=false;
   frontWindow(g, -2.22, 1.09, .29, .43, .53,palette);
   frontWindow(g, -.68, 1.09, .29, .43, .53,palette);
-  // The shelter stops well behind the platform edge: the rail has its own space.
+  // A light canopy rests on plain structural posts; its downlights belong to
+  // the ceiling, so supports never turn into glowing pillars at night.
   box(g, 1.42, 1.80, -.10, 2.82, .14, 1.65, roofColor);
+  box(g,1.42,1.715,.35,2.54,.07,.10,dark);
   for (const xx of [.20, 2.65]) {
-    cylinder(g, xx, .975, .35, .055, .055, 1.57, palette?.body??'teal', 6);
+    box(g,xx,.955,.35,.085,1.51,.085,dark);
   }
-  box(g, 1.42, .51, -.56, 1.25, .12, .38, dark);
-  box(g, 1.42, .75, -.74, 1.25, .39, .07, dark);
-  for (const xx of [1.00, 1.84]) box(g, xx, .325, -.56, .08, .26, .30, 'metal');
-  box(g, 2.88, .43, -.70, .30, .46, .30, palette?.body??'teal');
-  // Warm platform lanterns remain inside the reserved shelter footprint.
-  for(const xx of [.20,2.65]){
-    box(g,xx,1.61,.35,.13,.20,.13,'lamp');
-    box(g,xx,1.73,.35,.20,.055,.20,dark);
+  for(const xx of [.78,2.06]){
+    cylinder(g,xx,1.725,-.15,.105,.105,.025,dark,8);
+    const light=cylinder(g,xx,1.711,-.15,.075,.075,.012,'lamp',8);
+    light.castShadow=false;light.receiveShadow=false;
   }
+  bench(g,{x:1.42,y:.20,z:-.56,timber:dark});
+  box(g, 2.88, .40, -.70, .27, .40, .27, palette?.body??'teal');
+  box(g,2.88,.61,-.70,.29,.025,.29,dark);
   return g;
 }
 
@@ -125,22 +144,18 @@ export function tree(parent, { x = 0, y = 0, z = 0, rotation = 0, scale = 1, var
   return g;
 }
 
-function clockFace(g, x, y, z, radius, palette) {
-  cylinder(g, x, y, z - .01, radius, radius, .045, palette?.trim??'trim', 12).rotation.x = Math.PI / 2;
-  box(g, x, y + radius * .20, z + .016, .035, radius * .51, .02, 'metal');
-  box(g, x + radius * .16, y, z + .016, radius * .39, .035, .02, 'metal');
-}
 
-export function landmark(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1, palette } = {}) {
+export function landmark(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1, palette, animatedClocks=false } = {}) {
   const g = asset(parent, 'landmark', { x, y, z, rotation, scale });
   const type = variantOf(variant, 3);
   if (type === 0) {
     box(g, 0, .10, 0, 2.20, .20, 2.20, 'platform');
     box(g, 0, 1.74, 0, 1.46, 3.28, 1.46, 'peach');
     box(g, 0, 3.40, 0, 1.66, .16, 1.66, 'trim');
-    clockFace(g, 0, 2.77, .756, .37);
-    const sideClock = group(g, .756, 2.77, 0, Math.PI / 2);
-    clockFace(sideClock, 0, 0, 0, .37);
+    // A small plinth and a restrained belt make the clock chamber legible.
+    box(g,0,.28,0,1.54,.16,1.54,'trim');
+    box(g,0,2.21,0,1.50,.075,1.50,'trim');
+    for(const face of clockFaceSpecs('landmark',variant))buildClockFace(g,face,{animated:animatedClocks});
     roof(g, 1.84, 1.84, .71, 3.47, 'roofDark');
     cylinder(g, 0, 4.25, 0, .035, .045, .18, 'gold', 5);
     box(g, 0, .62, .75, .45, 1.04, .05, 'timber');
@@ -156,9 +171,11 @@ export function landmark(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 
     for (const side of [-1, 1]) box(g, side * .89, 1.24, -.55, .04, .66, .38, 'window');
   } else {
     box(g, 0, .07, 0, 2.28, .14, 2.28, 'platform');
-    for (const xx of [-.62, .62]) {
-      for (const zz of [-.62, .62]) box(g, xx, 1.33, zz, .15, 2.52, .15, 'timber');
-      beam(g, v(xx, .48, -.62), v(xx, 2.38, .62), .10, 'timber');
+    // The tank sits on a frame, rather than having four posts penetrate its
+    // bottom band. The narrower frame also clears the faceted tank corners.
+    for (const xx of [-.54, .54]) {
+      for (const zz of [-.54, .54]) box(g, xx, 1.18, zz, .13, 2.08, .13, 'timber');
+      beam(g, v(xx, .39, -.54), v(xx, 2.13, .54), .085, 'timber');
     }
     cylinder(g, 0, 2.81, 0, .96, .96, 1.14, 'teal', 10);
     cylinder(g, 0, 2.27, 0, 1.01, 1.01, .12, 'trim', 10);
@@ -210,7 +227,7 @@ export function apartment(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palet
   return g;
 }
 
-export function civic(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}={}){
+export function civic(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette,animatedClocks=false}={}){
   const g=asset(parent,'civic',{x,y,z,rotation,scale}),c=buildingColors(palette),type=variantOf(variant,3);
   box(g,0,.09,0,3.90,.18,3.90,'platform');
   box(g,0,1.31,-.15,3.35,2.26,2.72,c.light);
@@ -224,7 +241,7 @@ export function civic(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
   if(type===0){
     box(g,0,3.27,-.43,1.15,1.55,1.18,c.body);
     box(g,0,4.05,-.43,1.30,.14,1.33,c.trim);
-    const clock=group(g,0,3.65,.181);clockFace(clock,0,0,0,.29,c);
+    for(const face of clockFaceSpecs('civic',variant))buildClockFace(g,face,{palette:c,animated:animatedClocks});
     roof(group(g,0,0,-.43),1.50,1.53,.51,4.11,c.roof);
     cylinder(g,0,4.70,-.43,.035,.045,.20,c.accent,6);
   }else if(type===1){
@@ -251,8 +268,7 @@ export function plaza(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
     ico(g,xx,.48,zz,.45,.30,.45,type===2?'leafGold':'leaf',0);
   }
   for(const side of [-1,1]){
-    box(g,side*1.52,.33,0,.37,.12,1.20,c.dark);
-    box(g,side*1.72,.48,0,.08,.36,1.20,c.body);
+    bench(g,{x:side*1.52,y:.16,rotation:-side*Math.PI/2,width:1.20,timber:c.dark});
   }
   cylinder(g,0,.25,0,.78,.86,.18,c.trim,12);
   if(type===1){
@@ -364,8 +380,44 @@ function fieldFeature(parent,points,feature,preferred,angle,rng){
   return{center,radius};
 }
 
-function fieldHedges(parent,points,edges,rng){
-  const inner=fieldInset(points,.08);
+function hedgeCrown(parent,points,height,color){
+  // A beveled, slightly uneven crown has a leafy silhouette from both views.
+  // Every vertex is inset from the original parcel boundary strip.
+  const inset=fieldInset(points,.027),n=points.length;
+  if(n<3||inset.length!==n)return;
+  const positions=[],indices=[];
+  for(const [ring,y]of [[points,.052],[points,height-.065],[inset,height]])for(const [x,z]of ring)positions.push(x,y,z);
+  for(let ring=0;ring<2;ring++)for(let i=0;i<n;i++){
+    const a=ring*n+i,b=ring*n+(i+1)%n,c=a+n,d=b+n;
+    indices.push(a,c,b,b,c,d);
+  }
+  for(let i=1;i<n-1;i++)indices.push(n*2,n*2+i+1,n*2+i);
+  const geometry=new BufferGeometry();geometry.setAttribute('position',new Float32BufferAttribute(positions,3));
+  geometry.setIndex(indices);geometry.computeVertexNormals();
+  const crown=mesh(parent,geometry,color);crown.name='field-hedge';crown.userData.surfaceGround=true;
+}
+
+function fieldFence(parent,points,ux,uz,nx,nz,offset,maxBays){
+  const projections=points.map(([x,z])=>x*ux+z*uz),lo=Math.min(...projections)+.055,hi=Math.max(...projections)-.055;
+  if(hi-lo<.24)return;
+  const count=Math.max(1,Math.min(maxBays,Math.ceil((hi-lo)/1.05))),posts=[];
+  for(let i=0;i<=count;i++){
+    const u=lo+(hi-lo)*i/count,x=u*ux+offset*nx,z=u*uz+offset*nz;
+    if(!fieldContains(points,x,z,.045))continue;
+    const anchor=group(parent,x,0,z,Math.atan2(-uz,ux));anchor.userData.surfaceAnchor=true;
+    const post=box(anchor,0,.227,0,.07,.35,.07,'timber');
+    post.name='fence-post';posts.push(v(x,0,z));
+  }
+  for(let i=1;i<posts.length;i++)for(const y of [.17,.31]){
+    const a=posts[i-1].clone(),b=posts[i].clone(),center=a.clone().add(b).multiplyScalar(.5);
+    const anchor=group(parent,center.x,0,center.z);anchor.userData.surfaceAnchor=true;
+    a.sub(center);b.sub(center);a.y=b.y=y;
+    const rail=beam(anchor,a,b,.045,'bark');rail.name='fence-rail';
+  }
+}
+
+function fieldHedges(parent,points,edges,rng,budget=720){
+  const inner=fieldInset(points,.08),edgeBudget=Math.floor(budget/Math.max(1,edges?.length??1));
   for(const edge of edges??[]){
     if(!Number.isInteger(edge)||edge<0||edge>=points.length)continue;
     const a=points[edge],b=points[(edge+1)%points.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
@@ -374,9 +426,16 @@ function fieldHedges(parent,points,edges,rng){
     const strip=fieldBand(fieldBand(inner,nx,nz,offset+.09,offset+.25),ux,uz,start+.25,start+length-.25);
     const gate=rng()<.32?Math.min(.9,length*.17):0,middle=start+length*(.35+rng()*.3);
     const segments=gate?[fieldClip(strip,ux,uz,middle-gate/2),fieldClip(strip,-ux,-uz,-middle-gate/2)]:[strip];
+    const fence=rng()<.40,partBudget=Math.floor(edgeBudget/segments.length);
     for(const segment of segments)if(segment.length>=3){
-      const hedge=extrudedPolygon(parent,segment,.30,.23,'pineLight');
-      hedge.userData.surfaceGround=true;
+      const bays=Math.floor((partBudget-12)/36);
+      if(fence&&bays>=1){fieldFence(parent,segment,ux,uz,nx,nz,offset+.17,bays);continue;}
+      const ends=segment.map(([x,z])=>x*ux+z*uz),lo=Math.min(...ends),hi=Math.max(...ends);
+      const sections=Math.max(1,Math.min(Math.floor(partBudget/28),Math.ceil((hi-lo)/.54))),pitch=(hi-lo)/sections;
+      for(let i=0;i<sections;i++){
+        const part=fieldBand(segment,ux,uz,lo+i*pitch,lo+(i+1)*pitch);
+        hedgeCrown(parent,part,.275+rng()*.055,rng()<.3?'leaf':'pineLight');
+      }
     }
   }
 }
@@ -434,7 +493,10 @@ export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant =
         }
       }
     }
-    fieldHedges(f,points,field.hedgeEdges,rng);
+    // Fence/crown detail shares the same fixed per-field budget as cultivation.
+    // Huge user-authored parcels change spacing rather than multiplying meshes.
+    let triangles=0;f.traverse(node=>{if(node.isMesh)triangles+=(node.geometry.index?.count??node.geometry.attributes.position.count)/3;});
+    fieldHedges(f,points,field.hedgeEdges,rng,Math.max(0,1000-triangles));
   }
   if(!animatedLife)for(const animal of livestock){
     const grazing=sheep(g,{...animal,y:.07});grazing.userData.surfaceAnchor=true;
@@ -444,11 +506,7 @@ export function farmPatch(parent, { x = 0, y = 0, z = 0, rotation = 0, variant =
 
 export function sheep(parent, { x = 0, y = 0, z = 0, rotation = 0 } = {}) {
   const g = asset(parent, 'sheep', { x, y, z, rotation });
-  for (const xx of [-.12, .12]) {
-    for (const zz of [-.16, .16]) box(g, xx, .10, zz, .06, .20, .06, 'metal');
-  }
-  ico(g, 0, .31, -.035, .23, .22, .30, 'white');
-  ico(g, 0, .34, .24, .13, .15, .12, 'roofBlue');
+  buildSheepArt(g);
   return g;
 }
 

@@ -134,13 +134,16 @@ function archProfile(radius=TUNNEL_RADIUS,spring=TUNNEL_SPRING,bottom=-.9){
 }
 
 // Closed, consistently wound loft: this volume is physically subtracted from rock.
-function excavationLoft(line,start,end,profile,world){
+function excavationLoft(line,start,end,profile,world,{profileAt,breaks=[]}={}){
   const n=profile.length,vertices=[],indices=[];
-  const steps=Math.max(2,Math.ceil((end-start)/1.0));
-  for(let s=0;s<=steps;s++){
-    const p=sampleLine(line,start+(end-start)*s/steps),d=p.tangent;
+  const count=Math.max(2,Math.ceil((end-start)/1.0));
+  const distances=[...new Set([...Array.from({length:count+1},(_,s)=>start+(end-start)*s/count),
+    ...breaks.filter(s=>s>start&&s<end)])].sort((a,b)=>a-b);
+  const steps=distances.length-1;
+  for(const distance of distances){
+    const p=sampleLine(line,distance),d=p.tangent;
     const lateral=v(d.z,0,-d.x).normalize();
-    for(const q of profile){
+    for(const q of profileAt?.(distance)??profile){
       if(surfaceFor(world)){const c=physicalRailChartPoint(world,p,q.x,q.y);vertices.push(c.x,c.elevation,c.z);}
       else vertices.push(p.x+lateral.x*q.x,p.y+q.y,p.z+lateral.z*q.x);
     }
@@ -160,6 +163,25 @@ function excavationLoft(line,start,end,profile,world){
 
 export function tunnelCutter(line,start,end,world){
   return excavationLoft(line,start,end,archProfile(),world);
+}
+
+// The approach is wider than the bore, exposing the portal's front masonry.
+// Its short shoulder is hidden *inside* the portal's solid depth. Previously
+// the rock and inner arch occupied the same surface and buried the facade.
+function dressedTunnelCutter(line,start,end,spans,world){
+  const metric=physicalLineMetric(world,line),breaks=[];
+  const portals=spans.map(span=>{
+    const a=physicalDistanceAtChart(metric,span.start),b=physicalDistanceAtChart(metric,span.end);
+    for(const s of [a+.04,a+.24,b-.24,b-.04])breaks.push(chartDistanceAtPhysical(metric,s));
+    return {a,b};
+  });
+  const profileAt=distance=>{
+    const s=physicalDistanceAtChart(metric,distance);
+    let enclosure=0;
+    for(const {a,b}of portals)enclosure=Math.max(enclosure,Math.min(1,Math.max(0,(s-a-.04)/.20),Math.max(0,(b-s-.04)/.20)));
+    return archProfile(THREE.MathUtils.lerp(1.48,TUNNEL_RADIUS,enclosure));
+  };
+  return excavationLoft(line,start,end,archProfile(),world,{profileAt,breaks});
 }
 
 export function openCuttingCutter(line,start,end,height,world){
@@ -197,9 +219,9 @@ export function createMountainGeometry(mountain,lines,world){
     const start=Math.max(0,(tunnel.cutStart??tunnel.start)-2);
     const end=Math.min(line.length,(tunnel.cutEnd??tunnel.end)+2);
     if(!intersectsSlice(line,start,end))continue;
-    const covered=(line.tunnels??[]).some(span=>span.mountainId===mountain.id
+    const covered=(line.tunnels??[]).filter(span=>span.mountainId===mountain.id
       &&span.start<tunnel.end&&span.end>tunnel.start);
-    const cutter=new Brush(covered?tunnelCutter(line,start,end,world):openCuttingCutter(line,start,end,mountain.height,world),M.rock);cutter.updateMatrixWorld(true);
+    const cutter=new Brush(covered.length?dressedTunnelCutter(line,start,end,covered,world):openCuttingCutter(line,start,end,mountain.height,world),M.rock);cutter.updateMatrixWorld(true);
     const next=evaluator.evaluate(result,cutter,SUBTRACTION);
     result.geometry.dispose();cutter.geometry.dispose();result=next;result.updateMatrixWorld(true);
   }
@@ -210,19 +232,25 @@ function tunnelPortal(parent,line,distance,reverse,world,surfaceRoot){
   const p=sampleLine(line,distance),d=p.tangent;
   const angle=Math.atan2(d.x,d.z)+(reverse?Math.PI:0),physical=surfaceRoot&&surfaceFor(world);
   const g=physical?group(surfaceRoot):group(parent,p.x,p.y,p.z,angle);
+  g.name='tunnel-portal';
   if(physical){g.applyMatrix4(rigidSurfacePoseMatrix(world,p.x,p.y,p.z,angle));g.userData.surfaceSpace=true;}
-  const inner=TUNNEL_RADIUS,outer=inner+.32;
-  const s=new THREE.Shape();s.moveTo(-outer,-.46);s.lineTo(-outer,TUNNEL_SPRING);
-  s.absarc(0,TUNNEL_SPRING,outer,Math.PI,0,true);s.lineTo(outer,-.46);
-  s.lineTo(inner,-.46);s.lineTo(inner,TUNNEL_SPRING);
-  s.absarc(0,TUNNEL_SPRING,inner,0,Math.PI,false);s.lineTo(-inner,-.46);s.closePath();
-  const geo=new THREE.ExtrudeGeometry(s,{depth:.65,bevelEnabled:false,curveSegments:8});geo.translate(0,0,-.33);
-  mesh(g,geo,'platform');
-  for(let i=0;i<9;i++){
-    const angle=i/8*Math.PI;
-    const block=box(g,Math.cos(angle)*(inner+.16),TUNNEL_SPRING+Math.sin(angle)*(inner+.16),-.36,.25,.27,.09,'trim');
-    block.rotation.z=angle-Math.PI/2;
+  const inner=TUNNEL_RADIUS-.045,outer=1.40,segments=12;
+  const point=(radius,angle)=>new THREE.Vector2(Math.cos(angle)*radius,TUNNEL_SPRING+Math.sin(angle)*radius);
+  const ring=[new THREE.Vector2(-outer,-.46)];
+  for(let i=segments;i>=0;i--)ring.push(point(outer,i/segments*Math.PI));
+  ring.push(new THREE.Vector2(outer,-.46),new THREE.Vector2(inner,-.46));
+  for(let i=0;i<=segments;i++)ring.push(point(inner,i/segments*Math.PI));
+  ring.push(new THREE.Vector2(-inner,-.46));
+  const geo=new THREE.ExtrudeGeometry(new THREE.Shape(ring),{depth:.65,bevelEnabled:false});geo.translate(0,0,-.33);
+  mesh(g,geo,'platform').name='portal-shell';
+  // Wedge-shaped stones follow the same facets as the arch. A shallow facing
+  // sits on its solid shell, rather than loose boxes intersecting the ceiling.
+  for(let i=0;i<segments;i++){
+    const a=i/segments*Math.PI+.006,b=(i+1)/segments*Math.PI-.006;
+    const stone=new THREE.ExtrudeGeometry(new THREE.Shape([point(inner+.012,a),point(outer-.012,a),point(outer-.012,b),point(inner+.012,b)]),{depth:.035,bevelEnabled:false});
+    stone.translate(0,0,-.36);mesh(g,stone,'trim').name='portal-arch-stone';
   }
+  for(const side of [-1,1])box(g,side*(inner+outer)/2,(TUNNEL_SPRING-.46)/2,-.342,outer-inner-.024,TUNNEL_SPRING+.46,.035,'trim');
   // Retaining cheeks remain outside the train's complete swept envelope.
   for(const side of [-1,1])box(g,side*1.46,.46,0,.32,1.84,1.25,'platform');
 }

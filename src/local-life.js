@@ -1,21 +1,42 @@
 import * as THREE from 'three';
-import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
+import {SHEEP,sheepHeadGeometry} from './sheep-art.js';
+import {footstep,solveLeg} from './leg-motion.js';
 import {C,M} from './palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {surfaceFor,surfacePoint,surfaceOffset,surfaceDistance,chartHeadingForSurface,rigidSurfacePoseMatrix} from './world-surface.js';
 
 // Only visible detail regions supply candidates. Both selection and drawing are
 // capped; adding another continent does not add another animation loop.
-export const LIFE_LIMITS=Object.freeze({sheep:48,flocks:6,butterflies:16,fireflies:48,radius:150});
+export const LIFE_LIMITS=Object.freeze({sheep:48,flocks:6,butterflies:16,fireflies:48,radius:150,fireflyRadius:72});
 const flockKinds=new Set(['tree','house','apartment','civic','tower','plaza']);
 const insectKinds=new Set(['tree','farmPatch','plaza']);
 const tau=Math.PI*2;
-const flockFeather=24;
+const flockFeather=24,fireflyFeather=18;
+const sheepPhases=[0,Math.PI,Math.PI*1.5,Math.PI*.5];
 function seedOf(item){
   const text=String(item.id??`${item.kind}:${item.x.toFixed(3)}:${item.z.toFixed(3)}`);
   let hash=2166136261;for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619);
   return (hash>>>0)/4294967296;
 }
+const hash=(seed,salt)=>{const value=Math.sin(seed*127.1+salt*311.7)*43758.5453;return value-Math.floor(value);};
+
+/** Some habitats have no fireflies at all; occupied patches contain a small,
+ * uneven congregation. Identity, abundance and motion are stable across tiles. */
+export function fireflyHabitat(item){
+  const seed=seedOf(item),woodland=item.kind==='tree';
+  const inhabited=hash(seed,17)>(woodland?.30:.62);
+  return{seed,count:inhabited?1+Math.floor(hash(seed,29)*(woodland?5:3)):0};
+}
+
+function fireflyMembers(seed,count){
+  return Array.from({length:count},(_,member)=>{
+    const angle=hash(seed,103+member)*tau,radius=.4+hash(seed,131+member)*1.8;
+    return{phase:hash(seed,41+member)*tau,pace:.23+hash(seed,71+member)*.32,
+      x:Math.cos(angle)*radius,z:Math.sin(angle)*radius,drift:.12+hash(seed,157+member)*.24,
+      height:.30+hash(seed,181+member)*1.65,frequency:.65+hash(seed,211+member)*.8,size:.13+hash(seed,239+member)*.13};
+  });
+}
+
 function nearest(list,item,distance,capacity){
   if(list.length===capacity&&distance>=list.at(-1).distance)return;
   const record={item,distance,phase:seedOf(item)*tau};
@@ -38,7 +59,7 @@ function grazingMotion(item,phase,time,target){
   const heading=Math.atan2(bx-ax,bz-az),previous=Math.atan2(ax-point(index-1,0),az-point(index-1,1));
   const turn=THREE.MathUtils.smoothstep(fraction,0,.32),delta=Math.atan2(Math.sin(heading-previous),Math.cos(heading-previous));
   target.dx=ax+(bx-ax)*ease;target.dz=az+(bz-az)*ease;
-  target.heading=previous+delta*turn;target.walking=Math.sin(travel*Math.PI)**2;
+  target.heading=previous+delta*turn;target.walking=Math.sin(travel*Math.PI)**2;target.distance=Math.hypot(bx-ax,bz-az)*ease;
   return target;
 }
 
@@ -64,11 +85,6 @@ export function selectLocalLife(world,placements,focus,radius=LIFE_LIMITS.radius
   return {sheep,flocks:spacedFlocks,insects};
 }
 
-function headGeometry(){
-  const head=new THREE.IcosahedronGeometry(1,0).scale(.125,.14,.15),parts=[head];
-  for(const side of [-1,1])parts.push(new THREE.BoxGeometry(.09,.035,.075).translate(side*.145,.04,-.015).toNonIndexed());
-  const geometry=mergeGeometries(parts);parts.forEach(part=>part.dispose());return geometry;
-}
 function wingGeometry(){
   const geometry=new THREE.BufferGeometry();
   geometry.setAttribute('position',new THREE.Float32BufferAttribute([0,0,0,.48,.015,.12,.25,0,.22],3));
@@ -89,8 +105,8 @@ export function createLocalLife(parent,world){
     object.frustumCulled=false;object.castShadow=shadow;object.receiveShadow=shadow;root.add(object);batches.push(object);return object;
   }
   const wool=batch('grazing-sheep-wool',new THREE.IcosahedronGeometry(1,1),M.white,LIFE_LIMITS.sheep);
-  const heads=batch('grazing-sheep-heads',headGeometry(),M.roofBlue,LIFE_LIMITS.sheep);
-  const feet=batch('grazing-sheep-feet',new THREE.BoxGeometry(.055,.18,.055),M.metal,LIFE_LIMITS.sheep*4);
+  const heads=batch('grazing-sheep-heads',sheepHeadGeometry(),M.roofBlue,LIFE_LIMITS.sheep);
+  const feet=batch('grazing-sheep-feet',new THREE.BoxGeometry(1,1,1),M.metal,LIFE_LIMITS.sheep*12);
   const birdMaterial=applySceneStyle(M.roofBlue.clone());ownedMaterials.push(birdMaterial);
   const birdBodies=batch('local-swallow-bodies',new THREE.IcosahedronGeometry(1,0).scale(.07,.065,.21),birdMaterial,LIFE_LIMITS.flocks*3,false);
   const wingMaterial=applySceneStyle(M.roofBlue.clone());wingMaterial.side=THREE.DoubleSide;ownedMaterials.push(wingMaterial);
@@ -114,30 +130,32 @@ export function createLocalLife(parent,world){
   const glowMaterial=new THREE.ShaderMaterial({
     transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,toneMapped:false,
     uniforms:{night:{value:0}},
-    vertexShader:`varying vec2 vUv; varying vec3 vTint;
+    vertexShader:`attribute float lifeVisibility; varying float faunaVisibility; varying vec2 vUv; varying vec3 vTint;
       void main(){
-        vUv=uv; vTint=instanceColor;
+        faunaVisibility=lifeVisibility; vUv=uv; vTint=instanceColor;
         mat4 transform=modelViewMatrix*instanceMatrix;
         vec4 center=transform*vec4(0.,0.,0.,1.);
         center.xy+=position.xy*length(transform[0].xyz);
         gl_Position=projectionMatrix*center;
       }`,
-    fragmentShader:`uniform float night; varying vec2 vUv; varying vec3 vTint;
+    fragmentShader:`uniform float night; varying float faunaVisibility; varying vec2 vUv; varying vec3 vTint;
       void main(){
         float r=length(vUv-.5)*2.;
         float halo=pow(max(0.,1.-r),2.4);
         float core=1.-smoothstep(.08,.24,r);
-        gl_FragColor=vec4(vTint*(.5+core),night*(halo*.42+core*.58));
+        gl_FragColor=vec4(vTint*(.5+core),night*faunaVisibility*(halo*.42+core*.58));
       }`,
   });ownedMaterials.push(glowMaterial);
   const fireflies=batch('woodland-fireflies',new THREE.PlaneGeometry(1,1),glowMaterial,LIFE_LIMITS.fireflies,false);
+  const glowVisibility=new THREE.InstancedBufferAttribute(new Float32Array(LIFE_LIMITS.fireflies),1);
+  glowVisibility.setUsage(THREE.DynamicDrawUsage);fireflies.geometry.setAttribute('lifeVisibility',glowVisibility);
   // Set instance colors once; uniforms control the whole batch at dusk.
   for(let i=0;i<LIFE_LIMITS.fireflies;i++)fireflies.setColorAt(i,C.gold.clone().lerp(C.white,i%3*.12));
   for(let i=0;i<LIFE_LIMITS.butterflies*2;i++)butterflyWings.setColorAt(i,[C.gold,C.leafPink,C.lavender][Math.floor(i/2)%3]);
   const pose=new THREE.Matrix4(),part=new THREE.Matrix4(),composed=new THREE.Matrix4(),orientation=new THREE.Quaternion(),position=new THREE.Vector3(),scale=new THREE.Vector3(),point={};
   const axisX=new THREE.Vector3(1,0,0),axisZ=new THREE.Vector3(0,0,1),focusPoint=new THREE.Vector3(),lastFocus=new THREE.Vector3(Infinity,0,0),renderedFocus=new THREE.Vector3(Infinity,0,0);
-  let selected={sheep:[],flocks:[],insects:[]},flocks=[],previousPlacements=null,previousRevision=-1,lastTime=NaN,frozenTime=null,previousReducedMotion=false;
-  const grazing={};
+  let selected={sheep:[],flocks:[],insects:[]},flocks=[],glowPatches=[],previousPlacements=null,previousRevision=-1,lastTime=NaN,frozenTime=null,previousReducedMotion=false;
+  const grazing={},hoof={},joint={},hoofStride={stance:SHEEP.stance,stride:SHEEP.stride,lift:.045,weight:0};
   const stats={sheep:0,birds:0,butterflies:0,fireflies:0,instances:0,selections:0,updates:0,drawCalls:batches.length};
   function frame(item,dx,dz,height,angle,physicalHeading=false){
     surfaceOffset(world,item.x,item.z,dx,dz,point);
@@ -167,6 +185,19 @@ export function createLocalLife(parent,world){
         if(flocks.every(other=>surfaceDistance(world,candidate.item,other.item)>12))
           flocks.push({...candidate,bornAt:!Number.isFinite(lastTime)||reducedMotion||time===lastTime?time-1:time});
       }
+      // Airborne lights retain their habitat when the source ground chunk
+      // streams out; hysteresis and distance fading retire them off screen.
+      glowPatches=glowPatches.filter(({item})=>surfaceDistance(world,item,focus)<LIFE_LIMITS.fireflyRadius+fireflyFeather);
+      let reserved=glowPatches.reduce((sum,patch)=>sum+patch.count,0);
+      for(const candidate of selected.insects){
+        if(reserved===LIFE_LIMITS.fireflies)break;
+        if(surfaceDistance(world,candidate.item,focus)>LIFE_LIMITS.fireflyRadius-8)continue;
+        const profile=fireflyHabitat(candidate.item);
+        if(!profile.count||glowPatches.some(patch=>patch.key===(candidate.item.id??candidate.phase)))continue;
+        const count=Math.min(profile.count,LIFE_LIMITS.fireflies-reserved);reserved+=count;
+        glowPatches.push({...candidate,...profile,count,members:fireflyMembers(profile.seed,count),key:candidate.item.id??candidate.phase,
+          bornAt:!Number.isFinite(lastTime)||reducedMotion||time===lastTime?time-1:time});
+      }
       previousPlacements=placements;previousRevision=revision;lastFocus.copy(focusPoint);stats.selections++;
     }
     night=THREE.MathUtils.clamp(night,0,1);glowMaterial.uniforms.night.value=night;
@@ -177,13 +208,24 @@ export function createLocalLife(parent,world){
     lastTime=time;previousReducedMotion=reducedMotion;renderedFocus.copy(focusPoint);
     let sheepCount=0,birdCount=0,butterflyCount=0,flyCount=0;
     for(const {item,phase} of selected.sheep){
-      const {dx,dz,heading,walking}=grazingMotion(item,phase,time,grazing),gait=Math.sin(time*5.5+phase)*walking;
-      frame(item,dx,dz,(item.y??0)+.008,heading,true);
+      const {dx,dz,heading,walking,distance}=grazingMotion(item,phase,time,grazing);
+      frame(item,dx,dz,item.y??0,heading,true);
       pose.scale(scale.setScalar(item.scale??1));
-      instance(wool,sheepCount,0,.31+Math.abs(gait)*.012,-.035,.23,.22,.30);
+      instance(wool,sheepCount,0,.31,-.035,.23,.22,.30);
       const graze=(1-walking)*(.45+Math.sin(time*.8+phase)*.13);
-      instance(heads,sheepCount,0,.34-graze*.12,.245,1,1,1,graze);
-      for(let j=0;j<4;j++)instance(feet,sheepCount*4+j,j%2?.12:-.12,.10,j<2?-.16:.16,1,1,1,gait*(j===0||j===3?.18:-.18));
+      instance(heads,sheepCount,0,.34-graze*.08,.25,1,1,1,graze);
+      hoofStride.weight=walking;
+      const stridePhase=distance/((item.scale??1)*SHEEP.stride*2/SHEEP.stance)*tau;
+      for(let j=0;j<4;j++){
+        const x=j%2?.12:-.12,z=j<2?-.14:.14;
+        footstep(stridePhase+sheepPhases[j],hoofStride,hoof);
+        solveLeg(SHEEP.hip,SHEEP.ankle+hoof.y,hoof.z,SHEEP.upper,SHEEP.lower,joint);
+        const kneeY=SHEEP.hip-Math.cos(joint.hip)*SHEEP.upper,kneeZ=z-Math.sin(joint.hip)*SHEEP.upper;
+        instance(feet,sheepCount*12+j*3,x,(SHEEP.hip+kneeY)/2,(z+kneeZ)/2,.05,SHEEP.upper+.008,.055,joint.hip);
+        const ankleY=kneeY-Math.cos(joint.hip+joint.knee)*SHEEP.lower,ankleZ=kneeZ-Math.sin(joint.hip+joint.knee)*SHEEP.lower;
+        instance(feet,sheepCount*12+j*3+1,x,(kneeY+ankleY)/2,(kneeZ+ankleZ)/2,.045,SHEEP.lower+.008,.05,joint.hip+joint.knee);
+        instance(feet,sheepCount*12+j*3+2,x,ankleY,ankleZ+.006,.065,.036,.078);
+      }
       sheepCount++;
     }
     for(const {item,phase,bornAt} of flocks){
@@ -210,17 +252,27 @@ export function createLocalLife(parent,world){
         instance(butterflyWings,butterflyCount*2,0,0,0,1,1,1,flap,axisZ);
         instance(butterflyWings,butterflyCount*2+1,0,0,0,1,1,1,Math.PI-flap,axisZ);butterflyCount++;
       }
-      for(let member=0;member<3;member++){
-        const a=time*.21+phase+member*tau/3,pulse=.5+.5*Math.sin(time*1.15+phase+member*1.7);
-        // Glows float above the reserved tree/field envelope, never under roofs.
-        frame(item,Math.cos(a)*.55,Math.sin(a*1.3)*.55,(item.y??0)+(meadow?2.1:3.9)+Math.sin(a*2)*.18,0);
-        const size=.24+pulse*.22;instance(fireflies,flyCount++,0,0,0,size,size,size);
+    }
+    for(const {item,members,bornAt} of glowPatches){
+      const visibility=(1-THREE.MathUtils.smoothstep(surfaceDistance(world,item,focus),LIFE_LIMITS.fireflyRadius-20,LIFE_LIMITS.fireflyRadius+fireflyFeather))
+        *(reducedMotion?1:THREE.MathUtils.smoothstep(time-bornAt,0,1.2));
+      for(const {phase,pace,x,z,drift,height:baseHeight,frequency,size} of members){
+        const dx=x+Math.sin(time*pace+phase)*drift;
+        const dz=z+Math.sin(time*pace*.73+phase*1.7)*drift;
+        const height=(item.y??0)+baseHeight+Math.sin(time*pace*.81+phase)*.12;
+        frame(item,dx,dz,height,0);
+        // Each insect flashes on its own clock, with a quiet dark interval.
+        // Neither the congregation nor its trajectory follows a repeated ring.
+        const flash=Math.max(0,Math.sin(time*frequency+phase))**5;
+        instance(fireflies,flyCount,0,0,0,size,size,size);
+        glowVisibility.setX(flyCount++,visibility*(.06+.94*flash));
       }
     }
-    wool.count=heads.count=sheepCount;feet.count=sheepCount*4;birdBodies.count=birdCount;birdWings.count=birdCount*2;
+    wool.count=heads.count=sheepCount;feet.count=sheepCount*12;birdBodies.count=birdCount;birdWings.count=birdCount*2;
     butterflyWings.count=butterflyCount*2;fireflies.count=flyCount;
     for(const batch of batches)if(batch.count)batch.instanceMatrix.needsUpdate=true;
     if(birdCount)for(const batch of [birdBodies,birdWings])batch.geometry.attributes.lifeVisibility.needsUpdate=true;
+    if(flyCount)glowVisibility.needsUpdate=true;
     Object.assign(stats,{sheep:sheepCount,birds:birdCount,butterflies:butterflyCount,fireflies:flyCount,
       instances:sheepCount+birdCount+butterflyCount+flyCount,updates:stats.updates+1});
   }

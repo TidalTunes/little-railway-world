@@ -15,7 +15,10 @@ const coverSample={};
 /** Color only: the mountain's shared geometric surface is never displaced. */
 export function mountainSurfaceColor(world,mountain,point,normal,{surface=true,target}={}){
   const color=target??C.rock.clone(),brightness=normal.x*-.55+normal.y*.77+normal.z*.32;
-  const stone=normal.y<-.15?C.rockDark:normal.y>=0&&normal.y<.15?C.rockLight
+  // CSG splits a vertical wall into many triangles; roundoff can put their
+  // nominally zero Y normals on either side of zero. Give both the same stone
+  // tone, or those invisible numerical differences become bright stripes.
+  const stone=normal.y<-.15?C.rockDark:Math.abs(normal.y)<.15?C.rockLight
     :brightness<.05?C.rockDark:brightness>.68?C.rockLight:C.rock;
   if(!surface||normal.y<.18)return color.copy(stone);
   const h=Math.max(0,point.y),altitude=h/mountain.height;

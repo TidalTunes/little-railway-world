@@ -92,6 +92,15 @@ instances. The first V transition peaked at 5.0 ms CPU and a 9.3 ms frame interv
 with no pending chunk requests. At overview scale the locator replaces subpixel
 character parts, saving roughly 55 draws while retaining the same location.
 
+The close-detail polish keeps those four vegetation batches. Exact foothill
+grounding adds six grass-only `vec4` instance attributes (0.92 MB at full capacity,
+14 attribute locations including the existing matrix and color). Facet indexes
+and root heights are cached; ordinary frames only change uniforms. Actual island
+plans measured 27–39 ms cold and 8.7–10.2 ms on cached five-unit refreshes.
+Articulated sheep retain the same fauna batches and 48-animal cap. All town-clock
+hands use one additional draw, capped at 256 faces and updated at 12 Hz. Farm
+boundary geometry stays within the existing 1,000-triangle per-field budget.
+
 - Biome queries use cached polygon and hole bounds, lazy ring/edge indexes, and bounded exact clearance searches. Regional clipping passes only intersecting polygons and holes to the Boolean sweep, then retains the exact local outline intersection.
 - Biome scenery samples a continuous seeded physical field with no scans over distant sites. Candidate and accepted-asset budgets bound each region. Meadow, scrub, dune, outcrop and frost patches each use one existing material and at most 150 authored triangles; curved grounding remains bounded. Regional ground colors share the fixed-size globe lookup with the map, so the extra ecological variety adds no overview geometry or per-frame scenery work.
 - Route and river queries use exact spatial indexes. Junction discovery prunes distant segments before intersection tests. Deterministic region generation reuses the same immutable network indexes.

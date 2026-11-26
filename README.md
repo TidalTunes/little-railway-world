@@ -86,6 +86,7 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 | `src/mountain-shape.js` | Shared irregular mountain mesh and exact surface-height lookup. |
 | `src/geography.js` | Clipped biome terrain, excavated water, continuous bridge decks, mountain cuttings, and tunnel portals. |
 | `src/assets.js` | Reusable low-poly assets with declared silhouette bounds. |
+| `src/clock-design.js` / `src/clock-hands.js` | Shared clock-face construction and one bounded batch of synchronized moving hands. |
 | `src/world.js` / `src/railway.js` | Scene composition, physical track layers, and instanced carriage rendering. |
 | `src/world-worker.js` / `src/detail-compiler.js` | Worker planning, regional geometry and transferable packets; `world-worker-client.js` coordinates bounded parallel work and cancellation. |
 | `src/world-renderer.js` | Camera coverage, prefetch, budgeted hydration, progressive regional reveal, and cache eviction. |
@@ -93,7 +94,9 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 | `src/map-world.js` | Simplified terrain and rail network, one owner-colored city glyph per settlement, and live train markers. |
 | `src/view-controller.js` / `src/camera-modes.js` | Three camera views, zoom boundaries, train selection, follow behavior, and input. |
 | `src/walking-player.js` / `src/walking-input.js` | Persistent articulated traveller, fixed-step walking and jumping, collisions, perspective camera, and isolated controls. |
+| `src/leg-motion.js` / `src/sheep-art.js` | Connected two-link limbs, support/recovery steps, and a shared sheep silhouette. |
 | `src/walking-detail.js` / `src/walking-vegetation.js` / `src/walking-sky.js` | Bounded nearby vegetation, rooted GPU wind, and an atmospheric walking sky. |
+| `src/walking-ground.js` | Cached exact mountain facets for grass-root grounding and gradual terrain-based vegetation cover. |
 | `src/character-transition.js` / `src/character-marker.js` | Continuous perspective-to-orthographic camera dolly and a persistent map location marker. |
 | `src/city-streets.js` | Joined path footprints with clean junctions and courtyards. |
 | `src/view-compositor.js` | Transitions between complete map and miniature renders. |

@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { tunnelCutter, createMountainGeometry, buildMountains, buildTerrain } from '../src/geography.js';
 import { generateWorld, sampleLine } from '../src/world-model.js';
 import { M, C } from '../src/palette.js';
+import {createIslandWorld} from '../src/island-world.js';
 
 const rockMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
 const railY = .42;
@@ -153,6 +154,31 @@ test('generated portal openings join the actual excavation without obstructing t
     }
   }
   assert.ok(portals > 0, 'the default world exercises tunnel portals');
+});
+
+test('island portal facades are exposed while their rear masonry joins the rock',()=>{
+  const world=generateWorld({...createIslandWorld(),density:0});
+  const scene=new THREE.Group();buildMountains(scene,world);scene.updateMatrixWorld(true);
+  const rock=new THREE.Group();
+  for(const child of [...scene.children])if(child.name.endsWith('-surface'))rock.add(child);
+  rock.updateMatrixWorld(true);
+  let checked=0;
+  for(const line of world.lines)for(const span of line.tunnels)for(const [distance,sign]of [[span.start,-1],[span.end,1]]){
+    const p=sampleLine(line,distance),forward=new THREE.Vector3(p.tangent.x,0,p.tangent.z);
+    const lateral=new THREE.Vector3(p.tangent.z,0,-p.tangent.x);
+    for(let i=0;i<12;i++){
+      const angle=(i+.5)/12*Math.PI;
+      const center=new THREE.Vector3(p.x,p.y+1.8+Math.sin(angle)*1.21,p.z)
+        .addScaledVector(lateral,Math.cos(angle)*1.21).addScaledVector(forward,sign*.365);
+      const from=center.clone().addScaledVector(forward,sign*.8);
+      assert.equal(rayHits(rock,from,center).length,0,'approach rock cannot hide the facing stones');
+      assert.ok(rayHits(scene,from,center.clone().addScaledVector(forward,-sign*.10)).length>0,
+        'each wedge is part of a continuous, visible masonry face');
+      checked++;
+    }
+  }
+  assert.ok(checked>=24,'both sides of a real island tunnel are exercised');
+  scene.traverse(node=>node.geometry?.dispose());rock.traverse(node=>node.geometry?.dispose());
 });
 
 test('routes crossing shallow foothills receive open excavations even without tunnel roof cover', () => {

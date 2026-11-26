@@ -40,11 +40,17 @@ Geographic coordinates determine anchors and continuous terrain. Buildings, tree
 
 City approaches share a straight axis. Tracks leave those approaches through tangent-connected bends with a minimum turning radius. Shared sections are rendered once. Ballast, sleepers, rails, and wheels meet at explicit elevations. These construction rules apply to generated and authored layouts.
 
+Close inspection should reveal fitted construction: cottage variation comes from roof orientation and proportion; station lamps sit beneath the canopy; bench slats meet their frames; water tanks rest on supporting posts. Farm boundaries alternate shaped, faceted hedge crowns and timber posts with two connected rails. Clock chambers have framed faces, hour marks, and synchronized hands. Tunnel approaches expose a continuous masonry arch, with a recessed shoulder behind its face and a lining separated from the excavated rock.
+
+Green ground keeps a grass understorey. Density, blade height and color taper with the painted terrain into dry ground, rock and snow, rather than stopping at a biome or mountain boundary. Each blade root samples the actual mountain facet once when its local neighborhood is prepared. Roads, water, fields and structures retain their deliberate clearances.
+
 ## Motion
 
 Trains follow continuous circuits through cities when the graph permits them. Each carriage follows the exact route distance, including transitions between connections. Whole-train reservations and following gaps keep traffic apart. Networks with no continuous circuit use shuttles that dwell and reverse at terminal stops. Double-ended trains reverse velocity without turning around or jumping along the track.
 
 Small herds inhabit pasture parcels, including trough fields, and meadow sheep use the same walking system. They turn, walk between grazing spots, and rest inside reserved areas clear of crops, hedges, farm features and other animals. Swallows retain their flight paths as scenery streams past, with a soft distance fade; butterflies flutter over fields, and fireflies glow at night. Nearby life uses fixed-capacity instance batches independent of the total map size. Small authored worlds retain a boat and balloon. Water glints and coastal breakers animate through shared shader time. In strategy views Space pauses all simulation motion; in third person it jumps while the railway continues; reduced-motion preferences start paused.
+
+Running has its own support, flight and recovery phases, with bent knees, elbows and a forward lean. Sheep have attached articulated legs and stepping hooves beneath a steady wool body. Fireflies gather in sparse, irregular patches below the canopy; each has its own height, drift and flash rhythm. Their retained habitat anchors and distance fades prevent scenery streaming from rearranging the lights. Town clocks advance from the shared simulation time in one bounded instanced batch.
 
 Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions retain the globe’s curvature and simplify the art. The camera moves around the globe as the user pans, wrapping continuously across the date line; closer views orient to the local ground. Reduced-motion preferences make camera transitions immediate.
 
