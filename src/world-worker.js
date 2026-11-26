@@ -11,7 +11,24 @@ function buffersOf(value,result=new Set()){
   else if(value&&typeof value==='object')for(const child of Object.values(value))buffersOf(child,result);
   return result;
 }
-self.onmessage=({data:{id,type,payload}})=>{
+self.onmessage=({data:{id,type,payload,port}})=>{
+  if(type==='share-world'){
+    try{
+      if(!world)throw new Error('Generate a world before sharing detail');
+      const {mapTerrain,...network}=world;
+      port.postMessage({world:network});
+    }catch(error){port.postMessage({error:{name:error.name,message:error.message}});}
+    finally{port.close();}
+    return;
+  }
+  if(type==='attach-port'){
+    port.onmessage=({data})=>{
+      if(data.error)self.postMessage({id,error:data.error});
+      else{world=data.world;self.postMessage({id,result:{ready:true}});}
+      port.close();
+    };
+    return;
+  }
   try{
     const start=performance.now();let result;
     if(type==='generate'){

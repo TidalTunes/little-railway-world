@@ -24,7 +24,7 @@ function shaderFor(material){
   material.onBeforeCompile(shader);return shader;
 }
 function fixture(t,options={}){
-  const parent=new THREE.Group(),renderer=createWorldRenderer(parent,world(),{size:48,maxChunks:1,maxPending:1,requestChunk:flatPacket,...options});
+  const parent=new THREE.Group(),renderer=createWorldRenderer(parent,world(),{size:48,maxChunks:1,maxPending:1,requestChunk:request=>flatPacket(request),...options});
   t.after(()=>renderer.dispose());
   return {parent,renderer,update(camera=cameraAt()){renderer.update(camera,{target:new THREE.Vector3(camera.position.x,0,camera.position.z),budgetMs:100});}};
 }
@@ -104,6 +104,19 @@ test('obsolete in-flight worker results are discarded before any hydration or GP
   jobs[1].resolve(flatPacket(jobs[1].request));await flush();f.update(cameraAt(600));
   assert.equal(uploads.length,1);assert.equal(uploads[0].geometry.attributes.position.getX(0),576);
   assert.equal(f.renderer.ready,true);assert.equal(f.renderer.stats.uploadedMeshes,1);
+});
+
+test('moving the view cancels obsolete requests and a late response cannot replace a newer request for the same cell',async t=>{
+  const jobs=[];
+  const f=fixture(t,{requestChunk:(request,{signal})=>new Promise(resolve=>jobs.push({request,signal,resolve}))});
+  f.update();await flush();
+  f.update(cameraAt(600));await flush();assert.equal(jobs[0].signal.aborted,true);
+  f.update();await flush();assert.equal(jobs[1].signal.aborted,true);assert.equal(jobs.length,3);
+  jobs[0].resolve(flatPacket(jobs[0].request));await flush();f.update();await flush();
+  assert.equal(jobs.length,3,'the stale response must not remove its replacement from pending');
+  assert.equal(f.renderer.root.children.length,0);
+  jobs[2].resolve(flatPacket(jobs[2].request));await flush();f.update();
+  assert.equal(f.renderer.ready,true);assert.equal(f.renderer.stats.errors,0);
 });
 
 test('moving away during an asynchronous upload releases the obsolete chunk once and ignores its acknowledgement',async t=>{

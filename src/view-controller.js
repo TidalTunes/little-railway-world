@@ -27,7 +27,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   let mode='world',blend=0,selected=null,hovered=null,zoomGoal=null;
   let zoomScale=1;
   let homePosition=new THREE.Vector3(),homeTarget=new THREE.Vector3();
-  let lastPointer=null,gesture=null,gestureBlocked=false,hoverClock=0;
+  let lastPointer=null,gesture=null,gestureBlocked=false,hoverClock=0,inputPlan=null;
   const pointers=new Set(),heldKeys=new Set(),raycaster=new THREE.Raycaster();
   raycaster.firstHitOnly=true;
   const pickMeshes=[];
@@ -37,6 +37,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   const surfaceUp=new THREE.Vector3(),viewDirection=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3();
   const keyboardRight=new THREE.Vector3(),keyboardUp=new THREE.Vector3();
   const keyboardVelocity=new THREE.Vector2(),keyboardIntent=new THREE.Vector2(),keyboardTravel=new THREE.Vector2();
+  const stoppedPosition=new THREE.Vector3(),stoppedTarget=new THREE.Vector3();
   const chartBounds=new WeakMap();
   const domState={};
   const ringGeometry=new THREE.RingGeometry(.94,1,64);ringGeometry.rotateX(-Math.PI/2);
@@ -104,7 +105,15 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     getWorldRoot()?.scale.set(1,surfaceFor(getWorld())?1:1-blend*.985,1);
   }
 
-  function flushControls(){const damping=controls.enableDamping;controls.enableDamping=false;controls.update();controls.enableDamping=damping;}
+  function flushControls(){
+    // Drain an old gesture's inertial deltas without applying its remaining
+    // travel. Applying the whole tail when WASD starts jumps the ground focus.
+    const damping=controls.enableDamping,zoom=navigation.zoom;
+    stoppedPosition.copy(navigation.position);stoppedTarget.copy(controls.target);
+    controls.enableDamping=false;controls.update();
+    navigation.position.copy(stoppedPosition);controls.target.copy(stoppedTarget);navigation.zoom=zoom;
+    navigation.updateProjectionMatrix();controls.update();controls.enableDamping=damping;
+  }
   function clearSelection(){selected=null;zoomGoal=null;}
   const zoomClamp=value=>Math.max(CAMERA_ZOOM.min,Math.min(CAMERA_ZOOM.max*zoomScale,value));
   function followZoom(){return zoomScale*Math.max(CAMERA_ZOOM.follow,fitZoomForSpan({
@@ -122,7 +131,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     constrainTarget();presentation.copy(navigation);presentationTarget.copy(controls.target);
     presentation.updateProjectionMatrix();blend=mapBlendForZoom(presentation.zoom/zoomScale);
     mode=modeForZoom(presentation.zoom/zoomScale);ring.visible=mapRing.visible=false;
-    updateCamera();updateDOM();
+    configureInput();updateCamera();updateDOM();
   }
   function updateDOM(){
     const values={view:mode,following:selected?.state.id??'',zoom:presentation.zoom.toFixed(3),requestedZoom:navigation.zoom.toFixed(3),detailLoading:String(blend<1&&!isDetailReady()),mapBlend:blend.toFixed(3)};
@@ -190,11 +199,16 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     select(trains[next]);
   }
   function configureInput(){
-    const plan=mode==='map'||mode==='close'||blend>.7;
-    controls.enableRotate=!plan&&!selected;controls.enablePan=!selected;controls.screenSpacePanning=!plan&&!surfaceFor(getWorld());
+    // Every local view uses one ground pivot. In particular, crossing into
+    // close view must not turn an orbit gesture into a chart-space pan. Only
+    // the fully flattened overview drags the map beneath the camera.
+    const plan=blend===1&&mode==='map';
+    if(inputPlan!==null&&plan!==inputPlan)flushControls();
+    inputPlan=plan;
+    controls.enableRotate=!plan;controls.enablePan=plan&&!selected;controls.screenSpacePanning=false;
     controls.mouseButtons.LEFT=plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
-    controls.touches.TWO=THREE.TOUCH.DOLLY_PAN;
+    controls.touches.TWO=plan?THREE.TOUCH.DOLLY_PAN:THREE.TOUCH.DOLLY_ROTATE;
   }
   function moveKeyboard(horizontal,verticalAmount){
     if(!horizontal&&!verticalAmount)return;

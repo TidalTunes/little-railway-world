@@ -35,8 +35,8 @@ function fixture(t,{reduced=true}={}){
   view.controls.update();view.setHome();view.update(1/60);
   function key(value,type='keydown',properties={}){const item=event(type,{key:value,...properties});canvas.dispatchEvent(item);return item;}
   function update(count=1,dt=1/60){for(let i=0;i<count;i++)view.update(dt);}
-  function pointer(type,x,y){
-    const item=event(type,{clientX:x,clientY:y,pageX:x,pageY:y,buttons:type==='pointermove'?1:0});
+  function pointer(type,x,y,properties={}){
+    const item=event(type,{clientX:x,clientY:y,pageX:x,pageY:y,buttons:type==='pointermove'?1:0,...properties});
     canvas.dispatchEvent(item);
     if(type==='pointermove'||type==='pointerup')document.dispatchEvent(item);
     if(type==='pointerup')window.dispatchEvent(item);
@@ -242,4 +242,63 @@ test('Home, focus loss and hidden pages discard keyboard momentum immediately',t
     const stop=view.controls.target.clone();f.update(60);near(view.controls.target,stop);
   }
   f.document.hidden=false;f.key('Home');f.key('w');f.update(30);f.key('Home');f.update(60);near(view.controls.target,f.home);
+});
+
+test('close drag orbits one stationary ground focus at every latitude and across the close threshold',t=>{
+  const f=fixture(t),{view}=f;
+  for(const [longitude,latitude] of [[10,25],[120,75],[-100,-65],[179,40]]){
+    const focus=new THREE.Vector3(radius*longitude*radians,1.3,-radius*latitude*radians);
+    view.controls.target.copy(focus);
+    view.navigation.position.copy(focus).add(new THREE.Vector3().setFromSphericalCoords(6000,Math.PI/4,.35));
+    view.navigation.zoom=24;view.navigation.updateProjectionMatrix();f.update();
+    const before=view.navigation.position.clone().sub(focus);
+    f.pointer('pointerdown',400,350);f.pointer('pointermove',440,365);f.update();
+    view.navigation.zoom=60;view.navigation.updateProjectionMatrix();f.update();
+    f.pointer('pointermove',500,395);f.pointer('pointerup',500,395);f.update(180);
+    assert.equal(view.mode,'close');near(view.controls.target,focus);
+    const after=view.navigation.position.clone().sub(focus);
+    assert.ok(after.angleTo(before)>.1,'drag changes the orbit through the core-to-close boundary');
+    assert.ok(Math.abs(after.length()-before.length())<1e-7,'orbit keeps a constant pivot distance');
+    const ground=surfacePoint(f.world,focus.x,focus.y,focus.z);
+    const center=ground.clone().project(f.camera);
+    assert.ok(Math.hypot(center.x,center.y)<1e-9,'the physical ground pivot remains at the screen centre');
+    const physicalOffset=f.camera.position.clone().sub(ground);
+    assert.ok(Math.abs(physicalOffset.length()-after.length())<1e-7,'bending the camera cannot stretch its orbit');
+    const normal=surfaceNormal(f.world,focus.x,focus.z);
+    assert.ok(Math.abs(physicalOffset.angleTo(normal)-after.angleTo(new THREE.Vector3(0,1,0)))<1e-10,
+      'the chosen ground angle is preserved by the local tangent frame');
+  }
+});
+
+test('a followed train remains the pivot while dragging, and WASD takes over without a residual pan',t=>{
+  const f=fixture(t,{reduced:false}),{view}=f;
+  f.key(']');f.update(360);assert.equal(view.selected,'front');
+  const focus=view.controls.target.clone(),before=view.navigation.position.clone().sub(focus);
+  f.pointer('pointerdown',400,350);f.pointer('pointermove',520,410);f.pointer('pointerup',520,410);f.update();
+  assert.equal(view.selected,'front');near(view.controls.target,focus,1e-6);
+  assert.ok(view.navigation.position.clone().sub(focus).angleTo(before)>.01,'following still allows a deliberate orbit');
+  const pivot=view.controls.target.clone(),position=view.navigation.position.clone();
+  f.key('d');near(view.controls.target,pivot);near(view.navigation.position,position);
+  f.update();f.key('d','keyup');assert.equal(view.selected,null);
+  const offset=view.navigation.position.clone().sub(view.controls.target);
+  near(offset,position.sub(pivot),1e-7);
+  assert.ok(view.controls.target.distanceTo(pivot)<1,'a new pan begins with smooth acceleration, not the previous drag tail');
+});
+
+test('touch orbit and pinch in close view keep the same spherical ground focus',t=>{
+  const f=fixture(t),{view}=f;
+  view.navigation.zoom=40;view.navigation.updateProjectionMatrix();f.update();
+  const focus=view.controls.target.clone(),before=view.navigation.position.clone();
+  const touch={pointerType:'touch'};
+  f.pointer('pointerdown',400,350,{...touch,pointerId:1});
+  f.pointer('pointerdown',500,350,{...touch,pointerId:2});
+  f.pointer('pointermove',430,380,{...touch,pointerId:1});
+  f.pointer('pointermove',550,380,{...touch,pointerId:2});
+  f.pointer('pointerup',550,380,{...touch,pointerId:2});
+  f.pointer('pointerup',430,380,{...touch,pointerId:1});f.update(180);
+  near(view.controls.target,focus);
+  assert.ok(view.navigation.position.distanceTo(before)>10,'the two-finger translation rotates around the pivot');
+  assert.notEqual(view.navigation.zoom,40,'pinch still controls zoom');
+  const center=surfacePoint(f.world,focus.x,focus.y,focus.z).project(f.camera);
+  assert.ok(Math.hypot(center.x,center.y)<1e-9);
 });

@@ -89,8 +89,10 @@ const WAYPOINTS={
 
 export function createEarthWorld({seed='earth-continental-railways',trainCount=250}={}){
   const owners=['coral','teal','gold','blue'];
+  // Development supplies the footprint: an eight-unit cap left even the
+  // world's largest cities with room for only a station and a few houses.
   const cities=geography.cities.map((city,index)=>({...city,level:Math.max(5,Math.min(10,Math.round(4+Math.log10(Math.max(city.sourcePopulation,100000)/100000)*2))),
-    radius:8,ownerId:owners[index%owners.length]}));
+    ownerId:owners[index%owners.length]}));
   const connections=[],circuits=[];
   for(const [id,names]of Object.entries(EARTH_CIRCUITS)){
     const stops=names.split(' '),segments=[];

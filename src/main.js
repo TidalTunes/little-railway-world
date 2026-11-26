@@ -140,7 +140,7 @@ async function loadWorld(input={}){
     nextShell=createSurfaceShell(next);
     if(nextShell){root.add(nextShell.detail);nextMap.root.add(nextShell.map);}
     nextRailway=makeTrains(root,next);
-    nextDetail=createWorldRenderer(root,next,{requestChunk:region=>nextWorker.request('chunk',region),uploadMesh:mesh=>geometryUploader.upload(mesh)});
+    nextDetail=createWorldRenderer(root,next,{maxPending:3,requestChunk:(region,options)=>nextWorker.request('chunk',region,options),uploadMesh:mesh=>geometryUploader.upload(mesh)});
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
@@ -188,7 +188,7 @@ function metrics(now,interval,cpu){
     geometries:String(renderer.info.memory.geometries),activeTrains:String(active),
     visibleTrains:String(railway.stats?.visibleTrains??0),detailChunks:String(detail.stats?.chunks??detail.stats?.loadedChunks??0),
     detailReady:String(detail.ready),detailSettled:String(detail.settled),detailRevealing:String(detail.stats.revealingChunks),detailBase:String(detailBase.root.visible),detailRequired:String(detail.stats.requiredChunks??0),
-    detailPending:String(detail.stats.pendingChunks??0),detailBytes:String(detail.stats.bytes??0),
+    detailPending:String(detail.stats.pendingChunks??0),detailWorkers:String(worker.stats.workers),detailWorkerMs:String(Math.round(worker.stats.lastChunkMs)),detailBytes:String(detail.stats.bytes??0),
     detailLimited:String(detail.stats.coverageLimited??false),detailErrors:String(detail.stats.errors??0),
     transitionCpuMax:transitionCpuMax.toFixed(2),transitionFrameMax:transitionFrameMax.toFixed(2),transitionFrames:String(transitionSamples),
     transitionPeak,

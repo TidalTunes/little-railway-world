@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import geography from '../data/earth-geography.json' with {type:'json'};
 import {createEarthWorld,projectEarth,EARTH_RADIUS,EARTH_CIRCUITS} from '../src/earth-world.js';
-import {generateWorld,validateWorld} from '../src/world-model.js';
+import {generateWorld,generateWorldRegion,validateWorld} from '../src/world-model.js';
 import {biomeDistance} from '../src/biomes.js';
 import {createNetworkTraffic} from '../src/network-traffic.js';
 
@@ -11,6 +11,31 @@ const distance=(kind,lon,lat)=>{const p=projectEarth(lon,lat);return biomeDistan
 let input,network;
 function factory(){return input??=createEarthWorld();}
 function world(){return network??=generateWorld(factory(),{detail:'network'});}
+
+test('Earth cities form substantial residential neighborhoods with regional boundary clearance',()=>{
+  const model={...world(),density:0},regions=new Map(),cities=[];
+  for(const city of model.cities){
+    const key=`${Math.floor(city.x/192)}:${Math.floor(city.z/192)}`;
+    if(!regions.has(key))regions.set(key,generateWorldRegion(model,city));
+  }
+  const placements=[],cityStreets=[];
+  for(const region of regions.values()){
+    placements.push(...region.placements);cityStreets.push(...region.cityStreets);cities.push(...region.cities);
+  }
+  const houses=placements.filter(p=>p.kind==='house');
+  assert.ok(placements.length>=1100,'the former fixed eight-unit footprints held only 77 buildings across Earth');
+  assert.ok(houses.length>=700,'development produces hundreds of actual homes rather than unfilled budgets');
+  assert.ok(cities.filter(c=>houses.filter(p=>p.cityId===c.id).length>=3).length>=70,'most cities have a residential neighborhood');
+  assert.ok(cities.every(c=>c.radius>=16),'higher-level Earth cities use their development footprint');
+  const sources=new Map(factory().cities.map(c=>[c.id,c]));
+  for(const city of cities){
+    assert.equal(city.x,sources.get(city.id).x);assert.equal(city.z,sources.get(city.id).z);
+    assert.ok(placements.filter(p=>p.cityId===city.id).every(p=>Math.hypot(p.x-city.x,p.z-city.z)+p.radius<=city.radius+1e-6));
+  }
+  // Combining separately generated regions detects cross-cell overlaps as
+  // well as coastal, track, station, street, and mountain clipping.
+  assert.deepEqual(validateWorld({...model,cities,placements,cityStreets}),[]);
+});
 
 test('Earth geography covers every continent and keeps islands, inland water and exact polar ice',()=>{
   for(const [name,lon,lat]of [['North America',-100,40],['South America',-60,-10],['Africa',20,0],['Europe',10,50],['Asia',90,40],['Australia',135,-25],['Antarctica',0,-80]]){

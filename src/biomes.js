@@ -9,25 +9,37 @@ const footprintCache = new WeakMap();
 const polygonIndexes = new WeakMap();
 const ringIndexes = new WeakMap();
 function ringIndex(ring){
-  if(!ringIndexes.has(ring)){
-    const edges=ring.map((b,i)=>{const a=ring[(i+ring.length-1)%ring.length];
-      return{a,b,box:pointsBox([{x:a[0],z:a[1]},{x:b[0],z:b[1]}])};});
-    ringIndexes.set(ring,new BoundsTree(edges,edge=>edge.box));
-  }
+  if(!ringIndexes.has(ring))ringIndexes.set(ring,{
+    bounds:pointsBox(ring.map(([x,z])=>({x,z}))),edges:null,tree:null});
   return ringIndexes.get(ring);
+}
+function prepareRingEdges(ring,index){
+  if(index.edges)return;
+  index.edges=ring.map((b,i)=>{const a=ring[(i+ring.length-1)%ring.length];
+    return{a,b,box:pointsBox([{x:a[0],z:a[1]},{x:b[0],z:b[1]}])};});
+  if(ring.length>32)index.tree=new BoundsTree(index.edges,edge=>edge.box);
 }
 
 function polygonIndex(polygons){
   if(!polygonIndexes.has(polygons)){
-    const edges=[],items=polygons.map(polygon=>{
-      for(const ring of polygon)for(let i=1;i<ring.length;i++){
-        const a=ring[i-1],b=ring[i];edges.push({a,b,box:pointsBox([{x:a[0],z:a[1]},{x:b[0],z:b[1]}])});
-      }
-      return{polygon,box:pointsBox(polygon[0].map(([x,z])=>({x,z})))};
-    });
-    polygonIndexes.set(polygons,{polygons:new BoundsTree(items,item=>item.box),edges:new BoundsTree(edges,item=>item.box)});
+    const items=polygons.map(polygon=>({polygon,box:ringIndex(polygon[0]).bounds,
+      holes:new BoundsTree(polygon.slice(1),ring=>ringIndex(ring).bounds)}));
+    // Membership checks need only rings beside the point. Build the much larger
+    // nearest-edge tree lazily, only for actual distance/footprint queries.
+    polygonIndexes.set(polygons,{polygons:new BoundsTree(items,item=>item.box),edges:null});
   }
   return polygonIndexes.get(polygons);
+}
+function polygonEdges(polygons){
+  const index=polygonIndex(polygons);
+  if(!index.edges){
+    const edges=[];
+    for(const polygon of polygons)for(const ring of polygon)for(let i=1;i<ring.length;i++){
+      const a=ring[i-1],b=ring[i];edges.push({a,b,box:pointsBox([{x:a[0],z:a[1]},{x:b[0],z:b[1]}])});
+    }
+    index.edges=new BoundsTree(edges,edge=>edge.box);
+  }
+  return index.edges;
 }
 
 function randomFor(seed) {
@@ -80,23 +92,31 @@ function segmentDistance(x, z, a, b) {
 }
 
 function inRing(ring, x, z) {
+  const index=ringIndex(ring),bounds=index.bounds;
+  if(x<bounds.minX-EPS||x>bounds.maxX+EPS||z<bounds.minZ-EPS||z>bounds.maxZ+EPS)return false;
+  // Most candidates miss a coastline's holes completely. Cache their bounds
+  // first; allocate edge lists and ray trees only for rings actually visited.
+  prepareRingEdges(ring,index);
   let inside = false;
-  const edges=ring.length>32?ringIndex(ring).query({minX:x-EPS,maxX:Infinity,minZ:z-EPS,maxZ:z+EPS})
-    :ring.map((a,i)=>({a,b:ring[(i+ring.length-1)%ring.length]}));
-  for (const {a,b} of edges) {
-    if (segmentDistance(x, z, a, b) < EPS) return true;
+  const edges=index.tree?index.tree.query({minX:x-EPS,maxX:Infinity,minZ:z-EPS,maxZ:z+EPS}):index.edges;
+  for (const {a,b,box} of edges) {
+    // The ray reaches the whole eastward coastline; only edges beside the point
+    // need a Euclidean boundary test. This preserves the same EPS convention.
+    if(x>=box.minX-EPS&&x<=box.maxX+EPS&&z>=box.minZ-EPS&&z<=box.maxZ+EPS
+      &&segmentDistance(x,z,a,b)<EPS)return true;
     if ((a[1] > z) !== (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
   }
   return inside;
 }
 
 function inPolygons(polygons, x, z) {
-  return polygonIndex(polygons).polygons.query(pointBox(x,z,EPS)).some(({polygon}) =>
-    inRing(polygon[0], x, z) && !polygon.slice(1).some(hole => inRing(hole, x, z)));
+  const point=pointBox(x,z,EPS);
+  return polygonIndex(polygons).polygons.query(point).some(({polygon,holes}) =>
+    inRing(polygon[0],x,z)&&!holes.query(point).some(hole=>inRing(hole,x,z)));
 }
 
 function signedDistance(polygons, x, z) {
-  const distance=polygonIndex(polygons).edges.nearest(x,z,edge=>segmentDistance(x,z,edge.a,edge.b));
+  const distance=polygonEdges(polygons).nearest(x,z,edge=>segmentDistance(x,z,edge.a,edge.b));
   return inPolygons(polygons, x, z) ? distance : -distance;
 }
 
@@ -326,5 +346,10 @@ export function biomeDistance(world, type, x, z) {
 /** Tests the complete circular footprint, including borders and shorelines. */
 export function fitsBiome(world, types, x, z, radius = 0) {
   if (!Number.isFinite(radius) || radius < 0) return false;
-  return signedDistance(polygonsFor(world, types), x, z) >= radius - EPS;
+  const polygons=polygonsFor(world,types),clearance=radius-EPS;
+  if(clearance<=0)return signedDistance(polygons,x,z)>=clearance;
+  if(!inPolygons(polygons,x,z))return false;
+  // A footprint needs a yes/no clearance answer, not the distance to a shore
+  // thousands of units away. A bounded exact nearest query stops there.
+  return polygonEdges(polygons).nearest(x,z,edge=>segmentDistance(x,z,edge.a,edge.b),clearance)>=clearance;
 }

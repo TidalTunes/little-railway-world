@@ -321,10 +321,15 @@ function placeCityDevelopment(world,selectedCities=world.cities) {
       const random=cityRandom(world.seed,`${city.id}:lanes:${side}`),nodes=[],edges=[];
       const originV=side===stationSide?5.1:3.7;
       const center=local((random()-.5)*city.radius*.12,Math.max(originV+.6,city.radius*.46),side);
-      for(const u of [0,-2.5,2.5,-5,5]){
-        const p=local(u,originV,side);
-        if(streetPointIsClear(p)){nodes.push(p);break;}
+      // Rivers and coastlines often occupy the station's immediate back lane.
+      // Find the closest usable block within this same city before abandoning
+      // its whole neighborhood; the source city and railway never move.
+      const starts=[];
+      for(let v=originV;v<city.radius-2;v+=3.2)for(let u=-city.radius*.7;u<=city.radius*.7;u+=2.5){
+        const p=local(u,v,side);starts.push({p,score:u*u+(v-originV)**2});
       }
+      starts.sort((a,b)=>a.score-b.score);
+      for(const {p} of starts)if(streetPointIsClear(p)){nodes.push(p);break;}
       if(!nodes.length)return{side,edges,center};
       const bend=(a,b,amount)=>{
         const length=distance(a,b),nx=-(b.z-a.z)/length,nz=(b.x-a.x)/length,n=Math.max(3,Math.ceil(length/1.1));
@@ -338,7 +343,9 @@ function placeCityDevelopment(world,selectedCities=world.cities) {
         const shared=[points[0],points.at(-1)].filter(p=>p===edge.points[0]||p===edge.points.at(-1));
         return points.some(p=>!shared.some(q=>distance(p,q)<2.1)&&distanceToLine(edge,p.x,p.z)<width+1.15);
       });
-      const target=Math.max(2,Math.ceil(spec.buildingBudget*(city.level>=4&&city.level<=7?.38:.46)));
+      // Street coverage follows available area, rather than the number of
+      // homes: denser development fills blocks instead of paving more land.
+      const target=Math.max(2,Math.ceil((city.radius/7.5)**2));
       for(let attempt=0;attempt<(city.radius<14?280:900)&&nodes.length<target;attempt++){
         const angle=random()*Math.PI*2,r=Math.sqrt(random()),u=Math.cos(angle)*city.radius*.77*r;
         const v=Math.max(originV+.6,city.radius*.46)+Math.sin(angle)*Math.max(2,city.radius*.34)*r;
@@ -403,40 +410,59 @@ function placeCityDevelopment(world,selectedCities=world.cities) {
     spec.connectionCount=world.lines.filter(l=>l.from===city.id||l.to===city.id).length;
     if(!streets.length)continue;
     const frontages=streets.flatMap(street=>street.points.slice(1).map((b,i)=>({a:street.points[i],b,length:distance(street.points[i],b)})));
-    const totalFrontage=frontages.reduce((sum,edge)=>sum+edge.length,0);
     const priority=spec.features.filter(k=>k!=='house').reverse();
     const kindFor=i=>{
-      if(i<priority.length)return priority[i];
+      // Give even a narrow coastal neighborhood a residential core before
+      // using its scarce dry lots for large landmarks and civic buildings.
+      if(i<3)return 'house';
+      if(i<priority.length+3)return priority[i-3];
       const value=rng();
-      if(city.level>=8&&value<.26)return 'tower';
-      if(city.level>=4&&value<(city.level>=8?.76:.6))return 'apartment';
+      if(city.level>=8&&value<.12)return 'tower';
+      if(city.level>=4&&value<(city.level>=8?.38:.25))return 'apartment';
       return 'house';
     };
     let placed=0;
-    const cityBuildings=[];
+    const cityBuildings=[],lotPools=new Map();
+    const poolFor=kind=>{
+      if(lotPools.has(kind))return lotPools.get(kind);
+      // Each potential lot checks static terrain/rail/street clearance once.
+      // Repeated random searches spent most of their time rediscovering the
+      // same blocked ground, and still missed usable gaps between houses.
+      const random=cityRandom(world.seed,`${city.id}:lots:${kind}`),pool=[];
+      for(const {a,b,length} of frontages){
+        const ux=(b.x-a.x)/length,uz=(b.z-a.z)/length,steps=Math.max(1,Math.ceil(length/.72));
+        for(let i=0;i<steps;i++)for(const side of [-1,1])for(let row=0;row<(kind==='house'?2:1);row++){
+          const t=(i+.18+random()*.64)/steps;
+          const scale=kind==='house'?.86+random()*.1:.9+random()*.09,radius=CITY_ASSET_RADII[kind]*scale;
+          const offset=radius+width/2+CLEARANCES.street+.06+random()*.12+row*(2.8+CLEARANCES.objects);
+          const item={kind,cityId:city.id,ownerId:city.ownerId,
+            x:lerp(a.x,b.x,t)-uz*offset*side,z:lerp(a.z,b.z,t)+ux*offset*side,y:0,radius,scale,
+            variant:Math.floor(random()*8),rotation:-Math.atan2(uz,ux)+(side>0?Math.PI:0)};
+          if(distance(item,city)+radius>city.radius||!canPlace(world,item,{cityId:city.id}))continue;
+          const neighbor=cityBuildings.length?Math.min(...cityBuildings.map(p=>distance(item,p)-radius-p.radius)):Infinity;
+          pool.push({item,neighbor,score:distance(item,plan.center)*.3+row*.4});
+        }
+      }
+      lotPools.set(kind,pool);return pool;
+    };
     const tryPlaceBuilding=kind=>{
-      // Narrow houses and mixed building sizes leave snug, irregular blocks
-      // without reducing the collision envelope of the visible geometry.
-      const scale=kind==='house'?.86+rng()*.1:.9+rng()*.09,radius=CITY_ASSET_RADII[kind]*scale;
-      let best=null;
-      for(let attempt=0;attempt<180;attempt++){
-        let along=rng()*totalFrontage;
-        const edge=frontages.find(edge=>(along-=edge.length)<=0)??frontages.at(-1),{a,b,length}=edge;
-        const ux=(b.x-a.x)/length,uz=(b.z-a.z)/length,t=rng(),side=rng()<.5?-1:1;
-        const offset=radius+width/2+CLEARANCES.street+.04+rng()*.14;
-        const item={id:`city-${city.id}-building-${placed+1}`,kind,cityId:city.id,ownerId:city.ownerId,
-          x:lerp(a.x,b.x,t)-uz*offset*side,z:lerp(a.z,b.z,t)+ux*offset*side,y:0,radius,scale,
-          variant:Math.floor(rng()*8),rotation:-Math.atan2(uz,ux)+(side>0?Math.PI:0)};
-        if(distance(item,city)+radius>city.radius)continue;
-        if(cityBuildings.some(p=>distance(item,p)<radius+p.radius+CLEARANCES.objects))continue;
-        if(streets.some(street=>distanceToLine(street,item.x,item.z)<radius+width/2+CLEARANCES.street))continue;
-        if(!canPlace(world,item,{cityId:city.id}))continue;
-        const neighbor=cityBuildings.length?Math.min(...cityBuildings.map(p=>distance(item,p)-radius-p.radius)):0;
-        const score=neighbor*1.8+distance(item,plan.center)*.3;
-        if(!best||score<best.score)best={item,score};
+      const pool=poolFor(kind);let best=null,bestScore=Infinity;
+      for(const lot of pool){
+        if(lot.blocked)continue;
+        const score=lot.score+(Number.isFinite(lot.neighbor)?lot.neighbor*1.8:0);
+        if(score<bestScore){best=lot;bestScore=score;}
       }
       if(!best)return false;
-      world.placements.push({...best.item,biome:biomeAt(world,best.item.x,best.item.z)});cityBuildings.push(best.item);placed++;return true;
+      const item={...best.item,id:`city-${city.id}-building-${placed+1}`,biome:biomeAt(world,best.item.x,best.item.z)};
+      world.placements.push(item);cityBuildings.push(item);placed++;
+      // A new building changes only the neighbor gap; geographic tests and
+      // candidate generation are never repeated as the neighborhood fills.
+      for(const candidates of lotPools.values())for(const lot of candidates){
+        if(lot.blocked)continue;
+        const gap=distance(item,lot.item)-item.radius-lot.item.radius;
+        if(gap<CLEARANCES.objects)lot.blocked=true;else lot.neighbor=Math.min(lot.neighbor,gap);
+      }
+      return true;
     };
     for(let lot=0;lot<spec.buildingBudget;lot++)tryPlaceBuilding(kindFor(lot));
     for(let missed=0;placed<spec.buildingBudget&&missed<3;)if(!tryPlaceBuilding('house'))missed++;else missed=0;

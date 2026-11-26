@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import clipping from './polygon-ops.js';
+import {clipPolygonsToBounds} from './polygon-region.js';
 import { buildWorld } from './world.js';
 import { buildTerrain } from './geography.js';
 import { consolidate } from './geometry.js';
@@ -36,9 +36,8 @@ export function clipRailRanges(line,bounds){
 
 /** Runs in a worker: actual terrain, CSG, assets and rail art become plain buffers. */
 export function compileDetailPacket(region,network){
-  const bounds=region.bounds,rectangle=[[[bounds.minX,bounds.minZ],[bounds.maxX,bounds.minZ],
-    [bounds.maxX,bounds.maxZ],[bounds.minX,bounds.maxZ],[bounds.minX,bounds.minZ]]];
-  const islands=clipping.intersection([[network.outline]],[rectangle]);
+  const bounds=region.bounds;
+  const islands=clipPolygonsToBounds([[network.outline]],bounds);
   const mountainIds=new Set((region.mountains??[]).map(m=>m.id));
   const lines=(region.lines??network.lines).map(line=>({...line,renderRanges:clipRailRanges(line,bounds),
     tunnels:line.tunnels.filter(t=>mountainIds.has(t.mountainId))}));
@@ -52,8 +51,8 @@ export function compileDetailPacket(region,network){
   const local={...network,...region,lines,terrainChunk:true,terrainSource:network,
     placements:region.placements??[],cityStreets:region.cityStreets??[],stations:region.stations??[],mountains:region.mountains??[]};
   if(network.biomes)local.biomes={...network.biomes,
-    ocean:network.biomes.ocean?.length?clipping.intersection(network.biomes.ocean,[rectangle]):[],
-    oceanShore:network.biomes.oceanShore?.length?clipping.intersection(network.biomes.oceanShore,[rectangle]):[]};
+    ocean:network.biomes.ocean?.length?clipPolygonsToBounds(network.biomes.ocean,bounds):[],
+    oceanShore:network.biomes.oceanShore?.length?clipPolygonsToBounds(network.biomes.oceanShore,bounds):[]};
   try{
     for(const island of islands)buildTerrain(root,{...local,outline:island[0]});
     buildWorld(root,local,{terrain:false});

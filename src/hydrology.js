@@ -1,4 +1,5 @@
 import clipping from './polygon-ops.js';
+import {clipPolygonsToBounds} from './polygon-region.js';
 import {polylineTree} from './spatial-index.js';
 
 const lists=new WeakMap(),widths=new WeakMap();
@@ -67,5 +68,9 @@ export function hydrologyFor(world){
   if(!data){if(!cache.has(source))cache.set(source,createHydrology(source));data=cache.get(source);}
   if(!world.terrainChunk)return data;
   const island=[[world.outline]];
-  return{water:stable(clipping.intersection(data.water,island)),banks:stable(clipping.intersection(data.banks,island))};
+  // First reject distant rivers/lakes using the stable chunk rectangle. The
+  // island intersection remains necessary for non-rectangular world outlines.
+  const localWater=world.bounds?clipPolygonsToBounds(data.water,world.bounds):data.water;
+  const localBanks=world.bounds?clipPolygonsToBounds(data.banks,world.bounds):data.banks;
+  return{water:stable(clipping.intersection(localWater,island)),banks:stable(clipping.intersection(localBanks,island))};
 }

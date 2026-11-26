@@ -111,17 +111,24 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
 
   function request(key,coordinates){
     stats.requestedChunks++;
-    const job=Promise.resolve().then(()=>requestChunk(coordinates));
-    pending.set(key,job);stats.pendingChunks=pending.size+incoming.size;
-    Promise.resolve(job).then(packet=>{pending.delete(key);if(!disposed&&wanted.has(key)){
-      const group=new THREE.Group();group.name=`detail-${key}`;
-      const reveal={value:0};
-      incoming.set(key,{packet,root:group,next:0,uploaded:0,warming:false,bytes:0,triangles:0,
-        reveal,materials:new Map(),depthMaterial:createDetailDepthMaterial(reveal)});
-    }},error=>{
-      pending.delete(key);if(disposed)return;failures.set(key,error);stats.errors++;root.userData.lastError=String(error?.message??error);
+    const controller=new AbortController(),task={controller};
+    const job=Promise.resolve().then(()=>requestChunk(coordinates,{signal:controller.signal}));
+    task.promise=job;pending.set(key,task);stats.pendingChunks=pending.size+incoming.size;
+    Promise.resolve(job).then(packet=>{
+      if(pending.get(key)!==task)return;
+      pending.delete(key);if(!disposed&&wanted.has(key)){
+        const group=new THREE.Group();group.name=`detail-${key}`;
+        const reveal={value:0};
+        incoming.set(key,{packet,root:group,next:0,uploaded:0,warming:false,bytes:0,triangles:0,
+          reveal,materials:new Map(),depthMaterial:createDetailDepthMaterial(reveal)});
+      }
+    },error=>{
+      if(pending.get(key)!==task)return;
+      pending.delete(key);if(disposed||error?.name==='AbortError')return;
+      failures.set(key,error);stats.errors++;root.userData.lastError=String(error?.message??error);
     }).finally(()=>{stats.pendingChunks=pending.size+incoming.size;});
   }
+
   const xs=world.outline.map(p=>p[0]),zs=world.outline.map(p=>p[1]);
   const extent={minX:Math.min(...xs),maxX:Math.max(...xs),minZ:Math.min(...zs),maxZ:Math.max(...zs)};
   const period=surface?.complete?extent.maxX-extent.minX:0;
@@ -288,6 +295,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     stats.prefetchChunks=wanted.size-Math.min(required.size,maxVisibleChunks);
     // Ignore obsolete worker results before spending a frame hydrating/uploading
     // them. A moving camera always gives the newest visible cells priority.
+    for(const [key,task]of pending)if(!wanted.has(key)){pending.delete(key);task.controller.abort();}
     for(const [key,job]of incoming)if(!wanted.has(key)){releaseIncoming(job);incoming.delete(key);}
     const started=performance.now();hydrate(started+budgetMs);warmOne();publishReady();
     updateVisibility(camera);
@@ -312,6 +320,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   function dispose(){
     if(disposed)return;disposed=true;for(const chunk of [...cache.values()])release(chunk);
     for(const job of incoming.values())releaseIncoming(job);
+    for(const task of pending.values())task.controller.abort();
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
   }
   function ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}
