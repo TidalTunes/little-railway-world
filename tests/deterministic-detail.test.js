@@ -124,3 +124,18 @@ test('proposed coverage exactly matches the next presented camera throughout res
   }
   near(f.camera.zoom,.95*scale);
 });
+
+
+test('a distant cold follow request traverses the full tilt interval over multiple frames',t=>{
+  const f=fixture(t,{ready:false});f.request(8);f.update();f.setReady(true);
+  let transitionFrames=0,previousZoom=f.camera.zoom;
+  for(let frame=0;frame<240;frame++){
+    f.view.updateNavigation(1/60);const proposed=f.view.coverageCameras[1].clone();f.view.updatePresentation(1/60);
+    near(f.camera.zoom,proposed.zoom);
+    assert.ok(f.camera.zoom/previousZoom<=Math.exp(1/60)+1e-8,'resumed zoom cannot jump over the tilt interval');
+    if(f.view.blend>0&&f.view.blend<1)transitionFrames++;
+    previousZoom=f.camera.zoom;
+  }
+  assert.ok(transitionFrames>=12,'the automatic tilt remains visible even for the largest follow jump');
+  near(f.camera.zoom,8*scale);assert.equal(f.view.blend,0);
+});

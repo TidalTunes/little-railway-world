@@ -308,6 +308,15 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       }
       constrainTarget();
   }
+  function resumedZoom(dt){
+    if(reducedMotion.matches)return navigation.zoom;
+    const previous=presentation.zoom,requested=navigation.zoom;
+    // Catch up in proportional zoom steps. A large follow request must not
+    // skip the whole tilt interval on the first frame after loading finishes.
+    const step=Math.exp(Math.max(0,dt));
+    const next=THREE.MathUtils.clamp(THREE.MathUtils.lerp(previous,requested,ease(10,dt,false)),previous/step,previous*step);
+    return Math.abs(next-requested)<.002?requested:next;
+  }
   function updatePresentation(dt){
     const entry=CAMERA_ZOOM.mapBlendEnd*zoomScale,ready=isDetailReady();
     waitingForDetail=navigation.zoom>entry&&!ready;
@@ -315,12 +324,10 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       // Returning to the overview always cancels a pending detail entry.
       presentation.copy(navigation);presentationTarget.copy(controls.target);resumingZoom=false;
     }else if(ready){
-      const previousZoom=presentation.zoom;
+      const nextZoom=resumingZoom?resumedZoom(dt):navigation.zoom;
       presentation.copy(navigation);presentationTarget.copy(controls.target);
-      if(resumingZoom){
-        presentation.zoom=THREE.MathUtils.lerp(previousZoom,navigation.zoom,ease(10,dt,reducedMotion.matches));
-        if(Math.abs(presentation.zoom-navigation.zoom)<.002){presentation.zoom=navigation.zoom;resumingZoom=false;}
-      }
+      presentation.zoom=nextZoom;
+      if(presentation.zoom===navigation.zoom)resumingZoom=false;
     }else{
       resumingZoom=true;
       if(presentation.zoom<=entry){
@@ -376,10 +383,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     get coverageCameras(){
       this.coverageCamera;
       const entry=CAMERA_ZOOM.mapBlendEnd*zoomScale;
-      let proposedZoom=Math.max(entry,resumingZoom
-        ?THREE.MathUtils.lerp(presentation.zoom,navigation.zoom,ease(10,navigationDelta,reducedMotion.matches))
-        :navigation.zoom);
-      if(Math.abs(proposedZoom-navigation.zoom)<.002)proposedZoom=navigation.zoom;
+      const proposedZoom=Math.max(entry,resumingZoom?resumedZoom(navigationDelta):navigation.zoom);
       buildChartCamera(proposedChart,mapBlendForZoom(proposedZoom/zoomScale));
       proposedChart.zoom=proposedZoom;proposedChart.updateProjectionMatrix();
       bendCamera(proposedView,proposedChart);
