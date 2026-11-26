@@ -30,6 +30,8 @@ test('unreadable figures can skip their individual draws while the locator prese
   camera.position.set(0,100,-100);camera.lookAt(0,.035,0);camera.updateMatrixWorld(true);
   camera.zoom=.5;camera.updateProjectionMatrix();marker.update({position,initialized:true,camera,viewportHeight:800});
   assert.equal(marker.characterReadable,false);assert.equal(marker.root.visible,true);
+  camera.zoom=.8;camera.updateProjectionMatrix();marker.update({position,initialized:true,camera,viewportHeight:800});
+  assert.equal(marker.characterReadable,false,'the passenger-sized figure is still below five pixels at this magnification');
   camera.zoom=1;camera.updateProjectionMatrix();marker.update({position,initialized:true,camera,viewportHeight:800});
   assert.equal(marker.characterReadable,true);assert.equal(marker.root.visible,true,'the figure and locator overlap instead of leaving a visibility gap');
   assert.ok(marker.root.material.opacity>0&&marker.root.material.opacity<1);

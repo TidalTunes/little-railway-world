@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BoxGeometry,Group,Mesh,MeshBasicMaterial,Vector3} from 'three';
+import {Box3,BoxGeometry,Group,Mesh,MeshBasicMaterial,Vector3} from 'three';
 import {createWalkingPlayer,WALKING} from '../src/walking-player.js';
 import {generateWorld,worldSurface,distanceToRoutes} from '../src/world-model.js';
+import {person} from '../src/assets.js';
 import {createIslandWorld} from '../src/island-world.js';
 import {surfaceChartCoordinates,surfaceDistance,surfaceNormal,surfacePoint} from '../src/world-surface.js';
 
@@ -150,21 +151,23 @@ test('walking against an obstacle settles the gait rather than marching through 
   player.dispose();
 });
 
-test('axe swing raises, chops and settles while the head stays attached to its hand',()=>{
+test('axe sweeps horizontally across the body while remaining attached to its hand',()=>{
   const player=createWalkingPlayer(new Group(),flat());player.enter({x:0,z:0});
   const arm=player.root.getObjectByName('right-arm'),axe=player.root.getObjectByName('traveller-axe');
   const handle=player.root.getObjectByName('axe-handle'),blade=player.root.getObjectByName('axe-head');
   assert.equal(axe.parent,arm);assert.equal(handle.parent,axe);assert.equal(blade.parent,axe);
   const original=structuredClone(player.position),grip=axe.position.clone(),attachment=blade.position.clone();
   player.update(1/120,{swing:true});assert.equal(player.swinging,true);
-  let raised=false,chopped=false;
+  let rightmost=-Infinity,leftmost=Infinity,highest=-Infinity;const point=new Vector3();
   for(let i=0;i<90;i++){
     player.update(1/120,{swing:true});
-    if(arm.rotation.x<-2.5)raised=true;
-    if(raised&&arm.rotation.x>-.8)chopped=true;
+    player.root.updateMatrixWorld(true);blade.getWorldPosition(point);
+    rightmost=Math.max(rightmost,point.x);leftmost=Math.min(leftmost,point.x);
+    highest=Math.max(highest,new Box3().setFromObject(blade,true).max.y);
     assert.ok(axe.position.equals(grip)&&blade.position.equals(attachment),'the axe is a rigid assembly through the whole arc');
   }
-  assert.ok(raised&&chopped);assert.equal(player.swinging,false);assert.ok(Math.abs(arm.rotation.x)<1e-8);
+  assert.ok(rightmost>.35&&leftmost<-.12,'the axe head crosses from the right to the left of the body');
+  assert.ok(highest<.60,'the complete blade stays below the face rather than rising overhead');assert.equal(player.swinging,false);assert.ok(Math.abs(arm.rotation.x)<1e-8);
   assert.deepEqual(player.position,original,'a cosmetic swing does not move the player');
   run(player,1,{swing:true});assert.equal(player.swinging,false,'a held action cannot repeat itself');
   player.update(1/60,{});player.update(1/60,{swing:true});assert.equal(player.swinging,true);
@@ -178,8 +181,25 @@ test('swing timing is independent of frame rate and does not block walking or ju
   const low=make(),high=make(),moving=make();
   low.update(0,{swing:true});high.update(0,{swing:true});
   run(low,.4,{},30);run(high,.4,{},120);
-  assert.ok(Math.abs(low.root.getObjectByName('right-arm').rotation.x-high.root.getObjectByName('right-arm').rotation.x)<1e-10);
+  for(const axis of ['x','y','z'])assert.ok(Math.abs(low.root.getObjectByName('right-arm').rotation[axis]-high.root.getObjectByName('right-arm').rotation[axis])<1e-10);
   moving.update(1/60,{swing:true,jump:true,forward:1});
   run(moving,.2,{forward:1});assert.equal(moving.grounded,false);assert.ok(moving.position.z>.3);assert.equal(moving.swinging,true);
   [low,high,moving].forEach(p=>p.dispose());
+});
+
+test('the traveller shares station passenger scale and proportions, with distinct clothes and tool',()=>{
+  const player=createWalkingPlayer(new Group(),flat());player.enter({x:0,z:0});player.root.updateMatrixWorld(true);
+  const bounds=new Box3();player.root.getObjectByName('walking-traveller').traverse(mesh=>{
+    if(mesh.isMesh&&!mesh.name.startsWith('axe-'))bounds.union(new Box3().setFromObject(mesh,true));
+  });
+  const passengers=new Group(),waiting=person(passengers,{variant:1});passengers.updateMatrixWorld(true);
+  const passengerBounds=new Box3().setFromObject(waiting,true);
+  assert.ok(Math.abs(bounds.min.y)<1e-7,'the player stands on the same ground datum');
+  assert.ok(Math.abs(bounds.max.y-WALKING.height)<1e-7,'declared player height matches the visible figure');
+  assert.ok(Math.abs(bounds.getSize(new Vector3()).y-passengerBounds.getSize(new Vector3()).y)<.01,'cap-to-sole scale matches a waiting passenger');
+  const face=player.root.getObjectByName('traveller-face'),coat=player.root.getObjectByName('traveller-coat');
+  assert.equal(face.geometry.type,'IcosahedronGeometry');assert.equal(coat.geometry.type,'BoxGeometry');
+  assert.ok(Math.abs(coat.scale.x-.24)<1e-9&&Math.abs(face.scale.x-.115)<1e-9,'torso and head share passenger proportions');
+  assert.ok(player.root.getObjectByName('cap-brim')&&player.root.getObjectByName('traveller-axe'),'cap and axe retain the player identity');
+  player.dispose();
 });

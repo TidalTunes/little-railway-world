@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import {M} from './palette.js';
+import {PERSON_HEIGHT,PERSON_RADIUS} from './person-scale.js';
 import {worldSurface,pointSegmentDistance} from './world-model.js';
 import {polylineTree} from './spatial-index.js';
 import {surfaceQuerySegments} from './surface-query.js';
 import {surfacePoint,surfaceNormal,surfaceFrame,surfaceOffset,surfaceDisplacement,surfaceDistance,surfaceHeading,surfaceChartRadius,chartHeadingForSurface,rigidSurfacePoseMatrix} from './world-surface.js';
 
-export const WALKING=Object.freeze({height:.96,radius:.17,speed:2.65,sprintSpeed:4.6,jumpSpeed:4.05,gravity:11.5,
-  stepHeight:.32,maxSlope:.78,cameraDistance:3.6,cameraHeight:.65,spawnRailClearance:4.5,fov:54,near:.045,far:140});
+export const WALKING=Object.freeze({height:PERSON_HEIGHT,radius:PERSON_RADIUS,speed:2.65,sprintSpeed:4.6,jumpSpeed:4.05,gravity:11.5,
+  stepHeight:.32,maxSlope:.78,cameraDistance:2.85,cameraHeight:.50,spawnRailClearance:4.5,fov:54,near:.045,far:140});
 const solids=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
 const tau=Math.PI*2,clamp=THREE.MathUtils.clamp;
 const swingDuration=.58;
@@ -18,9 +19,8 @@ const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
 function traveller(parent){
   const root=new THREE.Group();root.name='walking-traveller';parent.add(root);
   const body=new THREE.Group();body.name='traveller-body';root.add(body);
-  const box=new THREE.BoxGeometry(1,1,1),sphere=new THREE.SphereGeometry(1,10,6);
-  const coat=new THREE.CylinderGeometry(.145,.195,.36,6);
-  const cap=new THREE.CylinderGeometry(.167,.181,.10,10);
+  const box=new THREE.BoxGeometry(1,1,1),sphere=new THREE.IcosahedronGeometry(1,0);
+  const cap=new THREE.CylinderGeometry(.118,.125,.055,8);
   // The blade is one tapered, closed prism. Its wooden handle meets the socket
   // inside the head, and the gripping mitten remains attached to the same arm.
   const bladeShape=new THREE.Shape();
@@ -28,30 +28,30 @@ function traveller(parent){
   bladeShape.lineTo(-.17,.10);bladeShape.lineTo(-.17,-.10);bladeShape.closePath();
   const blade=new THREE.ExtrudeGeometry(bladeShape,{depth:.065,bevelEnabled:false,steps:1});
   blade.rotateY(Math.PI/2);blade.translate(-.0325,0,0);
-  const geometries=[box,sphere,coat,cap,blade];
+  const geometries=[box,sphere,cap,blade];
   function part(group,name,x,y,z,w,h,d,material,geometry=box){
     const mesh=new THREE.Mesh(geometry,material);mesh.name=name;mesh.position.set(x,y,z);mesh.scale.set(w,h,d);
     mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);return mesh;
   }
-  part(body,'traveller-coat',0,.385,0,1,1,1,M.teal,coat);
-  part(body,'traveller-face',0,.723,.008,.174,.178,.153,M.peach,sphere);
-  part(body,'traveller-cap',0,.862,-.006,1,1,1,M.redLight,cap);
-  part(body,'cap-brim',0,.824,.13,.28,.035,.15,M.redLight);
-  for(const side of [-1,1])part(body,'eye',side*.055,.738,.151,.022,.027,.014,M.window);
+  part(body,'traveller-coat',0,.385,0,.24,.26,.16,M.teal);
+  part(body,'traveller-face',0,.59,.006,.115,.10,.115,M.peach,sphere);
+  part(body,'traveller-cap',0,.6875,-.006,1,1,1,M.redLight,cap);
+  part(body,'cap-brim',0,.666,.085,.18,.022,.09,M.redLight);
+  for(const side of [-1,1])part(body,'eye',side*.034,.603,.100,.014,.018,.015,M.window);
   const arms=[],legs=[];
   for(const side of [-1,1]){
-    const arm=new THREE.Group();arm.name=side<0?'left-arm':'right-arm';arm.position.set(side*.18,.53,0);body.add(arm);arms.push(arm);
-    part(arm,'sleeve',0,-.075,0,.105,.19,.12,M.teal);
-    part(arm,'mitten',0,-.185,.008,.062,.062,.064,M.peach,sphere);
-    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.082,.20,0);root.add(leg);legs.push(leg);
-    part(leg,'trousers',0,-.08,0,.112,.20,.125,M.roofBlue);
-    part(leg,'boot',0,-.185,.025,.133,.10,.18,M.timber);
+    const arm=new THREE.Group();arm.name=side<0?'left-arm':'right-arm';arm.position.set(side*.146,.48,0);arm.rotation.order='YXZ';body.add(arm);arms.push(arm);
+    part(arm,'sleeve',0,-.06,0,.066,.15,.10,M.teal);
+    part(arm,'mitten',0,-.145,.008,.045,.045,.046,M.peach,sphere);
+    const leg=new THREE.Group();leg.name=side<0?'left-leg':'right-leg';leg.position.set(side*.055,.29,0);root.add(leg);legs.push(leg);
+    part(leg,'trousers',0,-.14,0,.075,.30,.10,M.roofBlue);
+    part(leg,'boot',0,-.285,.015,.09,.08,.13,M.timber);
   }
-  const axe=new THREE.Group();axe.name='traveller-axe';axe.position.set(0,-.185,.008);arms[1].add(axe);
+  const axe=new THREE.Group();axe.name='traveller-axe';axe.position.set(0,-.145,.008);axe.scale.setScalar(.82);arms[1].add(axe);
   part(axe,'axe-handle',0,-.105,0,.037,.33,.041,M.timber);
   part(axe,'axe-head',0,-.225,0,1,1,1,M.rail,blade);
   const shadowMaterial=new THREE.MeshBasicMaterial({color:0x173c37,transparent:true,opacity:.16,depthWrite:false});
-  const shadowGeometry=new THREE.CircleGeometry(.24,16);geometries.push(shadowGeometry);
+  const shadowGeometry=new THREE.CircleGeometry(.18,16);geometries.push(shadowGeometry);
   const shadow=new THREE.Mesh(shadowGeometry,shadowMaterial);shadow.matrixAutoUpdate=false;shadow.name='traveller-contact-shadow';parent.add(shadow);
   return{root,body,arms,legs,axe,shadow,dispose(){geometries.forEach(g=>g.dispose());shadowMaterial.dispose();}};
 }
@@ -77,7 +77,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     if(force||nextMeshes!==meshSource||!Number.isFinite(meshFocus.x)||surfaceDistance(world,position,meshFocus)>2||Math.abs(position.y-meshFocus.y)>2){
       meshSource=nextMeshes;meshFocus={...position};surfacePoint(world,position.x,position.y,position.z,meshCenter);
       // The resident cache may contain many whole continents' earlier views.
-      // Only nearby cells can hit a foot, torso or 3.6-unit camera ray. Keep
+      // Only nearby cells can hit a foot, torso or camera obstruction ray. Keep
       // this conservative selection stable while moving within its padding.
       meshes=nextMeshes.filter(mesh=>{
         const geometry=mesh.geometry;if(!geometry)return false;
@@ -211,25 +211,28 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     art.body.rotation.y=0;
     for(let side=0;side<2;side++){
       const phase=gait+side*Math.PI;
-      const angle=grounded?Math.sin(phase)*(.27+runBlend*.13)*moving:(side===0?-.16:.16);
-      const lift=grounded?Math.max(0,Math.cos(phase))*(.028+runBlend*.025)*moving:.025;
+      const angle=grounded?Math.sin(phase)*(.22+runBlend*.10)*moving:(side===0?-.16:.16);
+      const lift=grounded?Math.max(0,Math.cos(phase))*(.024+runBlend*.018)*moving:.025;
       const leg=art.legs[side];leg.rotation.x=angle;
       // Compensate the tilted boot's lowest corner. Even this deliberately
       // simple step keeps the solid feet above the shared supporting surface.
-      leg.position.y=-.035+.235*Math.cos(angle)+(Math.sin(angle)>0?.115:.065)*Math.abs(Math.sin(angle))+lift;
+      leg.position.y=-.035+.325*Math.cos(angle)+(Math.sin(angle)>0?.08:.05)*Math.abs(Math.sin(angle))+lift;
+      art.arms[side].rotation.y=0;art.arms[side].position.z=0;
       art.arms[side].rotation.x=grounded?-Math.sin(phase)*(side===0?.24:.10)*moving:-.2;
       art.arms[side].rotation.z=side===0?-.06:.10;
     }
     if(swingTime<swingDuration){
-      // Three readable poses: raise, chop, settle. No hit effect or game state.
+      // Wind to the right, sweep across the chest, then return to the side.
+      // The arm's yaw carries the tool horizontally; pitch never lifts it
+      // overhead. A small forward shoulder shift clears the front of the coat.
       const t=swingTime/swingDuration;
-      let arc;
-      if(t<.34)arc=-2.65*ease(t/.34);
-      else if(t<.57)arc=THREE.MathUtils.lerp(-2.65,-.65,((t-.34)/.23)**2);
-      else arc=-.65*(1-ease((t-.57)/.43));
-      const weight=Math.sin(t*Math.PI);
-      art.arms[1].rotation.x=arc;art.arms[1].rotation.z=.10+weight*.13;
-      art.body.rotation.y=-weight*.10;
+      let weight,yaw;
+      if(t<.25){weight=ease(t/.25);yaw=.95*weight;}
+      else if(t<.65){weight=1;yaw=THREE.MathUtils.lerp(.95,-1.15,ease((t-.25)/.40));}
+      else{weight=1-ease((t-.65)/.35);yaw=-1.15*weight;}
+      art.arms[1].rotation.set(-1.27*weight,yaw,.10*(1-weight));
+      art.arms[1].position.z=.075*weight;
+      art.body.rotation.y=yaw*.08;
     }
     rigidSurfacePoseMatrix(world,position.x,Math.min(position.y,floorHeight)+.036,position.z,angle,matrix);
     art.shadow.matrix.copy(matrix).multiply(shadowTilt);art.shadow.matrixWorldNeedsUpdate=true;

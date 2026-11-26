@@ -4,6 +4,7 @@ import { C, M } from './palette.js';
 import {buildClockFace, clockFaceSpecs} from './clock-design.js';
 import {farmRandom,fieldContains,fieldFeatureFootprint,fieldDetailSeed,fieldOutline} from './farm-layout.js';
 import {buildSheepArt} from './sheep-art.js';
+import {PERSON_HEIGHT,PERSON_RADIUS} from './person-scale.js';
 
 // Bounds include every roof, wheel and trim piece. Placement uses the footprint,
 // while detail stays inside it: an asset never silently occupies a neighbour.
@@ -19,7 +20,7 @@ export const ASSET_BOUNDS = Object.freeze({
   farmPatch: { width: 3, depth: 4, height: 1.6 },
   cactus: { radius: .70, height: 2.4 },
   sheep: { width: .46, depth: .80, height: .53 },
-  person: { radius: .17, height: .75 },
+  person: { radius: PERSON_RADIUS, height: PERSON_HEIGHT },
   trainCar: { width: 1.12, depth: 2.4, height: 1.6 },
 });
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {C} from './palette.js';
 import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
+import {PERSON_HEIGHT} from './person-scale.js';
 
 function badgeGeometry(){
   const positions=[],colors=[],segments=40;
@@ -42,7 +43,7 @@ export function createCharacterMarker(scene,mapScene,world){
       camera.updateMatrixWorld(true);
       surfacePoint(world,position.x,position.y??0,position.z,base);surfaceNormal(world,position.x,position.z,normal);
       if(surfaceFor(world)&&normal.dot(eye.copy(camera.position).sub(base))<=0)return;
-      top.copy(base).addScaledVector(normal,.96);projectedBase.copy(base).project(camera);projectedTop.copy(top).project(camera);
+      top.copy(base).addScaledVector(normal,PERSON_HEIGHT);projectedBase.copy(base).project(camera);projectedTop.copy(top).project(camera);
       if(projectedBase.z < -1||projectedBase.z>1||Math.abs(projectedBase.x)>1.08||Math.abs(projectedBase.y)>1.08)return;
       const height=Math.abs(projectedTop.y-projectedBase.y)*viewportHeight/2;
       // Retain a broad overlap with the locator's 4–12px fade. Below five
@@ -52,7 +53,7 @@ export function createCharacterMarker(scene,mapScene,world){
       characterReadable=height>=5;
       const opacity=(1-smooth(4,12,height))*(1-smooth(.3,.9,walkingWeight));
       if(opacity>.001&&mapBlend<.999){
-        overview.visible=true;overview.position.copy(base).addScaledVector(normal,.55);overview.quaternion.copy(camera.quaternion);
+        overview.visible=true;overview.position.copy(base).addScaledVector(normal,PERSON_HEIGHT*.57);overview.quaternion.copy(camera.quaternion);
         overview.scale.setScalar(size(camera,overview.position,viewportHeight)*5.4);overview.material.opacity=opacity;
       }
       if(mapBlend>.001){

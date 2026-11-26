@@ -97,7 +97,7 @@ grounding adds six grass-only `vec4` instance attributes (0.92 MB at full capaci
 14 attribute locations including the existing matrix and color). Facet indexes
 and root heights are cached; ordinary frames only change uniforms. Actual island
 plans measured 27–39 ms cold and 8.7–10.2 ms on cached five-unit refreshes.
-The simplified player uses 17 meshes including its axe and contact shadow, down from 32. Its walk and swing animate existing transforms with no effects or extra batches. Sheep use six instances each (fleece, head and four solid legs), down from fourteen, retaining the same three sheep batches and 48-animal cap. All town-clock
+The simplified player uses 17 meshes including its axe and contact shadow, down from 32. It shares the station passengers’ .75-unit scale and uses their simple head and torso shapes. Its walk and horizontal axe swing animate existing transforms with no effects or extra batches. Sheep use six instances each (fleece, head and four solid legs), down from fourteen, retaining the same three sheep batches and 48-animal cap. All town-clock
 hands use one additional draw, capped at 256 faces and updated at 12 Hz. Farm
 boundary geometry stays within the existing 1,000-triangle per-field budget.
 
