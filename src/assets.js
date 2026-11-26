@@ -33,8 +33,11 @@ function asset(parent, name, { x = 0, y = 0, z = 0, rotation = 0, scale = 1 } = 
 }
 
 function frontWindow(g, x, y, z, width = .36, height = .44, palette) {
-  box(g, x, y, z, width + .10, height + .10, .035, palette?.trim??'trim');
-  box(g, x, y, z + .025, width, height, .025, 'window');
+  // z is the actual wall face. Both layers overlap their backing surface;
+  // a millimetre-scale reveal reads as a frame without detached box shadows.
+  const frame=box(g, x, y, z + .004, width + .07, height + .07, .024, palette?.trim??'trim');
+  const pane=box(g, x, y, z + .018, width, height, .012, 'window');
+  frame.castShadow=false;pane.castShadow=false;
 }
 
 export function house(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, color = 'plaster', scale = 1, palette } = {}) {
@@ -49,13 +52,12 @@ export function house(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, 
   box(g, 0, h / 2 + .12, 0, w, h, d, wall);
   box(g, 0, h + .12, 0, w + .06, .10, d + .06, trim);
   roof(g, w + .24, d + .24, .51, h + .16, roofColor);
-  const front = d / 2 + .022;
-  box(g, 0, .53, front, .34, .80, .045, palette?.dark??'timber');
+  const front = d / 2;
+  box(g, 0, .53, front + .008, .34, .80, .024, palette?.dark??'timber').castShadow=false;
   frontWindow(g, -w * .29, .91, front,.36,.44,palette);
   frontWindow(g, w * .29, .91, front,.36,.44,palette);
   for (const side of [-1, 1]) {
-    box(g, side * (w / 2 + .02), .92, 0, .035, .49, .48, trim);
-    box(g, side * (w / 2 + .045), .92, 0, .025, .37, .36, 'window');
+    frontWindow(group(g,side*w/2,0,0,side*Math.PI/2),0,.92,0,.36,.37,palette);
   }
   // One recognizable accent per house, rather than repeated tiny ornament.
   if (type === 1) {
@@ -74,18 +76,18 @@ export function station(parent, { x = 0, y = 0, z = 0, rotation = 0, color = 'pl
   box(g, 0, .208, 1.155, 6.4, .016, .09, palette?.accent??trim);
   box(g, -1.45, .97, -.42, 2.62, 1.54, 1.42, palette?.light??color);
   const roofGroup = group(g, -1.45, 0, -.42);
-  roof(roofGroup, 2.82, 1.50, .49, 1.78, roofColor);
-  box(g, -1.45, .74, .314, .50, 1.07, .045, dark);
-  frontWindow(g, -2.22, 1.09, .314, .43, .53,palette);
-  frontWindow(g, -.68, 1.09, .314, .43, .53,palette);
+  roof(roofGroup, 2.82, 1.50, .49, 1.73, roofColor);
+  box(g, -1.45, .74, .298, .50, 1.07, .024, dark).castShadow=false;
+  frontWindow(g, -2.22, 1.09, .29, .43, .53,palette);
+  frontWindow(g, -.68, 1.09, .29, .43, .53,palette);
   // The shelter stops well behind the platform edge: the rail has its own space.
   box(g, 1.42, 1.80, -.10, 2.82, .14, 1.65, roofColor);
   for (const xx of [.20, 2.65]) {
-    cylinder(g, xx, .98, .35, .055, .055, 1.55, palette?.body??'teal', 6);
+    cylinder(g, xx, .975, .35, .055, .055, 1.57, palette?.body??'teal', 6);
   }
   box(g, 1.42, .51, -.56, 1.25, .12, .38, dark);
   box(g, 1.42, .75, -.74, 1.25, .39, .07, dark);
-  for (const xx of [1.00, 1.84]) box(g, xx, .33, -.56, .08, .24, .30, 'metal');
+  for (const xx of [1.00, 1.84]) box(g, xx, .325, -.56, .08, .26, .30, 'metal');
   box(g, 2.88, .43, -.70, .30, .46, .30, palette?.body??'teal');
   // Warm platform lanterns remain inside the reserved shelter footprint.
   for(const xx of [.20,2.65]){
@@ -98,7 +100,10 @@ export function station(parent, { x = 0, y = 0, z = 0, rotation = 0, color = 'pl
 export function tree(parent, { x = 0, y = 0, z = 0, rotation = 0, scale = 1, variant = 0 } = {}) {
   const g = asset(parent, 'tree', { x, y, z, rotation, scale });
   const type = variantOf(variant, 9);
-  cylinder(g, 0, type===8?.82:.50, 0, .085, .13, type===8?1.64:1.00, type===8?'trim':'bark', 5);
+  // The ground and crown hide both trunk ends. Spend the same small polygon
+  // budget on a clean eight-sided silhouette instead of invisible cap fans.
+  const trunkHeight=type===8?1.64:type===7?1.35:1.15;
+  cylinder(g, 0, trunkHeight/2, 0, .085, .13, trunkHeight, type===8?'trim':'bark', 8, true);
   if (type < 3) {
     cylinder(g, 0, 1.40, 0, 0, .80, 1.45, type === 1 ? 'pineLight' : 'pine', 7);
     cylinder(g, 0, 2.03, 0, 0, .57, 1.38, type === 2 ? 'pineDark' : 'pineLight', 7);
@@ -121,9 +126,9 @@ export function tree(parent, { x = 0, y = 0, z = 0, rotation = 0, scale = 1, var
 }
 
 function clockFace(g, x, y, z, radius, palette) {
-  cylinder(g, x, y, z, radius, radius, .045, palette?.trim??'trim', 12).rotation.x = Math.PI / 2;
-  box(g, x, y + radius * .20, z + .035, .035, radius * .51, .02, 'metal');
-  box(g, x + radius * .16, y, z + .035, radius * .39, .035, .02, 'metal');
+  cylinder(g, x, y, z - .01, radius, radius, .045, palette?.trim??'trim', 12).rotation.x = Math.PI / 2;
+  box(g, x, y + radius * .20, z + .016, .035, radius * .51, .02, 'metal');
+  box(g, x + radius * .16, y, z + .016, radius * .39, .035, .02, 'metal');
 }
 
 export function landmark(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 0, scale = 1, palette } = {}) {
@@ -136,17 +141,17 @@ export function landmark(parent, { x = 0, y = 0, z = 0, rotation = 0, variant = 
     clockFace(g, 0, 2.77, .756, .37);
     const sideClock = group(g, .756, 2.77, 0, Math.PI / 2);
     clockFace(sideClock, 0, 0, 0, .37);
-    roof(g, 1.84, 1.84, .71, 3.49, 'roofDark');
-    cylinder(g, 0, 4.29, 0, .035, .045, .18, 'gold', 5);
+    roof(g, 1.84, 1.84, .71, 3.47, 'roofDark');
+    cylinder(g, 0, 4.25, 0, .035, .045, .18, 'gold', 5);
     box(g, 0, .62, .75, .45, 1.04, .05, 'timber');
   } else if (type === 1) {
     box(g, 0, .08, 0, 2.02, .16, 2.82, 'platform');
     box(g, 0, .98, 0, 1.75, 1.80, 2.52, 'plaster');
-    roof(g, 1.99, 2.76, .62, 1.90, 'roofBlue');
+    roof(g, 1.99, 2.76, .62, 1.87, 'roofBlue');
     box(g, 0, 1.67, .73, 1.02, 3.18, 1.04, 'plaster');
     box(g, 0, 3.26, .73, 1.14, .13, 1.16, 'trim');
     cylinder(g, 0, 3.79, .73, 0, .81, .94, 'teal', 4).rotation.y = Math.PI / 4;
-    frontWindow(g, 0, 2.71, 1.27, .33, .55);
+    frontWindow(g, 0, 2.71, 1.25, .33, .55);
     box(g, 0, .62, 1.285, .45, 1.05, .05, 'timber');
     for (const side of [-1, 1]) box(g, side * .89, 1.24, -.55, .04, .66, .38, 'window');
   } else {
@@ -176,7 +181,7 @@ function windowsAround(g,width,depth,y,columns,palette){
   for(const angle of [0,Math.PI/2,Math.PI,Math.PI*1.5]){
     const side=group(g,0,0,0,angle),turned=angle===Math.PI/2||angle===Math.PI*1.5;
     const faceWidth=turned?depth:width,faceDepth=turned?width:depth;
-    for(let i=0;i<columns;i++)frontWindow(side,(i-(columns-1)/2)*faceWidth/(columns+.55),y,faceDepth/2+.018,.38,.48,palette);
+    for(let i=0;i<columns;i++)frontWindow(side,(i-(columns-1)/2)*faceWidth/(columns+.55),y,faceDepth/2,.38,.48,palette);
   }
 }
 
@@ -193,7 +198,7 @@ export function apartment(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palet
   box(g,0,1.16,depth/2+.11,.78,.13,.33,c.roof);
   box(g,0,height+.20,0,2.70,.15,2.70,c.trim);
   if(type!==1){
-    roof(g,2.78,2.76,.55,height+.28,c.roof);
+    roof(g,2.78,2.76,.55,height+.265,c.roof);
     box(g,-.68,height+.56,-.54,.23,.42,.29,c.dark);
   }else{
     box(g,0,height+.34,0,2.72,.15,2.72,c.roof);
@@ -215,13 +220,13 @@ export function civic(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
   for(const xx of [-1.27,-.66,.66,1.27])cylinder(g,xx,1.24,1.55,.105,.13,1.92,c.trim,8);
   box(g,0,2.24,1.48,3.12,.20,.56,c.body);
   box(g,0,2.43,1.48,3.40,.18,.72,c.roof);
-  roof(g,3.70,3.02,.62,2.48,c.roof);
+  roof(group(g,0,0,-.15),3.70,3.02,.62,2.43,c.roof);
   if(type===0){
     box(g,0,3.27,-.43,1.15,1.55,1.18,c.body);
     box(g,0,4.05,-.43,1.30,.14,1.33,c.trim);
     const clock=group(g,0,3.65,.181);clockFace(clock,0,0,0,.29,c);
-    roof(group(g,0,0,-.43),1.50,1.53,.51,4.12,c.roof);
-    cylinder(g,0,4.74,-.43,.035,.045,.20,c.accent,6);
+    roof(group(g,0,0,-.43),1.50,1.53,.51,4.11,c.roof);
+    cylinder(g,0,4.70,-.43,.035,.045,.20,c.accent,6);
   }else if(type===1){
     cylinder(g,0,3.06,-.14,.70,.84,.70,c.body,8);
     cylinder(g,0,3.47,-.14,0,.89,.55,c.roof,8);
@@ -229,10 +234,9 @@ export function civic(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
   }else{
     for(const side of [-1,1]){
       const cupola=group(g,side*1.20,0,-.67);
-      box(cupola,0,3.12,0,.63,.76,.65,c.body);
+      box(cupola,0,3.07,0,.63,.96,.65,c.body);
       roof(cupola,.82,.84,.44,3.52,c.roof);
     }
-    box(g,0,2.88,1.50,.50,.53,.10,c.accent);
   }
   return g;
 }
@@ -280,7 +284,7 @@ export function tower(parent,{x=0,y=0,z=0,rotation=0,variant=0,scale=1,palette}=
   box(g,0,top+.04,0,2.57,.18,2.73,c.trim);
   box(g,0,top+.18,0,2.63,.15,2.79,c.roof);
   box(g,0,top+.55,-.15,1.48,.60,1.58,c.body);
-  if(type===2)roof(group(g,0,0,-.15),1.70,1.80,.38,top+.86,c.roof);
+  if(type===2)roof(group(g,0,0,-.15),1.70,1.80,.38,top+.84,c.roof);
   else box(g,0,top+.90,-.15,1.65,.12,1.75,c.roof);
   if(type===1)cylinder(g,0,top+1.15,-.15,.035,.055,.42,c.accent,6);
   return g;
@@ -345,7 +349,7 @@ function fieldFeature(parent,points,feature,preferred,angle,rng){
   if(feature==='barn'){
     box(f,0,.075,0,1.96,.035,1.98,'soilLight');
     box(f,-.15,.53,0,1.05,.93,1.38,'plaster');
-    roof(group(f,-.15,0,0),1.21,1.56,.35,1.01,'roof');
+    roof(group(f,-.15,0,0),1.21,1.56,.35,.985,'roof');
     box(f,-.15,.42,.701,.54,.67,.028,'timber');
     box(f,-.15,.76,.725,.62,.075,.035,'trim');
     for(const z of [-.4,0])box(f,.7,.23,z,.3,.31,.3,'gold');
@@ -463,25 +467,23 @@ export function buildTrainCar(parent, { color = 'red', cab = false, palette } = 
   const body=palette?.body??color,roofColor=palette?.roof??'roofBlue',trim=palette?.trim??'trim';
   box(g, 0, .34, 0, .91, .19, 2.10, 'metal');
   box(g, 0, .88, 0, 1.02, .94, 2.12, body);
-  box(g, 0, 1.26, 0, 1.035, .10, 2.14, trim);
-  box(g, 0, 1.39, -.015, 1.10, .19, 2.19, roofColor);
+  box(g, 0, 1.315, 0, 1.035, .06, 2.14, trim);
+  box(g, 0, 1.405, 0, 1.10, .18, 2.20, roofColor);
   box(g, 0, .65, 0, 1.035, .065, 2.14, palette?.accent??'gold');
   for (const side of [-1, 1]) {
     for (const zz of [-.54, .49]) {
-      box(g, side * .519, 1.075, zz, .028, .39, .69, 'window');
+      box(g, side * .514, 1.075, zz, .016, .39, .69, 'window').castShadow=false;
     }
     for (const zz of [-.67, .67]) {
       cylinder(g, side * .48, .22, zz, .22, .22, .14, 'metal', 8).rotation.z = Math.PI / 2;
     }
   }
   for (const zz of [-1.07, 1.07]) {
-    box(g, 0, 1.075, zz, .66, .37, .025, 'window');
-    box(g, 0, .33, zz * 1.06, .18, .12, .12, 'metal');
+    box(g, 0, 1.075, zz, .66, .37, .025, 'window').castShadow=false;
   }
   if (cab) {
     box(g, 0, .77, 1.085, .86, .25, .12, body);
     for (const xx of [-.31, .31]) box(g, xx, .79, 1.151, .14, .13, .03, 'lamp');
-    box(g, 0, 1.515, -.35, .48, .06, .45, palette?.body??color);
   }
   return g;
 }

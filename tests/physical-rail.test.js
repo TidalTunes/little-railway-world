@@ -79,7 +79,8 @@ test('spherical circuit consists keep physical coupling spacing through turns, l
   const matrix=new Matrix4();
   for(const mesh of view.root.children)for(let i=0;i<mesh.count;i++){
     mesh.getMatrixAt(i,matrix);const x=column(matrix,0),y=column(matrix,1),z=column(matrix,2);
-    for(const axis of [x,y,z])near(axis.length(),1,1e-6);
+    for(const axis of mesh.userData.isTrainConnector?[x,y]:[x,y,z])near(axis.length(),1,1e-6);
+    if(mesh.userData.isTrainConnector)assert.ok(z.length()>.5&&z.length()<1,'gangways fit between rigid carriage ends');
     near(x.dot(y),0,1e-6);near(x.dot(z),0,1e-6);near(y.dot(z),0,1e-6);
   }
   view.dispose();

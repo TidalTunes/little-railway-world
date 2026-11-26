@@ -68,26 +68,29 @@ The residential-density iteration removes the Earth preset’s fixed eight-unit 
 
 The fourth camera layer reuses the same streamed terrain and asset batches. Its
 40-unit ground window is pinned while the strategy camera is active; switching
-with V changes cameras synchronously and reveals already uploaded chunks. Walking
+with V starts a short camera dolly immediately and reuses already uploaded chunks. A generalized projection blends perspective into orthographic framing without scaling the scenery. Walking
 requests are bounded around the character, independently of the perspective
 horizon. Geometry outside that window remains subject to the existing cache
 budget. The saved Earth overview only prewarms the character neighborhood until
 strategy zoom requires its own detailed coverage.
 
-Nearby embellishments use seven fixed instanced batches, capped at 4,440
-instances. Shader variants and instance colors are prepared before entry;
-grass movement and distance fades use uniforms. Details refresh after five units
+Nearby vegetation uses four fixed instanced batches, capped at 12,600
+instances (9,600 grass tiles, 2,800 crop tiles, 100 flowers and 100 stones). Each grass tile contains twelve tapered blades, sharing geometry. Shader variants and real instance matrix/color GPU buffers are prepared before entry;
+coherent wind, character displacement and distance fades use uniforms. Details refresh after five units
 of movement or an actual change to nearby source records. Distant chunk
 publications retain the existing matrices. Camera and movement rays use local
 mesh bounds and the existing worker-built BVHs, with a cached local mesh list.
 Player movement uses bounded 120 Hz physics steps; idle frames need only the
 camera obstruction ray. The sky adds one fullscreen triangle.
 
-A local 1280×720 browser check of the island's Westhaven neighborhood measured
-approximately 2.7–3.0 ms CPU and 9–10 ms frame time at the 95th percentile,
-with 1,705 nearby detail instances. Returning to the overview and re-entering
-retained all four resident island chunks with no pending requests. These are
-local measurements, not guarantees for other devices or imported worlds.
+The dense vegetation planner measured roughly 27 ms for the initial hidden
+Westhaven build and 9–11 ms when crossing a five-unit refresh boundary. Ordinary
+uniform-only updates measured approximately 0.02 ms. These are local measurements,
+not guarantees for other devices or imported worlds. An isolated 1280×720 browser check of the refined Westhaven scene measured
+5.9 ms CPU and 9.2 ms frame intervals at the 95th percentile, with 6,125 nearby
+instances. The first V transition peaked at 5.0 ms CPU and a 9.3 ms frame interval,
+with no pending chunk requests. At overview scale the locator replaces subpixel
+character parts, saving roughly 55 draws while retaining the same location.
 
 - Biome queries use cached polygon and hole bounds, lazy ring/edge indexes, and bounded exact clearance searches. Regional clipping passes only intersecting polygons and holes to the Boolean sweep, then retains the exact local outline intersection.
 - Biome scenery samples a continuous seeded physical field with no scans over distant sites. Candidate and accepted-asset budgets bound each region. Meadow, scrub, dune, outcrop and frost patches each use one existing material and at most 150 authored triangles; curved grounding remains bounded. Regional ground colors share the fixed-size globe lookup with the map, so the extra ecological variety adds no overview geometry or per-frame scenery work.

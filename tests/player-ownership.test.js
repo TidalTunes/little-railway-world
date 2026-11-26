@@ -44,7 +44,7 @@ test('rendered train bodies and roofs both use their owners palette',()=>{
     const player=world.players.find(player=>player.id===train.state.ownerId),colors=playerColors(player);
     for(const part of train.parts){
       assert.equal(part.children.length,0,'pose handles do not duplicate carriage geometry');
-      const meshes=railway.root.children.filter(mesh=>mesh.userData.instanceTrainIds.includes(train.state.id));
+      const meshes=railway.root.children.filter(mesh=>!mesh.userData.isTrainConnector&&mesh.userData.instanceTrainIds.includes(train.state.id));
       for(const role of ['body','roof']){
         const expected=colors[role];
         const found=meshes.some(mesh=>{

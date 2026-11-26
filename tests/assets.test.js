@@ -22,6 +22,7 @@ import { buildMountains } from '../src/geography.js';
 import { createPlayerPalette } from '../src/player-palette.js';
 import { buildWorld } from '../src/world.js';
 import { M } from '../src/palette.js';
+import {STREET_HEIGHT} from '../src/city-streets.js';
 
 const builders = {house, station, tree, cactus, landmark, apartment, civic, plaza, tower, farmPatch, sheep, person, trainCar: buildTrainCar};
 const epsilon = 1e-5;
@@ -137,7 +138,7 @@ test('city development keeps material ownership after batching and streets at gr
   root.updateMatrixWorld(true);
   const hit=new THREE.Raycaster(new THREE.Vector3(0,2,0),new THREE.Vector3(0,-1,0)).intersectObject(root,true)[0];
   assert.equal(hit.object.material,M.sand);
-  assert.ok(Math.abs(hit.point.y-.026)<1e-6,'streets rest just above the terrain surface');
+  assert.ok(Math.abs(hit.point.y-STREET_HEIGHT)<1e-6,'streets rest flush above the terrain surface');
   root.children.forEach(mesh=>mesh.geometry.dispose());materials.forEach(material=>material.dispose());
 });
 

@@ -395,13 +395,19 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       releaseKeys();clearSelection();hovered=null;lastPointer=null;gesture=null;pointers.clear();
       flushControls();inputEnabled=Boolean(enabled);controls.enabled=inputEnabled;ring.visible=mapRing.visible=false;
     },
-    // The walking player occupies this same chart. Return instantly to a
-    // useful overview centered on their real position, retaining orbit yaw.
-    overlook(point){
+    // Establish a character-centered endpoint. The renderer can animate to it
+    // while navigation remains suspended, with no second scene or world scale.
+    overlook(point,{heading,zoom}={}){
       releaseKeys();clearSelection();flushControls();
       delta.set(point.x-controls.target.x,(point.y??0)+1.3-controls.target.y,point.z-controls.target.z);
       navigation.position.add(delta);controls.target.add(delta);
-      navigation.zoom=Math.min(navigation.zoom,zoomScale);navigation.updateProjectionMatrix();controls.update();
+      if(Number.isFinite(heading)){
+        spherical.setFromVector3(cameraOffset.copy(navigation.position).sub(controls.target));
+        spherical.theta=heading+Math.PI;spherical.phi=DETAIL_POLAR_ANGLE;
+        navigation.position.copy(controls.target).add(cameraOffset.setFromSpherical(spherical));
+      }
+      navigation.zoom=Number.isFinite(zoom)?zoomClamp(zoom):Math.min(navigation.zoom,zoomScale);
+      navigation.updateProjectionMatrix();controls.update();
       constrainTarget();presentation.copy(navigation);presentationTarget.copy(controls.target);
       blend=mapBlendForZoom(presentation.zoom/zoomScale);mode=modeForZoom(presentation.zoom/zoomScale);
       configureInput();updateCamera();updateDOM();

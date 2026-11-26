@@ -339,3 +339,13 @@ test('returning from walking overlooks the player immediately at a useful zoom a
   nearVector(view.controls.target,focus);assert.equal(view.controls.enabled,true);
   f.key('Home');f.settle();nearVector(view.controls.target,new THREE.Vector3(0,1.3,0));
 });
+
+test('a character overview endpoint preserves the walking bearing while restoring the fixed isometric angle',t=>{
+  const f=fixture(t),{view}=f,point=new THREE.Vector3(15,.035,-12),heading=.72;
+  view.setInputEnabled(false);view.overlook(point,{heading,zoom:2});
+  const offset=view.navigation.position.clone().sub(view.controls.target),spherical=new THREE.Spherical().setFromVector3(offset);
+  assert.ok(Math.abs(spherical.phi-Math.PI/4)<1e-8);
+  assert.ok(Math.abs(Math.atan2(-offset.x,-offset.z)-heading)<1e-8);
+  assert.equal(view.navigation.zoom,2);assert.equal(f.camera.zoom,2);assert.equal(view.controls.enabled,false);
+  const focus=view.renderTarget.clone();focus.project(f.camera);assert.ok(Math.abs(focus.x)+Math.abs(focus.y)<1e-8);
+});

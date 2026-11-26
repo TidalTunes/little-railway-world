@@ -5,7 +5,7 @@ import {house,station,person,farmPatch} from '../src/assets.js';
 import {extractRigidSurfaceAssets} from '../src/rigid-surface-assets.js';
 import {compileDetailPacket} from '../src/detail-compiler.js';
 import {buildWorld} from '../src/world.js';
-import {surfaceChartCoordinates,surfacePoint,surfaceNormal,surfaceTangent,rigidSurfacePoseMatrix} from '../src/world-surface.js';
+import {surfaceChartCoordinates,surfacePoint,surfaceNormal,surfaceTangent,surfaceOffset,rigidSurfacePoseMatrix} from '../src/world-surface.js';
 
 const world={surface:{type:'sphere',radius:1600,origin:{longitude:0,latitude:0},complete:true,
   projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:0}}};
@@ -155,15 +155,22 @@ test('worker packets retain draped farmland elevation and painted vertex colors'
 
 test('city street cross sections retain physical width at high latitude',()=>{
   const p=surfaceChartCoordinates(world,20,72),chart=new THREE.Group(),physical=new THREE.Group();
-  const network={...world,cities:[],players:[],lines:[],mountains:[],stations:[],placements:[],cityStreets:[
-    {width:1.2,points:[{x:p.x,z:p.z},{x:p.x+4,z:p.z+4},{x:p.x+8,z:p.z+5}]},
-  ]};
-  const landscape=buildWorld(chart,network,{terrain:false,rigidAssets:physical});
-  assert.equal(landscape.children.length,0);assert.equal(physical.children.length,1);
-  const positions=physical.children[0].geometry.attributes.position,a=new THREE.Vector3(),b=new THREE.Vector3();
-  for(let i=0;i<positions.count;i+=4){
-    a.fromBufferAttribute(positions,i);b.fromBufferAttribute(positions,i+1);
-    assert.ok(Math.abs(a.distanceTo(b)-1.2)<.0002,'road width is independent of latitude and heading');
+  // Probe actual filled width instead of depending on a ribbon's vertex order:
+  // the joined street is now an indexed polygon with round caps and junctions.
+  for(const heading of [0,.72,Math.PI/2]){
+    const along={x:Math.cos(heading),z:Math.sin(heading)},across={x:-along.z,z:along.x};
+    const a=surfaceOffset(world,p.x,p.z,-4*along.x,-4*along.z),b=surfaceOffset(world,p.x,p.z,4*along.x,4*along.z);
+    const network={...world,cities:[],players:[],lines:[],mountains:[],stations:[],placements:[],cityStreets:[{width:1.2,points:[a,b]}]};
+    const landscape=buildWorld(chart,network,{terrain:false,rigidAssets:physical});
+    assert.equal(landscape.children.length,0);assert.equal(physical.children.length,1);
+    physical.updateMatrixWorld(true);
+    for(const distance of [-.61,-.59,0,.59,.61]){
+      const point=surfaceOffset(world,p.x,p.z,across.x*distance,across.z*distance);
+      const normal=surfaceNormal(world,point.x,point.z,new THREE.Vector3());
+      const origin=surfacePoint(world,point.x,2,point.z,new THREE.Vector3());
+      const hits=new THREE.Raycaster(origin,normal.negate()).intersectObject(physical,true);
+      assert.equal(hits.length>0,Math.abs(distance)<.6,'road width is independent of latitude and heading');
+    }
+    physical.children[0].geometry.dispose();physical.clear();landscape.removeFromParent();
   }
-  physical.children[0].geometry.dispose();
 });

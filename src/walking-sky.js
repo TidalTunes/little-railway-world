@@ -11,7 +11,7 @@ export function createWalkingSky(scene){
     skyUp:{value:new THREE.Vector3(0,1,0)},sunDirection:{value:new THREE.Vector3(-65,110,65).normalize()},
     horizonColor:{value:new THREE.Color(0xb8d5d9)},dayZenith:{value:new THREE.Color(0x5ba4d3)},
     nightZenith:{value:new THREE.Color(0x071226)},cloudColor:{value:new THREE.Color(0xf4f1de)},
-    sunColor:{value:new THREE.Color(0xffeac6)},night:{value:0},
+    sunColor:{value:new THREE.Color(0xffeac6)},night:{value:0},strength:{value:1},
   };
   const material=new THREE.ShaderMaterial({name:'walking-sky',uniforms,depthWrite:false,depthTest:true,toneMapped:false,fog:false,
     vertexShader:`uniform mat4 inverseProjection; uniform mat4 cameraWorld; varying vec3 skyRay;
@@ -22,7 +22,7 @@ export function createWalkingSky(scene){
       }`,
     fragmentShader:`uniform vec3 skyUp; uniform vec3 sunDirection; uniform vec3 horizonColor;
       uniform vec3 dayZenith; uniform vec3 nightZenith; uniform vec3 cloudColor; uniform vec3 sunColor;
-      uniform float night; varying vec3 skyRay;
+      uniform float night; uniform float strength; varying vec3 skyRay;
       float cloudLobe(vec2 p, vec2 center, vec2 size){
         vec2 q = (p-center)/size;
         return exp2(-dot(q,q)*2.8);
@@ -52,17 +52,18 @@ export function createWalkingSky(scene){
         color = mix(color, sunColor, sunDisc * 0.80);
         // Exactly the fog/background color at and below the horizon avoids a
         // hard seam where distant terrain fades into the atmospheric band.
-        gl_FragColor = vec4(color,1.0);
+        gl_FragColor = vec4(mix(horizonColor,color,strength),1.0);
         #include <colorspace_fragment>
       }`});
   const root=new THREE.Mesh(geometry,material);root.name='walking-sky';root.visible=false;
   root.frustumCulled=false;root.renderOrder=-1001;scene.add(root);
   let disposed=false;
-  function update(camera,{visible=false,night=0,up=camera?.up,sunDirection,horizonColor=scene.background}={}){
+  function update(camera,{visible=false,strength=1,night=0,up=camera?.up,sunDirection,horizonColor=scene.background}={}){
     if(disposed)return;
     root.visible=visible;
     if(camera){camera.updateMatrixWorld();uniforms.inverseProjection.value.copy(camera.projectionMatrixInverse);uniforms.cameraWorld.value.copy(camera.matrixWorld);}
     uniforms.night.value=THREE.MathUtils.clamp(Number.isFinite(night)?night:0,0,1);
+    uniforms.strength.value=THREE.MathUtils.clamp(Number.isFinite(strength)?strength:1,0,1);
     if(up?.isVector3&&up.lengthSq()>1e-12)uniforms.skyUp.value.copy(up).normalize();
     if(sunDirection?.isVector3&&sunDirection.lengthSq()>1e-12)uniforms.sunDirection.value.copy(sunDirection).normalize();
     if(horizonColor?.isColor)uniforms.horizonColor.value.copy(horizonColor);

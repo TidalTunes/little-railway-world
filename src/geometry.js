@@ -19,8 +19,8 @@ export function box(parent, x,y,z, w,h,d, mat, rotation=0) {
   result.rotation.y = rotation;
   return result;
 }
-export function cylinder(parent, x,y,z, rt, rb, h, mat, sides=8) {
-  return mesh(parent, new THREE.CylinderGeometry(rt,rb,h,sides), mat, x,y,z);
+export function cylinder(parent, x,y,z, rt, rb, h, mat, sides=8, openEnded=false) {
+  return mesh(parent, new THREE.CylinderGeometry(rt,rb,h,sides,1,openEnded), mat, x,y,z);
 }
 export function ico(parent, x,y,z, sx,sy,sz, mat, detail=0) {
   const result = mesh(parent, new THREE.IcosahedronGeometry(1,detail),mat,x,y,z);

@@ -4,16 +4,17 @@ import {applySceneStyle} from './scene-style.js';
 import {biomeAt,fitsBiome} from './biomes.js';
 import {riverBankDistance} from './hydrology.js';
 import {polylineTree,SpatialGrid,pointBox} from './spatial-index.js';
-import {surfaceFor,surfaceDistance,surfacePoint,rigidSurfacePoseMatrix} from './world-surface.js';
+import {surfaceFor,surfaceDistance,surfaceDisplacement,surfacePoint,rigidSurfacePoseMatrix} from './world-surface.js';
 import {fieldOutline,fieldContains,fieldFeatureFootprint,fieldDetailSeed,farmRandom} from './farm-layout.js';
+import {walkingGrassGeometry,addWalkingVegetationShader} from './walking-vegetation.js';
 
 // These are embellishments of the existing world, never replacement terrain or
 // scenery. Stable world/asset coordinates and fixed GPU pools make entry cheap.
-export const WALKING_DETAIL_LIMITS=Object.freeze({radius:22,padding:7,refreshDistance:5,
-  grass:1500,flowers:160,pebbles:160,trim:1200,timber:280,litter:240,crops:900});
-const tau=Math.PI*2,empty=[],kinds=['grass','flowers','pebbles','trim','timber','litter','crops'];
-const palette={grass:['grassDark','leaf','grassLight'],flowers:['white','gold','lavender','leafPink'],
-  pebbles:['gravel','rockLight','soilLight'],trim:['trim'],timber:['bark'],litter:['leafGold','soilLight','bark'],crops:['wheat']};
+export const WALKING_DETAIL_LIMITS=Object.freeze({radius:23,padding:6,refreshDistance:5,
+  grass:9600,flowers:100,pebbles:100,crops:2800});
+const tau=Math.PI*2,empty=[],kinds=['grass','flowers','pebbles','crops'];
+const palette={grass:['grass','grassLight','meadow'],flowers:['white','gold','lavender'],
+  pebbles:['gravel','rockLight','soilLight'],crops:['wheat']};
 function hash(text){let h=2166136261;for(const c of String(text))h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0;}
 function distanceToSegment(x,z,{a,b}){const dx=b.x-a.x,dz=b.z-a.z,t=THREE.MathUtils.clamp(((x-a.x)*dx+(z-a.z)*dz)/(dx*dx+dz*dz||1),0,1);return Math.hypot(x-a.x-dx*t,z-a.z-dz*t);}
 // Same convex inset and row count as farmRows in assets.js. Keeping the
@@ -35,6 +36,17 @@ function cropInset(points,margin){
 }
 function itemKey(item){return String(item.id??`${item.kind}:${item.x}:${item.z}`);}
 function radiusOf(item){return item.radius??(item.kind==='farm'?Math.hypot(item.width??3,item.depth??4)*(item.scale??1)/2:(item.kind==='tree'?.85:2.2)*(item.scale??1));}
+function grassObstacle(item,x,z,margin=.40){
+  const scale=item.scale??1,dx=(x-item.x)/scale,dz=(z-item.z)/scale,angle=item.rotation??0;
+  const u=dx*Math.cos(angle)-dz*Math.sin(angle),v=dx*Math.sin(angle)+dz*Math.cos(angle),pad=margin/scale;
+  if(item.kind==='tree')return Math.hypot(dx,dz)<.22+pad;
+  if(item.kind==='farm')return (item.parcels??[{x:0,z:0,width:item.width??3,depth:item.depth??4}])
+    .some(field=>fieldContains(fieldOutline(field),u-(field.x??0),v-(field.z??0),-pad));
+  if(item.kind==='house')return Math.abs(u)<1.1+pad&&Math.abs(v)<1.1+pad;
+  if(item.kind==='station')return Math.abs(u)<3.2+pad&&Math.abs(v)<1.2+pad;
+  if(item.kind==='person'||item.kind==='sheep')return false;
+  return Math.hypot(x-item.x,z-item.z)<radiusOf(item)+margin;
+}
 
 /** Pure deterministic selection, also used by regression tests. Each record is
  * local to its real source asset; transforms are composed exactly once later. */
@@ -48,57 +60,57 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
     return item;
   }
   for(const item of nearby){
-    const id=itemKey(item),rng=farmRandom(hash(id));
-    if(item.kind==='house'&&Number.isFinite(item.variant)){
-      const type=((item.variant%4)+4)%4,w=type===1?1.62:1.82,d=type===1?1.90:1.72,h=type===2?1.65:1.42,front=d/2+.069;
-      // Mullions sit on the same authored panes; gutters, sills and hardware
-      // stay inside the original 2.2 x 2.2 house envelope.
-      for(const side of [-1,1]){
-        const x=side*w*.29;
-        add('trim',item,`${id}:mullion:${side}`,x,.91,front,.026,.43,.012);
-        add('trim',item,`${id}:cross:${side}`,x,.91,front,.35,.023,.013);
-        add('trim',item,`${id}:sill:${side}`,x,.654,front,.49,.043,.095);
-        add('trim',item,`${id}:side-mullion:${side}`,side*(w/2+.065),.92,0,.012,.36,.025);
-        add('trim',item,`${id}:side-cross:${side}`,side*(w/2+.065),.92,0,.012,.024,.35);
-        add('timber',item,`${id}:gutter:${side}`,side*(w/2+.11),h+.16,0,.045,.055,d+.22,0,'roofDark');
-      }
-      add('trim',item,`${id}:threshold`,0,.145,front,.42,.025,.12,0,'platform');
-      add('trim',item,`${id}:handle`,.105,.53,front+.009,.025,.045,.028,0,'gold');
-      for(const x of [-.085,.085])add('timber',item,`${id}:door-panel:${x}`,x,.52,front-.018,.12,.52,.012,0,'timber');
-    }else if(item.kind==='tree'){
-      for(let j=0;j<3;j++){
-        const a=j*tau/3+rng()*.2;
-        add('timber',item,`${id}:root:${j}`,Math.sin(a)*.14,.06,Math.cos(a)*.14,.045,.095,.35,a);
-      }
-      for(let j=0;j<5;j++){
-        const a=rng()*tau,r=.22+rng()*.36;
-        add('litter',item,`${id}:leaf:${j}`,Math.sin(a)*r,.026,Math.cos(a)*r,.07+rng()*.06,.009,.035+rng()*.04,a);
-      }
-    }else if(item.kind==='farm'&&item.width&&item.depth){
+    const id=itemKey(item);
+    // Houses and trees are complete at every distance. Attaching a second set
+    // of guessed mullions, sills or roots creates seams rather than detail.
+    if(item.kind==='farm'&&item.width&&item.depth){
+      const delta=surfaceDisplacement(world,item,focus),angle=item.rotation??0,s=item.scale??1;
+      const localFocus={x:(delta.x*Math.cos(angle)-delta.z*Math.sin(angle))/s,z:(delta.x*Math.sin(angle)+delta.z*Math.cos(angle))/s};
+      const localRadius=radius/s;
       for(const [index,field]of (item.parcels??[{x:0,z:0,width:item.width,depth:item.depth,variant:item.variant}]).entries()){
         const crop=field.crop??['wheat','vegetables','lavender'][((field.variant??item.variant??0)%3+3)%3];
-        if(!['wheat','lavender','pasture'].includes(crop))continue;
+        if(!['wheat','lavender','pasture','vegetables','orchard'].includes(crop))continue;
         const points=fieldOutline(field),random=farmRandom(fieldDetailSeed(field,item.variant));
         const feature=fieldFeatureFootprint(points,field.feature,field.featurePosition,random);
         const angle=field.rowsAngle??(field.rowsAlong==='x'?0:Math.PI/2),ca=Math.cos(angle),sa=Math.sin(angle);
-        const pitch=Math.max(.4,field.rowPitch??(crop==='pasture'?.85:1.35));
-        const reach=Math.hypot(field.width,field.depth)/2,step=.52,inset=cropInset(points,.25);
+        const pasture=crop==='pasture'||crop==='orchard';
+        if(result[pasture?'grass':'crops'].length>=WALKING_DETAIL_LIMITS[pasture?'grass':'crops'])continue;
+        const pitch=Math.max(.4,field.rowPitch??(crop==='vegetables'?.8:1.35));
+        const reach=Math.hypot(field.width,field.depth)/2,step=pasture?.55:.27,inset=cropInset(points,.25);
         if(inset.length<3)continue;
+        const fx=localFocus.x-(field.x??0),fz=localFocus.z-(field.z??0);
+        const nearby=(px,pz)=>(px-fx)**2+(pz-fz)**2<localRadius*localRadius;
+        if(pasture){
+          const minX=Math.ceil(Math.max(-field.width/2,fx-localRadius)/step),maxX=Math.floor(Math.min(field.width/2,fx+localRadius)/step);
+          const minZ=Math.ceil(Math.max(-field.depth/2,fz-localRadius)/step),maxZ=Math.floor(Math.min(field.depth/2,fz+localRadius)/step);
+          for(let gx=minX;gx<=maxX;gx++)for(let gz=minZ;gz<=maxZ;gz++){
+            if(result.grass.length>=WALKING_DETAIL_LIMITS.grass)break;
+            const key=`${id}:parcel:${index}:sward:${gx}:${gz}`,r=farmRandom(hash(key));
+            const px=(gx+(r()-.5)*.45)*step,pz=(gz+(r()-.5)*.45)*step;
+            if(!nearby(px,pz)||!fieldContains(points,px,pz,.33)||feature&&Math.hypot(px-feature.center[0],pz-feature.center[1])<feature.radius+.33)continue;
+            add('grass',item,key,(field.x??0)+px,.055,(field.z??0)+pz,.57,.13+r()*.07,.57,r()*tau,'meadow');
+          }
+          continue;
+        }
         const across=inset.map(([x,z])=>-x*sa+z*ca),low=Math.min(...across),high=Math.max(...across);
         const rowCount=Math.max(1,Math.min(18,Math.round((high-low)/pitch))),rowSpacing=(high-low)/rowCount;
         // Match the exact broad crop ribbons that are visible from strategy
         // view. Additional stalks emerge from those rows rather than inventing
         // a second field layout. Troughs/barns retain their reserved clearance.
         let attempts=0;
-        for(let row=0;row<rowCount;row++)for(let u=Math.ceil(-reach/step)*step;u<=reach;u+=step){
-          if(++attempts>1800||result[crop==='pasture'?'grass':'crops'].length>=WALKING_DETAIL_LIMITS[crop==='pasture'?'grass':'crops'])break;
+        const focusU=fx*ca+fz*sa,focusV=-fx*sa+fz*ca;
+        const rowOrder=Array.from({length:rowCount},(_,i)=>i).sort((a,b)=>Math.abs(low+(a+.5)*rowSpacing-focusV)-Math.abs(low+(b+.5)*rowSpacing-focusV));
+        const startU=Math.ceil(Math.max(-reach,focusU-localRadius)/step)*step,endU=Math.min(reach,focusU+localRadius);
+        const columns=[];for(let u=startU;u<=endU;u+=step)columns.push(u);columns.sort((a,b)=>Math.abs(a-focusU)-Math.abs(b-focusU));
+        for(const row of rowOrder)for(const u of columns){
+          if(++attempts>3600||result.crops.length>=WALKING_DETAIL_LIMITS.crops)break;
           const v=low+(row+.5)*rowSpacing,px=u*ca-v*sa,pz=u*sa+v*ca;
-          if(!fieldContains(points,px,pz,.20)||feature&&Math.hypot(px-feature.center[0],pz-feature.center[1])<feature.radius+.20)continue;
+          if(!nearby(px,pz)||!fieldContains(points,px,pz,.30)||feature&&Math.hypot(px-feature.center[0],pz-feature.center[1])<feature.radius+.30)continue;
           if(feature&&Math.abs(v-(-feature.center[0]*sa+feature.center[1]*ca))<feature.radius+rowSpacing*.25
             &&Math.abs(u-(feature.center[0]*ca+feature.center[1]*sa))<feature.radius+.12)continue;
           const key=`${id}:parcel:${index}:${u.toFixed(3)}:${v.toFixed(3)}`,r=farmRandom(hash(key));
-          const kind=crop==='pasture'?'grass':'crops',height=crop==='pasture'?.13+r()*.10:.22+r()*.14;
-          add(kind,item,key,(field.x??0)+px,.068,(field.z??0)+pz,.10,height,.10,r()*tau,crop==='lavender'?'lavender':crop==='pasture'?'grassDark':'wheat');
+          const height=crop==='vegetables'?.12+r()*.07:crop==='lavender'?.24+r()*.06:.32+r()*.09;
+          add('crops',item,key,(field.x??0)+px,.060,(field.z??0)+pz,.32,height,.32,r()*tau,crop==='lavender'?'lavender':crop==='vegetables'?'leafLight':'wheat');
         }
       }
     }
@@ -109,13 +121,13 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
   if(!surfaceFor(world)&&world.biomes){
     const obstacles=new SpatialGrid(5);
     for(const item of [...nearby,...(world.stations??[])])if(item.kind!=='sheep')obstacles.insert(item,pointBox(item.x,item.z,radiusOf(item)+.3));
-    const rails=polylineTree(world.lines??empty),roads=polylineTree(cityStreets),step=1.25;
+    const rails=polylineTree(world.lines??empty),roads=polylineTree(cityStreets),step=.60;
     const cx=Math.round(focus.x/WALKING_DETAIL_LIMITS.refreshDistance)*WALKING_DETAIL_LIMITS.refreshDistance;
     const cz=Math.round(focus.z/WALKING_DETAIL_LIMITS.refreshDistance)*WALKING_DETAIL_LIMITS.refreshDistance;
     const candidates=[];
     for(let gx=Math.floor((cx-radius)/step);gx<=Math.ceil((cx+radius)/step);gx++)for(let gz=Math.floor((cz-radius)/step);gz<=Math.ceil((cz+radius)/step);gz++){
       const id=`ground:${world.seed??0}:${gx}:${gz}`,r=farmRandom(hash(id));
-      const x=(gx+.15+r()*.7)*step,z=(gz+.15+r()*.7)*step;
+      const x=(gx+.30+r()*.4)*step,z=(gz+.30+r()*.4)*step;
       const distance=(x-focus.x)**2+(z-focus.z)**2;if(distance>radius*radius)continue;
       candidates.push({id,r,x,z,distance});
     }
@@ -129,21 +141,24 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
       const entries=[];
       const scatter=(kind,...args)=>{const item=add(kind,...args);entries.push([kind,item]);};
       const biome=biomeAt(world,x,z);if(!['plains','forest','farmland','desert'].includes(biome))continue;
-      if(!fitsBiome(world,['plains','forest','farmland','desert'],x,z,.30)||riverBankDistance(world,x,z)<1.05)continue;
+      if(!fitsBiome(world,['plains','forest','farmland','desert'],x,z,.35)||riverBankDistance(world,x,z)<1.10)continue;
       if((world.mountains??empty).some(m=>Math.hypot(m.x-x,m.z-z)<(m.radius??0)+.5))continue;
-      if((world.cities??empty).some(c=>Math.hypot(c.x-x,c.z-z)<(c.radius??0)+.3))continue;
-      if(obstacles.query(pointBox(x,z,.3)).some(p=>Math.hypot(p.x-x,p.z-z)<radiusOf(p)+.25))continue;
-      if(rails.nearest(x,z,s=>distanceToSegment(x,z,s),1.45)<1.45)continue;
-      if(roads.nearest(x,z,s=>distanceToSegment(x,z,s)-(s.line.width??1)/2,1.0,1.5)<1.0)continue;
-      const anchor={x,y:.024,z,rotation:0,scale:1},choice=r();
+      if(obstacles.query(pointBox(x,z,.40)).some(p=>grassObstacle(p,x,z)))continue;
+      // Physical ballast is 1.88 units wide. One blade envelope beyond that
+      // edge (and each paved edge) leaves crisp verges without bare strips.
+      if(rails.nearest(x,z,s=>distanceToSegment(x,z,s),1.34)<1.34)continue;
+      if(roads.nearest(x,z,s=>distanceToSegment(x,z,s)-(s.line.width??1)/2,.40,1.5)<.40)continue;
+      const anchor={x,y:-.006,z,rotation:0,scale:1},choice=r();
       if(biome==='desert'){
-        if(choice<.14)scatter('pebbles',anchor,id,0,.035,0,.07+r()*.11,.045+r()*.04,.06+r()*.10,r()*tau,'desertRock');
-        else if(choice<.34)scatter('grass',anchor,id,0,0,0,.16,.12+r()*.12,.16,r()*tau,'wheat');
+        if(choice<.014)scatter('pebbles',anchor,id,0,.032,0,.07+r()*.11,.045+r()*.04,.06+r()*.10,r()*tau,'desertRock');
+        else if(choice<.045)scatter('grass',anchor,id,0,0,0,.38,.11+r()*.09,.38,r()*tau,'soilLight');
       }else{
-        const height=.13+r()*.18;
-        scatter('grass',anchor,id,0,0,0,.14+r()*.08,height,.14+r()*.08,r()*tau,biome==='forest'?'grassDark':undefined);
-        if(choice<.075)scatter('flowers',anchor,`${id}:flower`,0,height*.85,0,.07,.065,.07,r()*tau);
-        else if(choice>.95)scatter('pebbles',anchor,`${id}:stone`,.13,.035,-.14,.07+r()*.08,.035+r()*.03,.07,r()*tau);
+        const patch=.5+.5*Math.sin(x*.21+Math.sin(z*.17))*Math.cos(z*.25-x*.08);
+        const height=(biome==='forest'?.13:.18)+patch*.09+r()*.04;
+        const color=biome==='forest'?'grassDark':patch>.65?'meadow':patch<.27?'grassDark':'grass';
+        scatter('grass',anchor,id,0,0,0,.65,height,.65,r()*tau,color);
+        if(choice<.012&&patch>.50&&biome!=='forest')scatter('flowers',anchor,`${id}:flower`,0,height*.82,0,.035,.025,.035,r()*tau);
+        else if(choice>.996)scatter('pebbles',anchor,`${id}:stone`,.13,.025,-.14,.07+r()*.08,.035+r()*.03,.07,r()*tau);
       }
       if(groundCache){
         groundCache.set(id,entries);
@@ -151,43 +166,20 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
     }
     // Repeated exploration retains a small reusable neighborhood, never the
     // whole planet. Distance fading hides incoming/retired outer cells.
-    if(groundCache?.size>6000)for(const key of groundCache.keys()){groundCache.delete(key);if(groundCache.size<=4500)break;}
+    if(groundCache?.size>18000)for(const key of groundCache.keys()){groundCache.delete(key);if(groundCache.size<=14000)break;}
   }
   return result;
 }
 
-function grassGeometry(){
-  const vertices=[];
-  for(let i=0;i<3;i++){
-    const angle=i*Math.PI/3,c=Math.cos(angle),s=Math.sin(angle),height=1-i*.10;
-    vertices.push(-.28*c,0,-.28*s,.28*c,0,.28*s,.18*c,height,.18*s);
-  }
-  const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));geometry.computeVertexNormals();return geometry;
-}
-
 export function createWalkingDetail(parent,world){
   const root=new THREE.Group();root.name='walking-close-detail';root.visible=false;parent.add(root);
-  const focusUniform={value:new THREE.Vector3()},timeUniform={value:0};
+  const focusUniform={value:new THREE.Vector3()},timeUniform={value:0},playerUniform={value:new THREE.Vector3()},visibilityUniform={value:1};
   const batches={},pose=new THREE.Matrix4(),local=new THREE.Matrix4(),matrix=new THREE.Matrix4();
   const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0);
   for(const kind of kinds){
-    const vegetation=kind==='grass'||kind==='crops',geometry=vegetation?grassGeometry():kind==='flowers'||kind==='pebbles'?new THREE.IcosahedronGeometry(1,0):new THREE.BoxGeometry(1,1,1);
-    const material=applySceneStyle(new THREE.MeshStandardMaterial({color:0xffffff,roughness:1,flatShading:true,side:vegetation?THREE.DoubleSide:THREE.FrontSide}));
-    const before=material.onBeforeCompile,key=material.customProgramCacheKey();
-    material.onBeforeCompile=(shader,renderer)=>{
-      before(shader,renderer);shader.uniforms.walkFocus=focusUniform;shader.uniforms.walkTime=timeUniform;
-      shader.vertexShader='uniform vec3 walkFocus; uniform float walkTime; varying float walkDistance;\n'+shader.vertexShader;
-      if(vegetation)shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
-        transformed.x += sin(walkTime * 1.7 + instanceMatrix[3].x * 1.2 + instanceMatrix[3].z * 0.8) * position.y * position.y * 0.10;`);
-      shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>',`#include <project_vertex>
-        walkDistance = distance((modelMatrix * instanceMatrix * vec4(0.,0.,0.,1.)).xyz, walkFocus);`);
-      shader.fragmentShader='varying float walkDistance;\n'+shader.fragmentShader;
-      shader.fragmentShader=shader.fragmentShader.replace('#include <clipping_planes_fragment>',`#include <clipping_planes_fragment>
-        float detailCoverage = 1.0 - smoothstep(15.0, 22.0, walkDistance);
-        float detailDither = fract(dot(floor(gl_FragCoord.xy), vec2(0.754877666, 0.569840291)));
-        if(detailCoverage <= detailDither) discard;`);
-    };
-    material.customProgramCacheKey=()=>`${key}|walking-detail-v1:${kind}`;
+    const vegetation=kind==='grass'||kind==='crops',geometry=vegetation?walkingGrassGeometry({crop:kind==='crops'}):new THREE.IcosahedronGeometry(1,0);
+    const material=applySceneStyle(new THREE.MeshLambertMaterial({color:0xffffff,flatShading:!vegetation,side:vegetation?THREE.DoubleSide:THREE.FrontSide}));
+    addWalkingVegetationShader(material,{focus:focusUniform,time:timeUniform,player:playerUniform,visibility:visibilityUniform},kind);
     const batch=new THREE.InstancedMesh(geometry,material,WALKING_DETAIL_LIMITS[kind]);batch.name=`walking-${kind}`;
     // Allocate colors even for currently empty pools, so precompilation uses
     // the same instancing shader variant that a later neighborhood needs.
@@ -204,9 +196,11 @@ export function createWalkingDetail(parent,world){
     return streets.filter(street=>street.points?.some((point,index)=>surfaceDistance(world,point,focus)<radius+(street.width??1)
       ||!surfaceFor(world)&&index>0&&distanceToSegment(focus.x,focus.z,{a:street.points[index-1],b:point})<radius+(street.width??1)));
   }
-  function update(focus,{placements=empty,revision=0,visible=false,time=0,cityStreets=world.cityStreets??empty}={}){
+  function update(focus,{placements=empty,revision=0,visible=false,visibilityWeight=1,time=0,playerPosition=focus,cityStreets=world.cityStreets??empty}={}){
     if(disposed||!Number.isFinite(focus?.x)||!Number.isFinite(focus?.z))return;
     root.visible=visible;surfacePoint(world,focus.x,focus.y??0,focus.z,focusUniform.value);timeUniform.value=time;
+    surfacePoint(world,playerPosition.x,playerPosition.y??0,playerPosition.z,playerUniform.value);
+    visibilityUniform.value=THREE.MathUtils.clamp(visibilityWeight,0,1);
     const sourceChanged=placements!==previousPlacements||revision!==previousRevision||cityStreets!==previousStreets;
     const moved=!Number.isFinite(lastFocus.x)||surfaceDistance(world,focus,lastFocus)>=WALKING_DETAIL_LIMITS.refreshDistance;
     if(!sourceChanged&&!moved)return;

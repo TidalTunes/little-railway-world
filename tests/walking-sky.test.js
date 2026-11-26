@@ -19,6 +19,8 @@ test('walking sky stays behind terrain and existing night stars with one reusabl
   assert.ok(sky.root.material.uniforms.horizonColor.value.equals(scene.background));
   scene.background.set(0x081626);sky.update(camera,{visible:true,night:1});
   assert.ok(sky.root.material.uniforms.horizonColor.value.equals(scene.background),'horizon follows the same nighttime color as fog');
+  sky.update(camera,{visible:true,strength:.35});assert.equal(sky.root.material.uniforms.strength.value,.35,'the sky joins the camera dolly without a hard background cut');
+  sky.update(camera,{visible:true,strength:2});assert.equal(sky.root.material.uniforms.strength.value,1);
   sky.update(camera,{visible:false});assert.equal(sky.root.visible,false);
   sky.dispose();sky.dispose();assert.equal(scene.children.length,0);
 });

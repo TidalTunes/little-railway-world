@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Group,Matrix4,Vector3} from 'three';
+import {Group,Matrix4,Vector3,MeshLambertMaterial,ShaderLib} from 'three';
 import {createWalkingDetail,walkingDetailPlan,WALKING_DETAIL_LIMITS} from '../src/walking-detail.js';
+import {walkingGrassGeometry,addWalkingVegetationShader} from '../src/walking-vegetation.js';
 import {surfaceChartCoordinates,surfacePoint,rigidSurfacePoseMatrix} from '../src/world-surface.js';
 import {fieldContains,fieldOutline,fieldFeatureFootprint,fieldDetailSeed,farmRandom} from '../src/farm-layout.js';
 
@@ -24,6 +25,19 @@ test('close detail prewarms hidden and changes no source world or strategy place
   assert.deepEqual(matrices(layer),warm,'switching view uses exactly the prewarmed instances');
   layer.update({x:1,z:1},{placements,visible:true,time:13});
   assert.deepEqual(layer.root.children.map(mesh=>mesh.instanceMatrix.version),versions,'ordinary movement/wind does not upload geometry');
+  const shaders=layer.root.children.map(mesh=>{
+    const shader={uniforms:{},vertexShader:ShaderLib.lambert.vertexShader,fragmentShader:ShaderLib.lambert.fragmentShader};
+    mesh.material.onBeforeCompile(shader,{});return shader;
+  });
+  for(const visibilityWeight of [0,.2,.8,1,.5]){
+    layer.update(focus,{placements,visible:visibilityWeight>0,visibilityWeight});
+    assert.equal(layer.stats.builds,builds,'camera dolly weights never rebuild the vegetation');
+    assert.deepEqual(layer.root.children.map(mesh=>mesh.instanceMatrix.version),versions);
+    for(const shader of shaders){
+      assert.equal(shader.uniforms.walkVisibility.value,visibilityWeight);
+      assert.match(shader.vertexShader,/transformed \*= detailCoverage/,'all batches shrink continuously with the camera dolly');
+    }
+  }
   layer.dispose();layer.dispose();assert.equal(layer.root.parent,null);
 });
 
@@ -37,9 +51,9 @@ test('ground detail is deterministic, excludes real water/rail/road/asset cleara
   for(const item of [...plan.grass,...plan.flowers,...plan.pebbles].filter(p=>p.id.startsWith('ground:'))){
     const {x,z}=item.anchor;
     assert.ok(Math.abs(z)>=2.55-1e-8,'river channel and sloped banks remain clear');
-    assert.ok(Math.abs(x)>=1.45-1e-8,'rails retain their clearance');
-    assert.ok(Math.abs(x-8)>=1.8-1e-8,'the real street corridor remains clear');
-    assert.ok(Math.hypot(x+7,z-8)>=2.45-1e-8,'ground clumps do not grow through buildings');
+    assert.ok(Math.abs(x)>=.94+.40-1e-8,'blade envelopes clear the physical 1.88-unit ballast');
+    assert.ok(Math.abs(x-8)>=.8+.40-1e-8,'blade envelopes clear the actual 1.6-unit street');
+    assert.ok(Math.abs(x+7)>=1.5-1e-8||Math.abs(z-8)>=1.5-1e-8,'ground carpets do not grow through the actual building envelope');
   }
   const second=walkingDetailPlan(world,placements,{x:6,z:0},{cityStreets:streets});
   const byId=new Map(plan.grass.map(item=>[item.id,item]));let overlaps=0;
@@ -47,19 +61,20 @@ test('ground detail is deterministic, excludes real water/rail/road/asset cleara
   assert.ok(overlaps>200,'moving the player does not regenerate the shared ground');
 });
 
-test('house accents follow the exact authored variant, scale and rigid surface pose',()=>{
+test('close range keeps architecture and trunks authoritative, while field detail follows its exact surface pose',()=>{
   const globe={surface:{type:'sphere',radius:1600,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:0}}};
   const focus=surfaceChartCoordinates(globe,179.9,74),home={kind:'house',id:'polar-home',variant:1,...focus,y:.2,scale:1.25,rotation:.6};
-  const plan=walkingDetailPlan(globe,[home],focus),layer=createWalkingDetail(new Group(),globe);
-  layer.update(focus,{placements:[home],visible:true});
-  const mesh=layer.root.getObjectByName('walking-trim'),pose=rigidSurfacePoseMatrix(globe,home.x,home.y,home.z,home.rotation,new Matrix4()).scale(new Vector3().setScalar(home.scale));
-  for(const [index,item]of plan.trim.entries()){
+  const farm={kind:'farm',id:'polar-field',...focus,y:.2,scale:1.25,rotation:.6,width:5,depth:6,parcels:[{x:0,z:0,width:5,depth:6,crop:'wheat'}]};
+  const plan=walkingDetailPlan(globe,[home,farm],focus),layer=createWalkingDetail(new Group(),globe);
+  layer.update(focus,{placements:[home,farm],visible:true});
+  const mesh=layer.root.getObjectByName('walking-crops'),pose=rigidSurfacePoseMatrix(globe,farm.x,farm.y,farm.z,farm.rotation,new Matrix4()).scale(new Vector3().setScalar(farm.scale));
+  for(const [index,item]of plan.crops.entries()){
     const expected=new Vector3(item.x,item.y,item.z).applyMatrix4(pose),actual=new Vector3().setFromMatrixPosition(getMatrix(mesh,index));
-    assert.ok(actual.distanceTo(expected)<.0002,'detail remains locked to the real building on the globe');
+    assert.ok(actual.distanceTo(expected)<.0002,'stalks remain locked to the real parcel on the globe');
   }
   assert.equal(plan.grass.length,0,'no stretched latitude grid is introduced on the globe');
-  assert.equal(plan.trim.find(p=>p.id.endsWith('mullion:-1')).x,-1.62*.29);
-  const center=surfacePoint(globe,home.x,home.y,home.z);assert.ok(new Vector3().setFromMatrixPosition(getMatrix(mesh)).distanceTo(center)<3);
+  assert.ok(Object.values(plan).flat().every(item=>item.anchor!==home),'no second guessed set of windows, sills, roof trim or roots');
+  const center=surfacePoint(globe,farm.x,farm.y,farm.z);assert.ok(new Vector3().setFromMatrixPosition(getMatrix(mesh)).distanceTo(center)<5);
   layer.dispose();
 });
 
@@ -78,14 +93,14 @@ test('field stalks preserve parcel polygons, painted row spacing and trough clea
   }
 });
 
-test('hard instance budgets hold in dense scenery and streamed eviction retires asset ornament',()=>{
-  const homes=Array.from({length:1000},(_,i)=>({kind:'house',id:`home-${i}`,variant:i%4,x:(i%32)*.3,z:Math.floor(i/32)*.3,scale:1}));
-  const layer=createWalkingDetail(new Group(),{});layer.update({x:3,z:3},{placements:homes,visible:true});
-  assert.equal(layer.root.children.length,7);
+test('hard instance budgets hold in dense fields and streamed eviction retires their detail',()=>{
+  const fields=Array.from({length:100},(_,i)=>({kind:'farm',id:`field-${i}`,x:(i%10)*.3,z:Math.floor(i/10)*.3,scale:1,width:5,depth:6,parcels:[{x:0,z:0,width:5,depth:6,crop:'wheat'}]}));
+  const layer=createWalkingDetail(new Group(),{});layer.update({x:3,z:3},{placements:fields,visible:true});
+  assert.equal(layer.root.children.length,4);
   for(const mesh of layer.root.children)assert.ok(mesh.count<=mesh.instanceMatrix.count);
-  assert.equal(layer.root.getObjectByName('walking-trim').count,WALKING_DETAIL_LIMITS.trim);
+  assert.equal(layer.root.getObjectByName('walking-crops').count,WALKING_DETAIL_LIMITS.crops);
   layer.update({x:3,z:3},{placements:[],revision:1,visible:true});
-  assert.equal(layer.stats.instances,0);assert.equal(layer.root.getObjectByName('walking-trim').count,0);
+  assert.equal(layer.stats.instances,0);assert.equal(layer.root.getObjectByName('walking-crops').count,0);
   layer.dispose();
 });
 
@@ -104,6 +119,45 @@ test('distant streamed publications preserve cached close detail while nearby so
   const nearby={id:'neighbor',kind:'house',variant:1,x:-4,z:3,scale:1};
   layer.update(focus,{placements:[distant,home,nearby],cityStreets:[remoteStreet,street],revision:3,visible:true});
   assert.equal(layer.stats.builds,builds+1,'a newly resident nearby source really does refresh decorations and exclusion masks');
-  assert.ok(layer.root.getObjectByName('walking-trim').count>12);
+  assert.notDeepEqual(matrices(layer),first,'the new house actually clears its grass footprint');
   layer.dispose();
+});
+
+test('grass is a continuous carpet in city verges, and only the trunk keeps grass away from trees',()=>{
+  const world=meadow();world.cities=[{x:0,z:0,radius:20}];
+  const tree={id:'oak',kind:'tree',x:0,z:0,radius:2,scale:1};
+  const plan=walkingDetailPlan(world,[tree],{x:0,z:0});
+  assert.ok(plan.grass.length>6500,'a dense nearby carpet replaces widely spaced tiny clumps');
+  assert.ok(plan.grass.some(item=>Math.hypot(item.anchor.x,item.anchor.z)<1.2),'leaves cast shade over living ground instead of a bare canopy-sized circle');
+  for(const item of plan.grass)assert.ok(Math.hypot(item.anchor.x,item.anchor.z)>=.62);
+});
+
+test('pastures grow a dense sward, preserve equipment clearances, and huge plots remain local',()=>{
+  const field={x:0,z:0,width:3000,depth:3000,crop:'pasture',feature:'trough',featurePosition:[0,0],detailSeed:31};
+  const farm={kind:'farm',id:'pasture',x:0,z:0,width:3000,depth:3000,scale:1,parcels:[field]};
+  const plan=walkingDetailPlan({},[farm],{x:0,z:0});
+  assert.ok(plan.grass.length>7000);assert.ok(plan.grass.length<=WALKING_DETAIL_LIMITS.grass);
+  for(const item of plan.grass){
+    assert.ok(Math.hypot(item.x,item.z)<29);
+    assert.ok(Math.hypot(item.x,item.z)>=1.03,'equipment and player approaches remain bare');
+    assert.equal(item.y,.055,'roots touch the exact field surface');
+  }
+});
+
+test('blade geometry has stationary roots and shared shaders animate only uniforms without transparency',()=>{
+  const geometry=walkingGrassGeometry(),positions=geometry.attributes.position;
+  assert.equal(geometry.index.count/3,36,'twelve blades cost just 36 triangles per tile');
+  assert.equal(Array.from({length:positions.count},(_,i)=>positions.getY(i)).filter(y=>y===0).length,24);
+  for(let i=0;i<positions.count;i++)assert.ok(positions.getY(i)>=0&&positions.getY(i)<=1);
+  const material=new MeshLambertMaterial(),focus={value:new Vector3()},time={value:2},player={value:new Vector3()};
+  addWalkingVegetationShader(material,{focus,time,player},'grass');
+  const shader={uniforms:{},vertexShader:ShaderLib.lambert.vertexShader,fragmentShader:ShaderLib.lambert.fragmentShader};
+  material.onBeforeCompile(shader,{});
+  assert.equal(shader.uniforms.walkTime,time);assert.equal(shader.uniforms.walkPlayer,player);
+  assert.match(shader.vertexShader,/rootWeight = position.y \* position.y/);
+  assert.match(shader.vertexShader,/dot\(worldWind, normalize\(bladeAxisX\)\)/,'random tile rotation cannot rotate the shared wind direction');
+  assert.match(shader.vertexShader,/dot\(worldWind, normalize\(bladeAxisZ\)\)/);
+  assert.match(shader.vertexShader,/transformed \*= detailCoverage/);
+  assert.doesNotMatch(shader.fragmentShader,/detailDither/,'opaque blades fade their geometry without shimmering alpha masks');
+  assert.equal(material.transparent,false);geometry.dispose();material.dispose();
 });

@@ -16,10 +16,12 @@ import {surfaceFor,surfacePoint,surfaceFrame,surfaceChartCoordinates,surfaceDisp
 import {createSurfaceShell} from './surface-shell.js';
 import {createDaylight,styleUniforms} from './scene-style.js';
 import {createNightSky} from './night-sky.js';
-import {createWalkingPlayer} from './walking-player.js';
+import {createWalkingPlayer,WALKING} from './walking-player.js';
 import {createWalkingDetail} from './walking-detail.js';
 import {createWalkingInput} from './walking-input.js';
 import {createWalkingSky} from './walking-sky.js';
+import {createCharacterTransition} from './character-transition.js';
+import {createCharacterMarker} from './character-marker.js';
 import './style.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
@@ -45,9 +47,11 @@ const ground=new THREE.Mesh(new THREE.PlaneGeometry(2000,2000),new THREE.MeshSta
 ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;scene.add(ground);
 
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
-let walker,walkingDetail,walkSpawn,entryFrame=false;
+let walker,walkingDetail,characterMarker,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
+let transitionMapStart=0,renderedMapBlend=0;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+let characterTransition=createCharacterTransition({reducedMotion});
 const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer,reducedMotion,
   initialNight:new URLSearchParams(location.search).get('time')==='night'});
 const nightSky=createNightSky(scene,mapScene);
@@ -68,25 +72,63 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
   },
 });
 const {navigation,controls}=view;
-const walkingInput=createWalkingInput(canvas,{isActive:()=>!!walker?.active,onToggle:()=>walker?.active?leaveWalking():enterWalking(),onExit:leaveWalking});
+const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking});
+const transitionFocus=new THREE.Vector3();
+const smoothStep=(a,b,value)=>{const t=THREE.MathUtils.clamp((value-a)/(b-a),0,1);return t*t*(3-2*t);};
+function walkingTarget(){return surfacePoint(model,walker.position.x,walker.position.y+WALKING.cameraHeight,walker.position.z,new THREE.Vector3());}
+function transitionSphere(){const surface=surfaceFor(model);return surface?{center:new THREE.Vector3(0,-surface.radius,0),radius:surface.radius}:undefined;}
+function displayedCamera(){return characterTransition.active?characterTransition.camera:walkingMode?walker.camera:camera;}
+function displayedTarget(){
+  if(characterTransition.active)return characterTransition.target.clone();
+  if(walkingMode)return walkingTarget();
+  const point=view.renderTarget;return surfacePoint(model,point.x,point.y,point.z,new THREE.Vector3());
+}
+function snapshotCamera(){
+  const source=displayedCamera(),snapshot=source.clone();
+  snapshot.isOrthographicCamera=!!source.isOrthographicCamera;snapshot.isPerspectiveCamera=!snapshot.isOrthographicCamera;
+  return snapshot;
+}
+function spawnHeading(){
+  const town=model.cities[0],offset=town&&walkSpawn?surfaceDisplacement(model,town,walkSpawn,{}):null;
+  return offset?Math.atan2(offset.x,offset.z):Math.atan2(controls.target.x-navigation.position.x,controls.target.z-navigation.position.z);
+}
+function initializeCharacter(){
+  if(!walker||walker.initialized||!walkSpawn||!detail.hasCoverageAt(walkSpawn,2))return;
+  // Resolve the persistent character against the fully resident building and
+  // tree records, even when the player has not entered walking mode yet.
+  const scale=worldRoot.scale.y;worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
+  if(walker.enter(walkSpawn,spawnHeading())){
+    walker.exit();walker.root.visible=true;walkSpawn={...walker.position};
+  }
+  worldRoot.scale.y=scale;worldRoot.updateMatrixWorld(true);
+}
+function finishCharacterTransition(){
+  view.setInputEnabled(!walkingMode);walkingInput.sample(0);
+  canvas.dataset.view=walkingMode?'person':view.mode;
+  canvas.dataset.cameraTransition='false';canvas.dataset.walkingWeight=walkingMode?'1.000':'0.000';
+}
 function enterWalking(){
-  if(!walker||walker.active)return;
-  const town=model.cities[0],spawnOffset=town&&walkSpawn?surfaceDisplacement(model,town,walkSpawn,{}):null;
-  const heading=spawnOffset?Math.atan2(spawnOffset.x,spawnOffset.z)
-    :Math.atan2(controls.target.x-navigation.position.x,controls.target.z-navigation.position.z);
+  if(!walker||walkingMode)return;
+  const fromCamera=snapshotCamera(),fromTarget=displayedTarget();
   const previousHeightScale=worldRoot.scale.y;
   worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
-  if(!walker.enter(walkSpawn,heading)){worldRoot.scale.y=previousHeightScale;worldRoot.updateMatrixWorld(true);return;}
-  view.setInputEnabled(false);
-  scene.fog.near=28;scene.fog.far=85;entryFrame=true;
+  if(!walker.enter(walkSpawn,spawnHeading())){worldRoot.scale.y=previousHeightScale;worldRoot.updateMatrixWorld(true);return;}
+  walkingMode=true;view.setInputEnabled(false);transitionMapStart=renderedMapBlend;
+  characterTransition.begin({fromCamera,toCamera:walker.camera,fromTarget,toTarget:walkingTarget(),toWalking:true,sphere:transitionSphere()});
+  entryFrame=true;
+  if(!characterTransition.active)finishCharacterTransition();
   canvas.dataset.view='person';canvas.style.cursor='grab';clearMeasurements();
 }
 function leaveWalking(){
-  if(!walker?.active)return;
-  const point=walker.exit();walkingInput.clear();walkingDetail.root.visible=false;
-  scene.fog.near=1e6;scene.fog.far=2e6;
-  walkingSky.root.visible=false;
-  view.setInputEnabled(true);view.overlook(point);clearMeasurements();
+  if(!walker||!walkingMode)return;
+  const fromCamera=snapshotCamera(),fromTarget=displayedTarget(),heading=walker.heading;
+  const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;
+  view.setInputEnabled(false);view.overlook(point,{heading,zoom:view.zoomScale*1.35});
+  const target=view.renderTarget;surfacePoint(model,target.x,target.y,target.z,transitionFocus);
+  transitionMapStart=renderedMapBlend;
+  characterTransition.begin({fromCamera,toCamera:camera,fromTarget,toTarget:transitionFocus,toWalking:false,sphere:transitionSphere()});
+  if(!characterTransition.active)finishCharacterTransition();
+  clearMeasurements();
 }
 let frameWidth=170,frameHeight=112,time=0;
 const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3(-72,94,54);
@@ -144,9 +186,9 @@ function fitWorld(){
   view.setScale(startInDetail?1:Math.max(view.zoomScale,frameHeight/230));
   resize();view.setHome();
 }
-function fitShadows(focus=view.renderTarget,walking=false){
+function fitShadows(focus=view.renderTarget,walkingWeight=0){
   const span=Math.max((camera.right-camera.left)/camera.zoom,(camera.top-camera.bottom)/camera.zoom);
-  const extent=walking?18:Math.min(480,Math.max(45,span*.72)),texel=extent*2/2048;
+  const overviewExtent=Math.min(480,Math.max(45,span*.72)),extent=THREE.MathUtils.lerp(overviewExtent,18,walkingWeight),texel=extent*2/2048;
   const x=Math.round(focus.x/texel)*texel,z=Math.round(focus.z/texel)*texel;
   if(surfaceFor(model)){
     surfacePoint(model,x,0,z,sun.target.position);surfaceFrame(model,x,z,lightFrame);
@@ -181,7 +223,10 @@ async function loadWorld(input={}){
     if(nextShell){root.add(nextShell.detail);nextMap.root.add(nextShell.map);}
     nextRailway=makeTrains(root,next);
     nextDetail=createWorldRenderer(root,next,{maxPending:3,requestChunk:(region,options)=>nextWorker.request('chunk',region,options),uploadMesh:mesh=>geometryUploader.upload(mesh)});
-    leaveWalking();walker?.dispose();walkingDetail?.dispose();
+    walkingMode=false;walkingInput.clear();view.setInputEnabled(true);
+    characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
+    scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
+    walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
@@ -191,7 +236,8 @@ async function loadWorld(input={}){
       getTerrainMeshes:()=>detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
     walkSpawn=walker.prepareSpawn(model.cities[0]??controls.target);
-    walkingDetail=createWalkingDetail(root,model);
+    walkingDetail=createWalkingDetail(root,model);walkingBuffersReady=false;
+    characterMarker=createCharacterMarker(scene,mapScene,model);
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
@@ -210,6 +256,7 @@ function resize(){
   navigation.top=viewHeight/2;navigation.bottom=-viewHeight/2;navigation.updateProjectionMatrix();
   renderer.setSize(width,height);
   walker?.resize(aspect);
+  if(characterTransition.active){characterTransition.finish();finishCharacterTransition();if(!walkingMode)view.updatePresentation(0);}
   compositor.resize(Math.round(width*renderer.getPixelRatio()),Math.round(height*renderer.getPixelRatio()));
 }
 window.addEventListener('resize',resize);resize();
@@ -224,7 +271,7 @@ function clearMeasurements(){sampleCount=sampleCursor=0;transitionCpuMax=transit
 function metrics(now,interval,cpu){
   frameTimes[sampleCursor]=interval;cpuTimes[sampleCursor]=cpu;
   sampleCursor=(sampleCursor+1)%frameTimes.length;sampleCount=Math.min(sampleCount+1,frameTimes.length);
-  if(view.blend>.001&&view.blend<.999){
+  if(characterTransition.active||view.blend>.001&&view.blend<.999){
     if(cpu>transitionCpuMax)transitionPeak=JSON.stringify({traffic:trafficCpu,detail:detailCpu,view:viewCpu,render:renderCpu,blend:view.blend});
     transitionSamples++;transitionCpuMax=Math.max(transitionCpuMax,cpu);transitionFrameMax=Math.max(transitionFrameMax,interval);
   }
@@ -244,7 +291,7 @@ function metrics(now,interval,cpu){
     simulationSeconds:time.toFixed(1),
     simulationCpu:(railway.stats.simulationMs??0).toFixed(2),poseCpu:(railway.stats.poseMs??0).toFixed(2),
     generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),
-    walking:String(!!walker?.active),playerX:walker?.position.x.toFixed(3),playerY:walker?.position.y.toFixed(3),playerZ:walker?.position.z.toFixed(3),
+    walking:String(walkingMode),playerX:walker?.position.x.toFixed(3),playerY:walker?.position.y.toFixed(3),playerZ:walker?.position.z.toFixed(3),
     playerGrounded:String(walker?.grounded),walkingInstances:String(walkingDetail?.stats.instances??0),
     lifeInstances:String(life?.stats?.instances??life?.stats?.active??0),lifeSheep:String(life?.stats?.sheep??0),lifeBirds:String(life?.stats?.birds??0)});
 }
@@ -256,15 +303,40 @@ function frame(now){
     let stamp=performance.now();
     railway.update(paused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
-    const walking=!!walker?.active;
-    if(walking)walker.update(dt,walkingInput.sample(dt));else view.updateNavigation(dt);
-    const activeCamera=walking?walker.camera:camera,focus=walking?walker.position:controls.target;
-    const groundFocus=walker?.initialized?walker.position:walkSpawn;
-    detail.update(activeCamera,{mapBlend:walking||view.wantsDetail?0:1,target:focus,budgetMs:2,
-      groundFocus,groundRadius:40,groundOnly:walking,
-      coverageCameras:walking?undefined:view.coverageCameras,retainVisible:walking||view.blend<1});
+    const wasTransitioning=characterTransition.active;
+    if(wasTransitioning){
+      // Input remains captured, but a walk or orbit cannot move either camera
+      // endpoint while their framing is being joined. Held movement resumes
+      // normally afterward; buffered drag/jump impulses are discarded.
+      walkingInput.sample(0);characterTransition.update(dt);
+      if(!characterTransition.active)finishCharacterTransition();
+    }else if(walkingMode)walker.update(dt,walkingInput.sample(dt));
+    else view.updateNavigation(dt);
+    if(!walkingMode&&!characterTransition.active)view.updatePresentation(dt);
+    const groundLayer=walkingMode||characterTransition.active;
+    const walkingWeight=characterTransition.active?characterTransition.walkingWeight:Number(walkingMode);
+    const activeCamera=displayedCamera(),focus=groundLayer?walker.position:controls.target;
+    const blend=characterTransition.active?transitionMapStart*(1-smoothStep(0,.3,characterTransition.progress)):walkingMode?0:view.blend;
+    renderedMapBlend=blend;
+    if(groundLayer)worldRoot.scale.set(1,1,1);
+    const overviewSpan=Math.max((camera.right-camera.left)/camera.zoom,(camera.top-camera.bottom)/camera.zoom);
+    const groundRadius=characterTransition.active&&!walkingMode?Math.min(140,Math.max(40,overviewSpan*.55)):40;
+    let groundFocus=walker?.initialized?walker.position:walkSpawn;
+    detail.update(activeCamera,{mapBlend:groundLayer||view.wantsDetail?0:1,target:focus,budgetMs:2,
+      groundFocus,groundRadius,groundOnly:groundLayer,
+      coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
+    initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
+    if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:detail.placements,revision:detail.placementRevision,
-      cityStreets:detail.cityStreets,visible:walking,time,night:daylight.night});
+      cityStreets:detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
+    // Shader compilation alone does not upload hidden instance attributes.
+    // Allocate these fixed GPU pools during startup, before the first dolly.
+    if(walkingDetail.stats.ready&&!walkingBuffersReady){
+      for(const batch of walkingDetail.root.children)geometryUploader.upload(batch);
+      walkingBuffersReady=true;
+    }
+    scene.fog.near=Math.exp(THREE.MathUtils.lerp(Math.log(1e6),Math.log(28),walkingWeight));
+    scene.fog.far=Math.exp(THREE.MathUtils.lerp(Math.log(2e6),Math.log(85),walkingWeight));
     if(!shaderReady&&!shaderJob){
       const version=loadingVersion;
       renderer.shadowMap.enabled=true;
@@ -274,21 +346,29 @@ function frame(now){
         .catch(error=>{if(version===loadingVersion){shaderJob=null;reportError(error);}});
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
-    if(!walking)view.updatePresentation(dt);
-    const blend=walking?0:view.blend,renderFocus=walking?walker.position:view.renderTarget;
+    const renderFocus=groundLayer?walker.position:view.renderTarget;
     detail.updateVisibility(activeCamera,{dt,reveal:shaderReady&&blend<.999,reducedMotion:reducedMotion.matches||entryFrame});
-    entryFrame=false;detailBase.root.visible=walking||!detail.settled;
+    entryFrame=false;detailBase.root.visible=groundLayer||!detail.settled;
     railway.updateView(activeCamera,{mapBlend:blend,focus:renderFocus});
     if(blend<.999){
-      fitShadows(renderFocus,walking);
+      fitShadows(renderFocus,walkingWeight);
       if(!life)life=localAmbience(worldRoot,model);
       life.update(time,{focus:renderFocus,placements:detail.lifePlacements,revision:detail.lifeRevision,
         detailBlend:1-blend,reducedMotion:reducedMotion.matches,night:styleUniforms.night.value});
     }
     if(life)life.root.visible=blend<.999;
     walkingSunDirection.subVectors(sun.position,sun.target.position).normalize();
-    walkingSky.update(activeCamera,{visible:walking,night:daylight.night,sunDirection:walkingSunDirection,horizonColor:scene.background});
+    walkingSky.update(activeCamera,{visible:walkingWeight>.001,strength:walkingWeight,night:daylight.night,sunDirection:walkingSunDirection,horizonColor:scene.background});
     mapWorld.update(trains,{visible:blend>.001,camera,viewportHeight:innerHeight,poseBuffer:railway.poseBuffer,dt,reducedMotion:reducedMotion.matches});
+    characterMarker.update({position:walker.position,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
+      walking:walkingMode,walkingWeight,viewportHeight:innerHeight});
+    // Keep the figure where it can be read; its fixed-size locator represents
+    // the same position once articulated limbs become subpixel geometry.
+    walker.root.visible=walker.initialized&&(groundLayer||blend<.999&&characterMarker.characterReadable);
+    canvas.dataset.view=walkingMode?'person':view.mode;
+    canvas.dataset.cameraTransition=String(characterTransition.active);canvas.dataset.walkingWeight=walkingWeight.toFixed(3);
+    canvas.dataset.mapBlend=blend.toFixed(3);canvas.dataset.characterVisible=String(walker.initialized&&walker.root.visible);
+    canvas.dataset.characterMarker=String(characterMarker.root.visible||characterMarker.mapRoot.visible);
     viewCpu=performance.now()-stamp;stamp=performance.now();
     renderer.info.reset();renderer.shadowMap.enabled=blend<.999;
     compositor.render(scene,mapScene,activeCamera,blend);
@@ -309,7 +389,7 @@ window.__railway={
   get trains(){return trains.map(t=>({id:t.state.id,ownerId:t.state.ownerId,homeCityId:t.state.homeCityId,
     x:t.parts[0].position.x,y:t.parts[0].position.y,z:t.parts[0].position.z,cars:t.parts.length}));},
   get render(){return {...renderer.info.render,geometries:renderer.info.memory.geometries,...railway?.stats,...detail?.stats};},
-  get camera(){return {zoom:camera.zoom,width:innerWidth,height:innerHeight,mode:walker?.active?'person':view.mode,mapBlend:walker?.active?0:view.blend,following:view.selected};},
+  get camera(){return {zoom:camera.zoom,width:innerWidth,height:innerHeight,mode:walkingMode?'person':view.mode,mapBlend:renderedMapBlend,following:view.selected,transitioning:characterTransition.active};},
 };
 window.railway=Object.freeze({
   setNight:enabled=>daylight.setNight(enabled),

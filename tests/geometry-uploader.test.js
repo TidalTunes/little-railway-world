@@ -55,3 +55,47 @@ test('a failed GPU draw still restores every borrowed state and permits a subseq
   assert.deepEqual(mesh.geometry.drawRange,{start:9,count:Infinity});assert.equal(renderer.state.target,renderer.initialTarget);
   uploader.dispose();assert.equal(disposals,0);mesh.geometry.dispose();mesh.material.dispose();
 });
+
+test('instanced warmup uploads the real matrix and color buffers without exposing the hidden source',()=>{
+  const renderer=mockRenderer(),uploader=createGeometryUploader(renderer),source=new THREE.InstancedMesh(new THREE.BoxGeometry(),new THREE.MeshLambertMaterial(),512);
+  source.setColorAt(0,new THREE.Color('green'));source.count=0;source.visible=false;
+  source.geometry.setDrawRange(6,9);const matrix=source.instanceMatrix,color=source.instanceColor;
+  const draw=renderer.render;let warmProxy,draws=0;
+  renderer.render=function(scene,camera){
+    draw.call(this,scene,camera);draws++;const proxy=this.state.proxy;
+    assert.ok(proxy.isInstancedMesh);assert.equal(proxy.count,1,'a populated or empty pool submits only one instance');
+    assert.equal(proxy.instanceMatrix,matrix);assert.equal(proxy.instanceColor,color);
+    assert.equal(proxy.geometry,source.geometry);assert.equal(source.visible,false);assert.equal(source.count,0);
+    if(warmProxy)assert.equal(proxy,warmProxy,'repeat uploads reuse the source proxy');warmProxy=proxy;
+  };
+  uploader.upload(source);uploader.upload(source);
+  assert.equal(draws,2);assert.notEqual(warmProxy.instanceMatrix,matrix);assert.equal(warmProxy.instanceColor,null);
+  assert.deepEqual(source.geometry.drawRange,{start:6,count:9});
+  assert.equal(source.instanceMatrix,matrix);assert.equal(source.instanceColor,color);
+  assert.equal(renderer.state.scene.children.length,1,'the borrowed instanced proxy is removed from the warmup scene');
+  uploader.dispose();source.dispose();source.geometry.dispose();source.material.dispose();
+});
+
+test('failed instance uploads restore references, and source disposal owns the warmed GPU buffers',()=>{
+  const renderer=mockRenderer({fail:true}),uploader=createGeometryUploader(renderer),source=new THREE.InstancedMesh(new THREE.BoxGeometry(),new THREE.MeshLambertMaterial(),128);
+  source.setColorAt(0,new THREE.Color('green'));const matrix=source.instanceMatrix,color=source.instanceColor;
+  const draw=renderer.render;let proxy,released=0;
+  // Model Three's WebGLObjects disposal hook: it frees the current instance
+  // attributes of the mesh that performed the original GPU upload.
+  renderer.render=function(scene,camera){
+    proxy=scene.children[0];
+    if(!proxy.userData.disposalHook){
+      proxy.userData.disposalHook=true;
+      proxy.addEventListener('dispose',()=>{assert.equal(proxy.instanceMatrix,matrix);assert.equal(proxy.instanceColor,color);released++;});
+    }
+    draw.call(this,scene,camera);
+  };
+  assert.throws(()=>uploader.upload(source),/mock draw failure/);
+  assert.notEqual(proxy.instanceMatrix,matrix);assert.equal(proxy.instanceColor,null);
+  assert.notEqual(proxy.geometry,source.geometry);assert.equal(renderer.shadowMap.enabled,true);
+  assert.equal(renderer.state.target,renderer.initialTarget);
+  renderer.state.fail=false;uploader.upload(source);
+  uploader.dispose();assert.equal(released,0,'uploader lifetime does not invalidate live source instance buffers');
+  source.dispose();source.dispose();assert.equal(released,1,'a never-visible source releases its buffers exactly once');
+  source.geometry.dispose();source.material.dispose();
+});
