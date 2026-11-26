@@ -5,7 +5,8 @@ import { sampleLine } from './world-model.js';
 import { playerColors } from './player-palette.js';
 import {prepareMapTerrain} from './map-terrain.js';
 import {compileMapTerrainGeometry,MAP_SURFACE_HEIGHT_SCALE} from './map-terrain-geometry.js';
-import {surfacePoint,surfaceFrame,surfaceCoordinates,SURFACE_MAX_SEGMENT} from './world-surface.js';
+import {surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent,surfaceCoordinates,SURFACE_MAX_SEGMENT} from './world-surface.js';
+import {globeMapLighting} from './globe-lighting.js';
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 const PALETTE = {
   grass:C.grass.clone().lerp(C.trim,.10), farmland:C.farmland.clone().lerp(C.trim,.08),
@@ -105,6 +106,7 @@ export function buildMapWorld(parent,world){
           'outgoingLight *= surfaceLight;\n#include <opaque_fragment>');
       };
       result.customProgramCacheKey=()=> 'map-surface-light';
+      if(world.surface.complete)globeMapLighting(result,world.surface.radius);
     }
     return result;
   };
@@ -207,7 +209,7 @@ export function buildMapWorld(parent,world){
   for(const geometry of [outline,body])ownedGeometries.add(geometry);
   const position=new THREE.Vector3(),forward=new THREE.Vector3(),quaternion=new THREE.Quaternion();
   let sourceTrains=null,instances=[],cachedOwners=[],cachedLiveries=[],cachedParts=[],farMode=false,cityScale=1;
-  const cityMatrix=new THREE.Matrix4(),markerFrame=new THREE.Matrix4(),markerPoint=new THREE.Vector3(),chartPoint={},chartForward={};
+  const cityMatrix=new THREE.Matrix4(),markerPoint=new THREE.Vector3(),markerUp=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3(),chartPoint={},chartForward={};
   let markerX=NaN,markerZ=NaN;
   const addInstances=(geometry,color,count,name)=>{
     const mesh=new THREE.InstancedMesh(geometry,material(color),count);mesh.name=name;
@@ -217,12 +219,16 @@ export function buildMapWorld(parent,world){
   const writeMatrix=(mesh,index,x,z,angle,y,active,scaleX=1,scaleZ=1)=>{
     const values=mesh.instanceMatrix.array,start=index*16,c=Math.cos(angle)*active,s=Math.sin(angle)*active;
     if(spherical){
-      if(x!==markerX||z!==markerZ){surfaceFrame(world,x,z,markerFrame);markerX=x;markerZ=z;}
-      const e=markerFrame.elements;surfacePoint(world,x,y*heightScale,z,markerPoint);
+      if(x!==markerX||z!==markerZ){surfaceNormal(world,x,z,markerUp);markerX=x;markerZ=z;}
+      surfacePoint(world,x,y*heightScale,z,markerPoint);
+      // Keep glyph size fixed, but derive its heading from the actual route
+      // differential: longitude compresses strongly at high globe latitudes.
+      surfaceTangent(world,x,y*heightScale,z,s,0,c,markerForward).normalize();
+      markerRight.crossVectors(markerUp,markerForward).normalize();
       for(let axis=0;axis<3;axis++){
-        values[start+axis]=(e[axis]*c-e[8+axis]*s)*scaleX;
-        values[start+4+axis]=e[4+axis]*active;
-        values[start+8+axis]=(e[axis]*s+e[8+axis]*c)*scaleZ;
+        values[start+axis]=markerRight.getComponent(axis)*active*scaleX;
+        values[start+4+axis]=markerUp.getComponent(axis)*active;
+        values[start+8+axis]=markerForward.getComponent(axis)*active*scaleZ;
       }
       values[start+12]=markerPoint.x;values[start+13]=markerPoint.y;values[start+14]=markerPoint.z;
     }else{

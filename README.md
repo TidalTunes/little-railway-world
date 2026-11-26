@@ -1,12 +1,14 @@
 # Little Railway World
 
-[Explore Europe](https://tidaltunes.github.io/little-railway-world/) · [256 cities / 2,048 trains](https://tidaltunes.github.io/little-railway-world/?layout=stress&cities=256&trains=2048) · [Classic layout](https://tidaltunes.github.io/little-railway-world/?layout=classic) · [Explore Crossroads](https://tidaltunes.github.io/little-railway-world/?layout=crossroads)
+[Explore Earth](https://tidaltunes.github.io/little-railway-world/) · [Europe](https://tidaltunes.github.io/little-railway-world/?layout=europe) · [256 cities / 2,048 trains](https://tidaltunes.github.io/little-railway-world/?layout=stress&cities=256&trains=2048) · [Classic layout](https://tidaltunes.github.io/little-railway-world/?layout=classic) · [Explore Crossroads](https://tidaltunes.github.io/little-railway-world/?layout=crossroads)
 
 A text-free isometric railway simulation built with Three.js. Compact towns, simple low-poly silhouettes, and colorful trains stay readable from a wide view. Broad farmland, forest, plains, desert, ocean, and mountain regions give the miniature a sense of geography. Crop rows, cacti, station passengers, boats, birds, and a balloon reward a closer look.
 
-Zoom between three views: a simplified network overview from far away, the isometric miniature at the middle distance, and an overhead close view. The overview keeps broad terrain, railways, moving trains, and one city symbol per settlement. Click or tap a train to move closer and follow its journey. Both representations show the same running simulation.
+Zoom between three views: a simplified network overview from far away, the isometric miniature at the middle distance, and a close isometric view. The overview keeps broad terrain, railways, moving trains, and one city symbol per settlement. Click or tap a train to move closer and follow its journey. Both representations show the same running simulation.
 
-The default Europe map contains fifty major European cities, selected from the UN World Urbanization Prospects 2025 harmonized urban-centre ranking within the mapped extent. It stretches from Iceland to western Russia and from Scandinavia to northern Africa. Real coastlines, rivers, and lakes come from Natural Earth. Europe is rendered on an actual spherical Earth section: terrain, tracks, buildings, and trains all curve around the same center, and elevations point radially outward. A conformal coordinate chart is retained internally for generation and track planning, then inverted to geographic coordinates before geometry reaches the renderer. The simplified overview remains curved, while close cameras follow the local ground. Broad biome regions and continuous mountain ranges are stylized to fit the miniature. City development reflects relative population; the four ownership colors are arbitrary. Rail corridors follow the geography schematically, with bridges at water crossings and excavated mountain tunnels. The [city source notes](data/europe-cities-sources.md) explain the ranking and exclusions.
+The default map is a complete Earth globe with 96 selected cities and 250 trains on ten continental and island circuits. Real coastlines, rivers, lakes, and city coordinates come from Natural Earth. Greenland and Antarctica have permanent ice; broad climate regions and continuous mountain ranges suggest the actual geography. The globe is about 25% smaller in radius than the earlier Europe section. Terrain, tracks, buildings, and trains all curve around the same center, and elevations point radially outward. Longitude wraps continuously, so you can rotate all the way around the planet. The [Earth source notes](data/earth-geography-sources.md) document the data and deliberate simplifications.
+
+The fifty-city Europe map remains available at `?layout=europe`, from Iceland to western Russia and Scandinavia to northern Africa. Its cities follow the UN World Urbanization Prospects 2025 harmonized urban-centre ranking within that extent; see the [European city notes](data/europe-cities-sources.md). Both geographic presets use simplified railway corridors with generated bridges and mountain tunnels. City development reflects relative source population, and ownership colors are arbitrary.
 
 The earlier sixteen-city showcase remains available at `?layout=showcase`, with nineteen railway links and development levels from 1 to 10. Villages grow into districts with apartments, civic buildings, plazas, and towers, arranged beside connected streets. Cities and trains use their owner's color family. A train keeps its ownership as it travels between cities.
 
@@ -41,11 +43,12 @@ The deploy script builds and publishes `dist/` to this repository's `gh-pages` b
 
 Scroll or pinch to move through all three views. Drag to orbit the isometric world, or to pan the map and close view. Right-drag and two-finger drag also pan when a train is not being followed. Click or tap a visible train to follow it; click empty ground, press Escape, or zoom out to leave follow mode. Double-click resets to the fitted world view.
 
-Focus the canvas to use the keyboard:
+The canvas receives keyboard focus on startup. Click it again if focus has moved elsewhere:
 
 | Key | Action |
 | --- | --- |
 | + / − | Zoom between map, world, and close views. |
+| W / A / S / D | Pan up / left / down / right at every zoom level. Hold for smooth movement. |
 | Arrow keys | Orbit the isometric world; pan map and close views. Panning releases a followed train. |
 | F | Follow the visible train nearest the view centre. |
 | [ / ] | Follow the previous or next active train. |
@@ -60,6 +63,9 @@ Tab retains normal focus navigation. Reduced-motion preferences start the simula
 
 | Module | Responsibility |
 | --- | --- |
+| `src/earth-world.js` / `src/earth-ranges.js` | Complete Earth preset, 96 source cities, continental circuits, polar ice, and global mountain ranges. |
+| `src/world-surface.js` / `src/surface-shell.js` | Geographic sphere mapping, local tangent frames, curved geometry, and closed ocean shell. |
+| `src/map-tiles.js` / `src/map-terrain-geometry.js` | Bounded globe triangulation and transferable indexed terrain buffers. |
 | `src/europe-world.js` / `src/europe-ranges.js` | Geographic Europe preset, source city coordinates, railway corridors, and continuous mountain ranges. |
 | `src/hydrology.js` | Multiple river widths, lake masks, banks, and shared water geometry. |
 | `src/mountain-ranges.js` | Polygonal ridge terrain, exact surface sampling, and matching regional slices. |

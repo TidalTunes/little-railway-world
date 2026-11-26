@@ -10,7 +10,7 @@ import { createWorldWorker } from './world-worker-client.js';
 import { createGeometryUploader } from './geometry-uploader.js';
 import { ambience } from './ambience.js';
 import { C,color } from './palette.js';
-import {surfaceFor,surfacePoint,surfaceFrame} from './world-surface.js';
+import {surfaceFor,surfacePoint,surfaceFrame,surfaceChartCoordinates} from './world-surface.js';
 import {createSurfaceShell} from './surface-shell.js';
 import './style.css';
 
@@ -23,7 +23,7 @@ renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.
 renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.info.autoReset=false;
 const camera=new THREE.OrthographicCamera(-60,60,45,-45,.1,500);
 camera.position.set(115,125,145);camera.lookAt(0,1,0);
-scene.add(new THREE.HemisphereLight(color(.94,.035,221),color(.55,.025,169),2.15));
+const sky=new THREE.HemisphereLight(color(.94,.035,221),color(.55,.025,169),2.15);scene.add(sky);
 const sun=new THREE.DirectionalLight(color(.98,.04,84),3.25);
 sun.position.set(-65,110,65);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
 Object.assign(sun.shadow.camera,{left:-95,right:95,top:95,bottom:-95,near:1,far:260});
@@ -61,6 +61,17 @@ function disposeLife(){
 }
 function fitWorld(){
   view.reset();
+  if(model.surface?.complete){
+    const radius=model.surface.radius,home=surfaceChartCoordinates(model,model.camera?.longitude??10,model.camera?.latitude??25);
+    ground.visible=false;
+    frameWidth=frameHeight=radius*2.2;
+    view.setScale(frameHeight/230);
+    controls.target.set(home.x,1.3,home.z);
+    const localOrbit=new THREE.Vector3().setFromSphericalCoords(1,Math.PI/3,Math.PI/4);
+    navigation.position.copy(controls.target).addScaledVector(localOrbit,radius*3);
+    navigation.zoom=1;navigation.far=radius*8;controls.update();
+    resize();view.setHome();return;
+  }
   const xs=model.outline.map(p=>p[0]),zs=model.outline.map(p=>p[1]);
   const width=Math.max(...xs)-Math.min(...xs),depth=Math.max(...zs)-Math.min(...zs);
   const radius=Math.hypot(width,depth),height=Math.max(0,...model.mountains.map(m=>m.height));
@@ -98,11 +109,12 @@ function fitShadows(){
   const x=Math.round(controls.target.x/texel)*texel,z=Math.round(controls.target.z/texel)*texel;
   if(surfaceFor(model)){
     surfacePoint(model,x,0,z,sun.target.position);surfaceFrame(model,x,z,lightFrame);
+    sky.position.set(0,1,0).applyMatrix4(lightFrame);
     localSun.copy(sunDirection).applyMatrix4(lightFrame);
     sun.position.copy(sun.target.position).addScaledVector(localSun,Math.max(1,extent/95));
     fill.position.set(40,30,-40).applyMatrix4(lightFrame).add(sun.target.position);fill.target.position.copy(sun.target.position);
   }else{
-    sun.target.position.set(x,0,z);
+    sky.position.set(0,1,0);sun.target.position.set(x,0,z);
     sun.position.copy(sun.target.position).addScaledVector(sunDirection,Math.max(1,extent/95));
     fill.position.set(40,30,-40);fill.target.position.set(0,0,0);
   }
@@ -134,6 +146,7 @@ async function loadWorld(input={}){
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
+    if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
     clearMeasurements();return model;
   }catch(error){
@@ -235,11 +248,16 @@ window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),generateWorld,validateWorld,createStressWorld,
 });
-const parameters=new URLSearchParams(location.search),layout=parameters.get('layout')??(parameters.has('cities')?'classic':'europe');
+const parameters=new URLSearchParams(location.search),layout=parameters.get('layout')??(parameters.has('cities')?'classic':'earth');
 try{
   let input;
   if(layout==='stress')input=createStressWorld({cities:parameters.has('cities')?Number(parameters.get('cities')):256,
     trains:parameters.has('trains')?Number(parameters.get('trains')):2048,seed:parameters.get('seed')??'continental-railway'});
+  else if(layout==='earth'){
+    const {createEarthWorld}=await import('./earth-world.js');
+    input=createEarthWorld({...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
+      ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})});
+  }
   else if(layout==='europe'){
     const {createEuropeWorld}=await import('./europe-world.js');
     input=createEuropeWorld({...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),

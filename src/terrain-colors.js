@@ -21,7 +21,8 @@ function fieldFor(world){
     const width=Math.min(22,Math.max(4.5,extent*.011));
     const colors={farmland:C.grass.clone().lerp(C.farmland,.43),forest:C.grass.clone().lerp(C.forestFloor,.78),
       plains:C.grass.clone(),desert:C.desert.clone()};
-    fields.set(sites,{sites:sites.map(site=>({...site,color:colors[site.type]??C.grass})),width,distances:new Float64Array(sites.length)});
+    fields.set(sites,{sites:sites.map(site=>({...site,color:site.ice?C.snow:colors[site.type]??C.grass})),width,
+      period:source.surface?.complete?source.bounds.width:0,distances:new Float64Array(sites.length)});
   }
   return fields.get(sites);
 }
@@ -30,14 +31,20 @@ function fieldFor(world){
 export function terrainColor(world,x,z,{map=false,target=new THREE.Color()}={}){
   const field=fieldFor(world);
   if(!field)return target.copy(C.grass);
-  const {sites,width,distances}=field;
-  const px=x+(terrainNoise(x+171,z-87,45)-.5)*width*.85;
-  const pz=z+(terrainNoise(x-73,z+119,39)-.5)*width*.85;
+  const {sites,width,distances,period}=field;
+  const noise=(xx,zz,scale)=>{
+    if(!period)return terrainNoise(xx,zz,scale);
+    const u=((xx+period/2)%period+period)%period,t=smooth(u/period);
+    return terrainNoise(u,zz,scale)*(1-t)+terrainNoise(u-period,zz,scale)*t;
+  };
+  const px=x+(noise(x+171,z-87,45)-.5)*width*.85;
+  const pz=z+(noise(x-73,z+119,39)-.5)*width*.85;
   // Every site within the blend band participates, so even four-way junctions
   // are continuous. The small distance array is reused between vertex samples.
   let nearest=Infinity,total=0;
   for(let i=0;i<sites.length;i++){
-    distances[i]=Math.hypot(px-sites[i].x,pz-sites[i].z);nearest=Math.min(nearest,distances[i]);
+    const dx=period?((px-sites[i].x+period/2)%period+period)%period-period/2:px-sites[i].x;
+    distances[i]=Math.hypot(dx,pz-sites[i].z);nearest=Math.min(nearest,distances[i]);
   }
   target.setRGB(0,0,0);
   for(let i=0;i<sites.length;i++){
@@ -46,7 +53,7 @@ export function terrainColor(world,x,z,{map=false,target=new THREE.Color()}={}){
   }
   target.multiplyScalar(1/total);
   // Broad, subtle meadow variation, with quieter values in the network map.
-  const variation=(terrainNoise(x,z,29)-.5)*.09+(terrainNoise(x+243,z-192,91)-.5)*.07;
+  const variation=(noise(x,z,29)-.5)*.09+(noise(x+243,z-192,91)-.5)*.07;
   target.multiplyScalar(1+variation*(map?.42:1));
   if(map)target.lerp(C.trim,.09);
   return target;

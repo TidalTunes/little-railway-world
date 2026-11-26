@@ -2,11 +2,29 @@ import * as THREE from 'three';
 import {C} from './palette.js';
 import {surfaceFor,surfacePoint,warpGeometryToSurface} from './world-surface.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
+import {globeMapLighting} from './globe-lighting.js';
+
+function createPlanet(world){
+  const radius=world.surface.radius,detail=new THREE.Group(),map=new THREE.Group(),resources=[];
+  detail.name=map.name='earth-ocean';
+  // One closed ocean sphere seals the antimeridian and poles. Land keeps its
+  // exact coastline above it; the whole ocean needs no polygon triangulation.
+  for(const [group,elevation]of [[map,-.65],[detail,-4.5]]){
+    const geometry=new THREE.SphereGeometry(radius+elevation,256,128);
+    geometry.translate(0,-radius,0);
+    const material=globeMapLighting(new THREE.MeshBasicMaterial({color:C.ocean,toneMapped:false}),radius);
+    resources.push(geometry,material);group.add(new THREE.Mesh(geometry,material));
+  }
+  let disposed=false;
+  return {detail,map,dispose(){if(disposed)return;disposed=true;
+    detail.removeFromParent();map.removeFromParent();resources.forEach(resource=>resource.dispose());}};
+}
 
 /** A cut edge makes the finite Earth section tangible. It sits beneath both
  * representations; the geographic surface itself is never flattened. */
 export function createSurfaceShell(world){
   if(!surfaceFor(world))return null;
+  if(world.surface.complete)return createPlanet(world);
   const outline=world.outline,depth=32,geometries=[],materials=[];
   const detail=new THREE.Group(),map=new THREE.Group();
   detail.name=map.name='curved-earth-section';

@@ -76,8 +76,10 @@ export function buildTerrain(parent,world){
   }
   // Only the actual island edge gets trim and spillways. Clip those original
   // edges into a local cell, rather than decorating artificial chunk borders.
+  // A complete globe has no outer edge: its chart seam and poles identify
+  // adjacent surface points. Trim there would also extend past valid latitude.
   const border=world.terrainSource?.outline??world.outline;
-  for(let i=0;i<border.length;i++){
+  if(!world.surface?.complete)for(let i=0;i<border.length;i++){
     const edge=clippedEdge(border[i],border[(i+1)%border.length],world.terrainChunk?world.bounds:null);
     if(!edge)continue;
     const [a,b]=edge;

@@ -450,7 +450,8 @@ function placeScenery(world,random,density) {
   const region=world.detailRegion;
   const scale=Math.sqrt((region?(region.maxX-region.minX)*(region.maxZ-region.minZ):world.bounds.width*world.bounds.depth)/(130*95));
   const candidate=()=>region?{x:lerp(region.minX,region.maxX,random()),z:lerp(region.minZ,region.maxZ,random())}:{x:(random()-.5)*world.bounds.width*.94,z:(random()-.5)*world.bounds.depth*.94};
-  world.farmland=placeFarmland(world,{density,canPlace:item=>canPlace(world,item,{keepOutsideCities:true}),add});
+  const unfrozen=item=>!world.surface?.complete||biomeDistance(world,'ice',item.x,item.z)<-item.radius;
+  world.farmland=placeFarmland(world,{density,canPlace:item=>unfrozen(item)&&canPlace(world,item,{keepOutsideCities:true}),add});
   // The forest is a connected biome, with small open glades between groves.
   const groves=[];
   for(let i=0;i<500&&groves.length<16;i++){const p=candidate();if(biomeAt(world,p.x,p.z)==='forest')groves.push(p);}
@@ -462,17 +463,17 @@ function placeScenery(world,random,density) {
     const item={kind:'tree',x:grove.x+Math.cos(a)*r,z:grove.z+Math.sin(a)*r,radius:.85*size,
       scale:size,variant:random()<.66?'pine':random()<.55?'round':'gold'};
     const biome=biomeAt(world,item.x,item.z);
-    if((forest?biome==='forest':biome==='plains')&&fitsBiome(world,['forest','plains'],item.x,item.z,item.radius)
+    if(unfrozen(item)&&(forest?biome==='forest':biome==='plains')&&fitsBiome(world,['forest','plains'],item.x,item.z,item.radius)
       &&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
   }
   for(let attempt=0,accepted=0;attempt<2200&&accepted<Math.round(25*density*scale);attempt++){
     const size=.8+random()*.35,item={kind:'cactus',...candidate(),radius:.7*size,scale:size,variant:Math.floor(random()*3)};
-    if(fitsBiome(world,'desert',item.x,item.z,item.radius)&&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
+    if(unfrozen(item)&&fitsBiome(world,'desert',item.x,item.z,item.radius)&&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
   }
   for(let attempt=0,accepted=0;attempt<2500&&accepted<Math.round(65*density*scale);attempt++){
     const kind=attempt%6===0?'sheep':'rock',size=.6+random()*.55;
     const item={kind,...candidate(),radius:kind==='sheep'?.7:.65*size,scale:kind==='sheep'?1:size,variant:Math.floor(random()*3)};
-    if(fitsBiome(world,kind==='sheep'?'plains':['plains','desert'],item.x,item.z,item.radius)
+    if((kind==='rock'||unfrozen(item))&&fitsBiome(world,kind==='sheep'?'plains':['plains','desert'],item.x,item.z,item.radius)
       &&canPlace(world,item,{keepOutsideCities:true})){add(item);accepted++;}
   }
 }

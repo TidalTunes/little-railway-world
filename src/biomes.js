@@ -264,7 +264,7 @@ export function createBiomes(world, config = {}) {
   const xs = world.outline.map(point => point[0]), zs = world.outline.map(point => point[1]);
   const bounding = [[Math.min(...xs) - 1, Math.min(...zs) - 1], [Math.max(...xs) + 1, Math.min(...zs) - 1],
     [Math.max(...xs) + 1, Math.max(...zs) + 1], [Math.min(...xs) - 1, Math.max(...zs) + 1]];
-  const regions = [];
+  const regions = [], frozen = [];
   for (const site of sites) {
     let cell = bounding;
     for (const other of sites) {
@@ -274,13 +274,20 @@ export function createBiomes(world, config = {}) {
       if (cell.length < 3) break;
     }
     const polygons = cell.length >= 3 ? clipping.intersection(dryRegions, [[closeRing(cell)]]) : [];
-    if (polygons.length) regions.push({id: site.id, type: site.type, polygons});
+    if (polygons.length) regions.push({id: site.id, type: site.type,...(site.ice===true?{ice:true}:{}), polygons});
+    // Frozen ground includes mountain footprints too. Keeping a separate mask
+    // lets all vegetation use the same full-footprint boundary clearance.
+    if(world.surface?.complete&&site.ice===true&&cell.length>=3){
+      const ice=mountains.length?clipping.intersection(land,[[closeRing(cell)]]):polygons;
+      if(ice.length)frozen.push(ice);
+    }
   }
   if (mountains.length) regions.push({id: 'biome-mountain', type: 'mountain', polygons: mountains});
   if (ocean.length) regions.push({id: 'biome-ocean', type: 'ocean', polygons: ocean});
   // Lakes share the water biome while retaining separate source geometry.
   if(geography?.lakes?.length)regions.push({id:'biome-lakes',type:'ocean',polygons:geography.lakes});
   return {regions: regions.map(region => ({...region, polygons: stablePolygons(region.polygons)})),
+    ...(frozen.length?{ice:stablePolygons(clipping.union(...frozen))}:{}),
     land: stablePolygons(land), ocean: stablePolygons(ocean), oceanShore: stablePolygons(oceanShore),
     lakeShore:stablePolygons(geography?.lakeShore??[]),
     shoreWidth: OCEAN_SHORE_WIDTH, sites};
@@ -296,7 +303,7 @@ function polygonsFor(world, types) {
   if (!cached) { cached = new Map(); footprintCache.set(model, cached); }
   const key = selected.join('|');
   if (!cached.has(key)) {
-    const polygons = selected.flatMap(type => type === 'shore' ? [model.oceanShore,model.lakeShore] :
+    const polygons = selected.flatMap(type => type === 'shore' ? [model.oceanShore,model.lakeShore] :type==='ice'?[model.ice]:
       model.regions.filter(region => region.type === type).map(region => region.polygons)).filter(value => value?.length);
     cached.set(key, polygons.length ? clipping.union(...polygons) : []);
   }
@@ -310,7 +317,8 @@ export function biomeAt(world, x, z) {
   return inPolygons(model.oceanShore, x, z)||inPolygons(model.lakeShore??[],x,z) ? 'shore' : null;
 }
 
-/** Positive inside the selected biome, negative outside; zero at its boundary. */
+/** Positive inside the selected biome, negative outside; zero at its boundary.
+ * 'ice' addresses the optional frozen-land mask without changing biome types. */
 export function biomeDistance(world, type, x, z) {
   return signedDistance(polygonsFor(world, type), x, z);
 }

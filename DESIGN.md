@@ -6,9 +6,9 @@ A sunlit miniature railway. The viewport is entirely the world: no typography, l
 
 ## Composition
 
-A curved, layered section of the Earth carries Europe’s towns, rivers, and broad coherent biomes. A restrained cut edge makes the spherical surface tangible. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places, with gently varied, blended ground colors between them. Quiet open ground makes the trains easy to follow. The default fifty-city Europe map uses geographic positions on a sphere, with radial elevations and local tangent frames for buildings, railways, train carriages, and cameras. The sixteen-city showcase, classic generator, and stress presets retain their planar surfaces and the same placement rules.
+A complete Earth globe carries compact towns, rivers, and broad coherent biomes. Its continuous ocean, softly lit limb, polar ice, and recognizable continents make the spherical surface tangible. Farmland, dense forest, open plains, sandy desert, a coastal bay, and faceted mountain ridges read as distinct places, with gently varied, blended ground colors between them. Quiet open ground makes the trains easy to follow. The default Earth map uses geographic positions on a sphere, with radial elevations and local tangent frames for buildings, railways, train carriages, and cameras. The previous Europe section remains available. The sixteen-city showcase, classic generator, and stress presets retain their planar surfaces and the same placement rules.
 
-The world has three viewing distances. The far view is a network summary: broad biome fills, water, two quiet mountain contour layers, railways, moving train marks, and one city glyph per settlement. Individual buildings, trees, farms, rocks, animals, station marks, and water strokes belong to the closer views. The middle view presents the isometric miniature. The close view looks down on individual trains and their surroundings. All three share the same geography and simulation state.
+The world has three viewing distances. The far view is a network summary: broad biome fills, water, two quiet mountain contour layers, railways, moving train marks, and one city glyph per settlement. Individual buildings, trees, farms, rocks, animals, station marks, and water strokes belong to the closer views. The middle view presents the isometric miniature. The close view follows individual trains and their surroundings at the same strong isometric angle as the middle view. All three share the same geography and simulation state.
 
 ## Color
 
@@ -36,10 +36,10 @@ Trains follow continuous circuits through cities when the graph permits them. Ea
 
 A small boat, water ripples, birds, and a balloon provide quieter background movement. Space pauses motion; reduced-motion preferences start paused.
 
-Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions retain the globe’s curvature and simplify the art. The camera moves around the spherical section as the user pans; closer views orient to the local ground. Reduced-motion preferences make camera transitions immediate.
+Selecting a train brings the camera closer and follows its movement without rotating with each bend. Map transitions retain the globe’s curvature and simplify the art. The camera moves around the globe as the user pans, wrapping continuously across the date line; closer views orient to the local ground. Reduced-motion preferences make camera transitions immediate.
 
 ## Inspection
 
-Scroll, pinch, and + / − move through the three views. Drag orbits the isometric world and pans the map or close view. Click or tap a visible train to follow it; F selects the visible train nearest the centre, and [ / ] cycle active trains. Escape, an empty click, or zooming out releases follow. Home and double-click restore the isometric view. Arrow keys orbit or pan, Space pauses, and R generates another seed.
+Scroll, pinch, and + / − move through the three views. Drag orbits the isometric world and pans the map or close view. Click or tap a visible train to follow it; F selects the visible train nearest the centre, and [ / ] cycle active trains. Escape, an empty click, or zooming out releases follow. Home and double-click restore the fitted overview. WASD pans in four directions; held keys move smoothly and release on blur. Arrow keys orbit or pan, Space pauses, and R generates another seed.
 
 A JSON authoring API loads and validates layouts, but there is no editor UI or playable economy in this iteration. The canvas has a screen-reader description and a focus outline during keyboard use. Tab moves focus normally, and train selection has keyboard equivalents.

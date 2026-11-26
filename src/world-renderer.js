@@ -115,6 +115,14 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   }
   const xs=world.outline.map(p=>p[0]),zs=world.outline.map(p=>p[1]);
   const extent={minX:Math.min(...xs),maxX:Math.max(...xs),minZ:Math.min(...zs),maxZ:Math.max(...zs)};
+  const period=surface?.complete?extent.maxX-extent.minX:0;
+  const longitudeDelta=delta=>period?((delta+period/2)%period+period)%period-period/2:delta;
+  function longitudeRanges(min,max){
+    if(period&&max-min>=period)return [[extent.minX,extent.maxX]];
+    if(!period)return [[Math.max(extent.minX,min),Math.min(extent.maxX,max)]];
+    const start=((min-extent.minX)%period+period)%period+extent.minX,end=start+max-min;
+    return end<=extent.maxX?[[start,end]]:[[start,extent.maxX],[extent.minX,end-period]];
+  }
   function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera}={}){
     if(disposed)return;frame++;root.visible=mapBlend<.999;
     if(!root.visible&&!prewarm)return;
@@ -129,6 +137,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         ray.origin.set(x,y,-1).unproject(coverageCamera);ray.direction.copy(direction);shell.radius=surface.radius+height;
         if(!ray.intersectSphere(shell,hit)){missed=true;continue;}
         surfaceCoordinates(world,hit,chart);
+        if(period&&target)chart.x=target.x+longitudeDelta(chart.x-target.x);
         minX=Math.min(minX,chart.x);maxX=Math.max(maxX,chart.x);minZ=Math.min(minZ,chart.z);maxZ=Math.max(maxZ,chart.z);
       }
       if(missed){minX=extent.minX;maxX=extent.maxX;minZ=extent.minZ;maxZ=extent.maxZ;}
@@ -143,9 +152,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     }
     if(target)targetPoint.copy(target);else targetPoint.set((minX+maxX)/2,0,(minZ+maxZ)/2);
     const candidate=(x,z)=>({key:`${x}:${z}`,x:x+size/2,z:z+size/2,size,
-      distance:(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
+      distance:longitudeDelta(x+size/2-targetPoint.x)**2+(z+size/2-targetPoint.z)**2});
     required.clear();wanted.clear();
-    for(let x=Math.floor(Math.max(extent.minX,minX)/size)*size;x<Math.min(extent.maxX,maxX);x+=size){
+    for(const [left,right]of longitudeRanges(minX,maxX))for(let x=Math.floor(left/size)*size;x<right;x+=size){
       for(let z=Math.floor(Math.max(extent.minZ,minZ)/size)*size;z<Math.min(extent.maxZ,maxZ);z+=size){
         const entry=candidate(x,z);required.set(entry.key,entry);
       }
@@ -154,7 +163,8 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     // neighbouring visible cell. Their owner region is therefore required too.
     for(const feature of features){
       const radius=feature.radius??4;
-      if(feature.x+radius<minX||feature.x-radius>maxX||feature.z+radius<minZ||feature.z-radius>maxZ)continue;
+      const x=period?targetPoint.x+longitudeDelta(feature.x-targetPoint.x):feature.x;
+      if(x+radius<minX||x-radius>maxX||feature.z+radius<minZ||feature.z-radius>maxZ)continue;
       const entry=candidate(Math.floor(feature.x/size)*size,Math.floor(feature.z/size)*size);required.set(entry.key,entry);
     }
     const candidates=[...required.values()].sort((a,b)=>a.distance-b.distance);
@@ -162,7 +172,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     for(const entry of candidates.slice(0,maxVisibleChunks))wanted.set(entry.key,entry);
     if(!stats.coverageLimited){
       const prefetch=[];
-      for(let x=Math.floor(Math.max(extent.minX,minX-size)/size)*size;x<Math.min(extent.maxX,maxX+size);x+=size){
+      for(const [left,right]of longitudeRanges(minX-size,maxX+size))for(let x=Math.floor(left/size)*size;x<right;x+=size){
         for(let z=Math.floor(Math.max(extent.minZ,minZ-size)/size)*size;z<Math.min(extent.maxZ,maxZ+size);z+=size){
           const entry=candidate(x,z);if(!wanted.has(entry.key))prefetch.push(entry);
         }

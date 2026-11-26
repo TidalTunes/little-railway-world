@@ -269,3 +269,23 @@ test('map remains visible until local geometry is ready, then reveals detail smo
   assert.ok(f.view.blend > 0 && f.view.blend < 1);
   f.settle(); assert.equal(f.view.blend, 0);
 });
+
+test('WASD pans screen-relative at every zoom without changing the orbit, and Home cancels held motion',t=>{
+  const f=fixture(t,{reduced:true}),{view}=f;
+  const target=view.controls.target.clone();
+  for(const zoom of [.5,1,3.2]){
+    f.zoom(zoom);
+    for(const [key,axis,sign] of [['d','x',-1],['a','x',1],['w','y',-1],['s','y',1]]){
+      const fixedPoint=view.controls.target.clone(),offset=view.navigation.position.clone().sub(fixedPoint);
+      const quaternion=view.chartCamera.quaternion.clone();
+      f.key(key);f.canvas.dispatchEvent(event('keyup',{key}));f.update();
+      const screen=fixedPoint.project(f.camera);
+      assert.ok(screen[axis]*sign>0,'a stationary ground point moves opposite the requested pan');
+      assert.ok(Math.abs(screen[axis==='x'?'y':'x'])<1e-8,'pan follows one screen axis');
+      nearVector(view.navigation.position.clone().sub(view.controls.target),offset);
+      assert.ok(view.chartCamera.quaternion.angleTo(quaternion)<1e-7,'WASD cannot orbit or tilt');
+    }
+  }
+  f.key('a');f.update();
+  f.key('Home');f.settle();nearVector(view.controls.target,target);assert.equal(view.mode,'world');
+});

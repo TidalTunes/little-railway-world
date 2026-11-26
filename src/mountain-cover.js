@@ -64,6 +64,7 @@ export function mountainTrees(world,mountain){
       const z=(iz+.5+(noise(seed^0x537,ix,iz)-.5)*.44)*spacing;
       if(x<bounds.minX||x>=bounds.maxX||z<bounds.minZ||z>=bounds.maxZ)continue;
       const scale=.72+noise(seed^0x173,ix,iz)*.30,radius=.85*scale;
+      if(source.surface?.complete&&source.biomes&&biomeDistance(source,'ice',x,z)>=-radius-.2)continue;
       if(mountainFootprintDistance(mountain,x,z)>-radius-.2)continue;
       const y=mountainSurfaceHeight(mountain,x,z),altitude=y/mountain.height;
       if(y<.18||y>Math.min(mountain.height*.55,mountainSnowHeight(mountain,x,z)-2.8))continue;

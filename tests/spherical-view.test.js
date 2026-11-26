@@ -75,10 +75,11 @@ test('globe overview stays curved and its displayed camera looks at the surface 
 });
 
 test('map taps and close picking use bent train positions while follow and navigation remain in the chart',t=>{
-  const f=fixture(t);f.tap();assert.equal(f.view.selected,'globe-train');f.update();
+  const f=fixture(t),orbit=new THREE.Spherical().setFromVector3(f.view.navigation.position.clone().sub(f.view.controls.target));
+  f.tap();assert.equal(f.view.selected,'globe-train');f.update();
   assert.equal(f.view.mode,'close');near(f.view.controls.target,new THREE.Vector3(720,.75,-320));
   const normal=surfaceNormal(f.world,720,-320);
-  assert.ok(Math.abs(localViewAngle(f.camera,normal)-.36)<1e-8);
+  assert.ok(Math.abs(localViewAngle(f.camera,normal)-orbit.phi)<1e-8,'following preserves the chosen local view angle');
   for(const marker of [f.scene.children.find(object=>object.geometry?.type==='RingGeometry'),f.mapScene.children[0]]){
     assert.equal(marker.visible,true);
     near(new THREE.Vector3(0,1,0).applyQuaternion(marker.quaternion),normal);
@@ -100,8 +101,10 @@ test('destination coverage camera is ready before detail visibility and never ch
   assert.ok(localViewAngle(coverage,normal)>.8,'world detail is requested at the destination orbit, not the temporary map angle');
   const target=surfacePoint(f.world,-450,view.controls.target.y,300).project(coverage);
   assert.ok(Math.hypot(target.x,target.y)<1e-10);near(f.camera.position,position);assert.ok(f.camera.quaternion.angleTo(quaternion)<1e-8);
+  const localAngle=localViewAngle(coverage,normal);
   view.navigation.zoom=32;view.navigation.updateProjectionMatrix();
-  assert.ok(Math.abs(localViewAngle(view.coverageCamera,normal)-.36)<1e-8,'coverage updates immediately before the next animation frame');
+  assert.ok(Math.abs(localViewAngle(view.coverageCamera,normal)-localAngle)<1e-8,'coverage retains the same orbit at close zoom');
+  assert.equal(view.coverageCamera.zoom,32,'coverage zoom updates before the next animation frame');
 });
 
 test('chart panning and bounds remain finite far from the sphere origin, and replacement planar worlds regain flattening',t=>{

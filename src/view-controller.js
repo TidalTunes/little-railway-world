@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CAMERA_ZOOM,modeForZoom,shouldStopFollowing,fitZoomForSpan } from './camera-modes.js';
 import { C } from './palette.js';
-import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal } from './world-surface.js';
+import { surfaceFor,surfacePoint,surfaceFrame,surfaceNormal,surfaceTangent } from './world-surface.js';
 
 const ease=(rate,dt,reduced)=>reduced?1:1-Math.exp(-rate*dt);
 const centerOf=train=>train.parts[Math.floor(train.parts.length/2)];
@@ -10,6 +10,8 @@ const centerOf=train=>train.parts[Math.floor(train.parts.length/2)];
 // Keep this lightweight: importing that compiler here also loads tessellation.
 const SPHERICAL_MAP_TRAIN_HEIGHT=.123*16;
 const GLOBE_MAP_TILT=.48;
+const POLE_LIMIT=85*Math.PI/180;
+const wrappedLongitude=(value,radius)=>THREE.MathUtils.euclideanModulo(value+Math.PI*radius,2*Math.PI*radius)-Math.PI*radius;
 
 export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true}){
   // Navigation keeps the user's orbit. The displayed camera can rise above it
@@ -19,17 +21,18 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   Object.assign(controls,{enableDamping:true,dampingFactor:.075,panSpeed:.7,rotateSpeed:.45,
     minZoom:CAMERA_ZOOM.min,maxZoom:CAMERA_ZOOM.max,minPolarAngle:Math.PI*.20,maxPolarAngle:Math.PI*.40});
   controls.target.set(0,1.3,0);controls.update();
-  let mode='world',blend=0,closeBlend=0,selected=null,hovered=null,zoomGoal=null;
+  let mode='world',blend=0,selected=null,hovered=null,zoomGoal=null;
   let zoomScale=1;
   let homePosition=new THREE.Vector3(),homeTarget=new THREE.Vector3();
   let lastPointer=null,gesture=null,gestureBlocked=false,hoverClock=0;
-  const pointers=new Set(),raycaster=new THREE.Raycaster();
+  const pointers=new Set(),heldKeys=new Set(),raycaster=new THREE.Raycaster();
   raycaster.firstHitOnly=true;
   const pickMeshes=[];
   const projected=new THREE.Vector3(),pointerNDC=new THREE.Vector2(),cameraOffset=new THREE.Vector3();
   const spherical=new THREE.Spherical(),followTarget=new THREE.Vector3(),delta=new THREE.Vector3();
   const tangentFrame=new THREE.Matrix4(),surfaceTarget=new THREE.Vector3(),surfaceOffset=new THREE.Vector3();
-  const surfaceUp=new THREE.Vector3(),viewDirection=new THREE.Vector3(),markerYaw=new THREE.Quaternion(),vertical=new THREE.Vector3(0,1,0);
+  const surfaceUp=new THREE.Vector3(),viewDirection=new THREE.Vector3(),markerForward=new THREE.Vector3(),markerRight=new THREE.Vector3();
+  const keyboardRight=new THREE.Vector3(),keyboardUp=new THREE.Vector3();
   const chartBounds=new WeakMap();
   const domState={};
   const ringGeometry=new THREE.RingGeometry(.94,1,64);ringGeometry.rotateX(-Math.PI/2);
@@ -40,7 +43,15 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
 
   function constrainTarget(){
     const world=getWorld();
-    if(!surfaceFor(world))return;
+    const surface=surfaceFor(world);
+    if(!surface)return;
+    if(surface.complete){
+      // Longitude is periodic. Translate navigation by the same chart wrap so
+      // the physical camera remains continuous when crossing the date line.
+      delta.set(wrappedLongitude(controls.target.x,surface.radius)-controls.target.x,0,
+        THREE.MathUtils.clamp(controls.target.z,-surface.radius*POLE_LIMIT,surface.radius*POLE_LIMIT)-controls.target.z);
+      controls.target.add(delta);navigation.position.add(delta);return;
+    }
     let bounds=chartBounds.get(world);
     if(!bounds){
       if(world.outline?.length){
@@ -57,11 +68,14 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
       THREE.MathUtils.clamp(controls.target.z,bounds.top,bounds.bottom)-controls.target.z);
     controls.target.add(delta);navigation.position.add(delta);
   }
-  function buildChartCamera(destination,close,map){
+  function buildChartCamera(destination,map){
     destination.copy(navigation);
     spherical.setFromVector3(cameraOffset.copy(navigation.position).sub(controls.target));
-    spherical.phi=THREE.MathUtils.lerp(spherical.phi,.36,close);
-    spherical.phi=THREE.MathUtils.lerp(spherical.phi,surfaceFor(getWorld())?GLOBE_MAP_TILT:.00001,map);
+    const surface=surfaceFor(getWorld());
+    spherical.phi=THREE.MathUtils.lerp(spherical.phi,surface&&!surface.complete?GLOBE_MAP_TILT:.00001,map);
+    // The complete overview stays north-up. Local zoom and following retain
+    // the saved orbit, including any angle the user deliberately chose.
+    if(surface?.complete)spherical.theta=THREE.MathUtils.lerp(spherical.theta,0,map);
     destination.position.copy(controls.target).add(cameraOffset.setFromSpherical(spherical));
     destination.lookAt(controls.target);destination.updateMatrixWorld(true);
     return destination;
@@ -81,7 +95,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     return destination;
   }
   function updateCamera(){
-    buildChartCamera(chartCamera,closeBlend,blend);bendCamera(camera,chartCamera);
+    buildChartCamera(chartCamera,blend);bendCamera(camera,chartCamera);
     getWorldRoot()?.scale.set(1,surfaceFor(getWorld())?1:1-blend*.985,1);
   }
 
@@ -97,10 +111,10 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     if(reducedMotion.matches){navigation.zoom=zoomGoal;navigation.updateProjectionMatrix();zoomGoal=null;}
   }
   function reset(){
-    clearSelection();hovered=null;flushControls();
+    clearSelection();heldKeys.clear();hovered=null;flushControls();
     navigation.position.copy(homePosition);controls.target.copy(homeTarget);
     navigation.zoom=1;navigation.updateProjectionMatrix();controls.update();
-    mode=modeForZoom(1/zoomScale);blend=mode==='map'||!isDetailReady()?1:0;closeBlend=0;ring.visible=mapRing.visible=false;
+    mode=modeForZoom(1/zoomScale);blend=mode==='map'||!isDetailReady()?1:0;ring.visible=mapRing.visible=false;
     constrainTarget();
     if(surfaceFor(getWorld()))updateCamera();
     else{getWorldRoot()?.scale.set(1,1-blend*.985,1);chartCamera.copy(navigation);camera.copy(navigation);camera.updateMatrixWorld(true);}
@@ -178,6 +192,36 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
     controls.touches.TWO=THREE.TOUCH.DOLLY_PAN;
   }
+  function moveKeyboard(horizontal,verticalAmount,seconds){
+    if(!horizontal&&!verticalAmount)return;
+    const length=Math.hypot(horizontal,verticalAmount);horizontal/=length;verticalAmount/=length;
+    clearSelection();
+    const surface=surfaceFor(getWorld());
+    const span=Math.max(navigation.right-navigation.left,navigation.top-navigation.bottom)/navigation.zoom;
+    const speed=surface?.complete?Math.min(surface.radius*.95,span*.30):span*.30;
+    // Project the displayed screen axes onto the ground chart at every zoom.
+    // Translating both target and camera preserves the orbit instead of turning.
+    keyboardRight.set(1,0,0).applyQuaternion(chartCamera.quaternion);keyboardRight.y=0;keyboardRight.normalize();
+    keyboardUp.set(0,1,0).applyQuaternion(chartCamera.quaternion);keyboardUp.y=0;keyboardUp.normalize();
+    delta.copy(keyboardRight).multiplyScalar(horizontal*speed*seconds).addScaledVector(keyboardUp,-verticalAmount*speed*seconds);
+    if(surface?.complete&&surface.projection.type==='equirectangular'){
+      // The camera uses an orthonormal tangent frame, while chart longitude
+      // shrinks by cos(latitude) on the sphere. Invert that metric so a
+      // diagonal local orbit still pans along the visible screen axes.
+      const projection=surface.projection;
+      const latitude=projection.centralLatitude*Math.PI/180-controls.target.z/projection.radius;
+      const scale=projection.radius/(surface.radius+controls.target.y);
+      delta.x*=scale/Math.max(Math.cos(latitude),Math.cos(POLE_LIMIT));
+      delta.z*=scale;
+    }
+    controls.target.add(delta);navigation.position.add(delta);
+    constrainTarget();
+  }
+  function releaseKeys(){heldKeys.clear();}
+  function keyUp(event){heldKeys.delete(event.key.toLowerCase());}
+  canvas.addEventListener('keyup',keyUp);window.addEventListener('keyup',keyUp);
+  canvas.addEventListener('blur',releaseKeys);window.addEventListener('blur',releaseKeys);
+  canvas.ownerDocument.addEventListener('visibilitychange',()=>{if(canvas.ownerDocument.hidden)releaseKeys();});
   canvas.addEventListener('pointerdown',event=>{
     pointers.add(event.pointerId);
     if(pointers.size>1){gestureBlocked=true;gesture=null;}
@@ -204,7 +248,16 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   canvas.addEventListener('keydown',event=>{
     if(event.altKey||event.metaKey||event.ctrlKey)return;
     let handled=true;
-    if(event.key===' ')onPause();
+    const letter=event.key.toLowerCase();
+    if(['w','a','s','d'].includes(letter)){
+      if(!heldKeys.has(letter)){
+        heldKeys.add(letter);flushControls();
+        // A brief key tap gives feedback even if keyup arrives before a frame;
+        // held movement is time based and does not depend on OS repeat rate.
+        moveKeyboard(letter==='a'?-1:letter==='d'?1:0,letter==='w'?-1:letter==='s'?1:0,.06);
+        controls.update();
+      }
+    }else if(event.key===' ')onPause();
     else if(event.key==='Home')reset();
     else if(event.key==='Escape')clearSelection();
     else if(event.key.toLowerCase()==='r')onRegenerate();
@@ -235,8 +288,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   return {
     navigation,chartCamera,controls,reset,
     get coverageCamera(){
-      const close=selected?1:THREE.MathUtils.smoothstep(navigation.zoom/zoomScale,1.9,2.8);
-      return bendCamera(coverageView,buildChartCamera(coverageChart,close,0));
+      return bendCamera(coverageView,buildChartCamera(coverageChart,0));
     },
     setScale(value){zoomScale=Math.max(1,Number(value)||1);controls.maxZoom=CAMERA_ZOOM.max*zoomScale;},
     get zoomScale(){return zoomScale;},
@@ -250,16 +302,18 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
         navigation.updateProjectionMatrix();
       }
       if(selected&&(!selected.state.active||(zoomGoal===null&&shouldStopFollowing(navigation.zoom/zoomScale))))selected=null;
-      mode=modeForZoom(navigation.zoom/zoomScale,mode);configureInput();controls.update();
+      mode=modeForZoom(navigation.zoom/zoomScale,mode);
+      moveKeyboard(Number(heldKeys.has('d'))-Number(heldKeys.has('a')),Number(heldKeys.has('s'))-Number(heldKeys.has('w')),Math.min(.1,Math.max(0,dt)));
+      configureInput();controls.update();
       if(selected){
         followTarget.copy(centerOf(selected).position);followTarget.y=.75;
+        const surface=surfaceFor(getWorld());
+        if(surface?.complete)followTarget.x=controls.target.x+wrappedLongitude(followTarget.x-controls.target.x,surface.radius);
         delta.copy(controls.target).lerp(followTarget,ease(7,dt,reducedMotion.matches)).sub(controls.target);controls.target.add(delta);navigation.position.add(delta);
       }
       constrainTarget();
       blend=THREE.MathUtils.lerp(blend,mode==='map'||!isDetailReady()?1:0,ease(8,dt,reducedMotion.matches));
       if(blend<.001)blend=0;if(blend>.999)blend=1;
-      const closeTarget=selected?1:THREE.MathUtils.smoothstep(navigation.zoom/zoomScale,1.9,2.8);
-      closeBlend=THREE.MathUtils.lerp(closeBlend,closeTarget,ease(6,dt,reducedMotion.matches));
       updateCamera();
       hoverClock+=dt;
       if(hoverClock>.12&&lastPointer&&!lastPointer.touch&&!pointers.size&&!selected){
@@ -274,8 +328,11 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
           const world=getWorld(),height=marker===ring ? .045 : surfaceFor(world)?1.6:.6;
           if(surfaceFor(world)){
             surfacePoint(world,part.position.x,height,part.position.z,marker.position);
-            surfaceFrame(world,part.position.x,part.position.z,tangentFrame);
-            marker.quaternion.setFromRotationMatrix(tangentFrame).multiply(markerYaw.setFromAxisAngle(vertical,part.rotation.y));
+            surfaceNormal(world,part.position.x,part.position.z,surfaceUp);
+            surfaceTangent(world,part.position.x,height,part.position.z,Math.sin(part.rotation.y),0,Math.cos(part.rotation.y),markerForward).normalize();
+            markerRight.crossVectors(surfaceUp,markerForward).normalize();
+            tangentFrame.makeBasis(markerRight,surfaceUp,markerForward);
+            marker.quaternion.setFromRotationMatrix(tangentFrame);
           }else{
             marker.position.set(part.position.x,height,part.position.z);
             marker.rotation.set(0,part.rotation.y,0);
