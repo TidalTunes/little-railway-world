@@ -219,7 +219,8 @@ test('synchronous drafts skip scenery and expensive terrain work but match autho
 
 test('interior node count depends only on city distance and submitted edits keep their positions and identity',()=>{
   const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:200,z:0,ownerId:'coral',level:1,houseCount:3}],{rail}=fixture({cities});
-  const initial=rail.preview('a','b'),count=Math.ceil(200/28)-1;assert.equal(initial.handles.length,count+2);
+  const initial=rail.preview('a','b'),count=Math.ceil(200/48)-1;assert.equal(initial.handles.length,count+2);
+  assert.equal(count,4,'the 200-unit route now has four interior dots rather than seven');
   assert.equal(initial.handles[0].role,'from');assert.equal(initial.handles.at(-1).role,'to');
   const options={attachments:endpoints(initial),waypoints:interior(initial)};
   for(const offset of [10,30,60]){
@@ -233,17 +234,26 @@ test('interior node count depends only on city distance and submitted edits keep
   assert.equal(invalid.code,'invalid-waypoints');assert.equal(invalid.handles.length,count+2);
 });
 
-test('endpoint dragging moves unbuilt stations, preserves the opposite end and cannot move them away from their city',()=>{
+test('new station endpoints orbit a fixed city-edge circle with tangent heading and idempotent snapping',()=>{
   const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:200,z:0,ownerId:'coral',level:1,houseCount:3}],f=fixture({cities});
   const initial=f.rail.preview('a','b'),options={attachments:endpoints(initial),waypoints:interior(initial)};
   options.attachments.from.z-=6;const moved=f.rail.preview('a','b',options);assert.ok(moved.valid,moved.reason);
-  assert.deepEqual(endpoints(moved),options.attachments);assert.deepEqual(interior(moved),options.waypoints);
+  assert.deepEqual(endpoints(moved).to,options.attachments.to);assert.deepEqual(interior(moved),options.waypoints);
   assert.notDeepEqual(moved.stations.find(station=>station.cityId==='a'),initial.stations.find(station=>station.cityId==='a'));
   assert.deepEqual(moved.stations.find(station=>station.cityId==='b'),initial.stations.find(station=>station.cityId==='b'));
+  const station=moved.stations.find(station=>station.cityId==='a'),first=initial.stations.find(station=>station.cityId==='a');
+  assert.equal(station.orbitRadius,first.orbitRadius);
+  assert.ok(Math.abs(Math.hypot(station.center.x,station.center.z)-station.orbitRadius)<1e-8);
+  assert.ok(Math.abs(station.center.x*Math.cos(station.heading)+station.center.z*Math.sin(station.heading))<1e-8,'the track and platform are tangent to the city circle');
+  const radius=Math.hypot(station.orbitRadius,7),endpoint=moved.handles[0];
+  assert.ok(Math.abs(Math.hypot(endpoint.x,endpoint.z)-radius)<1e-8);
+  assert.ok(Math.abs(endpoint.x*options.attachments.from.z-endpoint.z*options.attachments.from.x)<1e-8,'dragging follows cursor angle, never radial distance');
+  const replay={...options,attachments:endpoints(moved)},replayed=f.rail.preview('a','b',replay);
+  assert.deepEqual(replayed.stations,moved.stations);assert.deepEqual(replayed.handles,moved.handles);
+  const farther={...options,attachments:{...options.attachments,from:{x:options.attachments.from.x*100,z:options.attachments.from.z*100}}};
+  assert.deepEqual(f.rail.preview('a','b',farther).stations,moved.stations,'even a far-away cursor stays on the same orbital site');
   const full=f.rail.evaluate('a','b',options);assert.deepEqual(full.stations,moved.stations);assert.deepEqual(full.lines.map(line=>line.alignment),moved.lines.map(line=>line.alignment));
-  const next={...options,attachments:{...options.attachments,from:{x:100,z:70}}},invalid=f.rail.preview('a','b',next);
-  assert.equal(invalid.code,'station-blocked');assert.deepEqual(endpoints(invalid).from,next.attachments.from);
-  assert.equal(f.rail.build('a','b',{...next,requireCached:true}).code,'world-changed');assert.equal(f.session.player.gold,20);
+  assert.equal(f.rail.build('a','b',{...farther,requireCached:true}).code,'world-changed');assert.equal(f.session.player.gold,20);
   assert.ok(f.rail.build('a','b',{...options,requireCached:true}).ok);assert.equal(f.session.player.gold,15);
 });
 
@@ -258,16 +268,19 @@ test('existing station attachment requests snap to physical ends or junctions an
   assertSmooth(full.lines.at(-1));
 });
 
-test('dragging an established endpoint along its approach can choose a tangent junction',()=>{
+test('unchanged approach junctions persist, but dragging snaps to a physical station end',()=>{
   const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:100,z:0,ownerId:'coral',level:1,houseCount:3},{id:'c',x:50,z:75,ownerId:'blue',level:1,houseCount:3}];
   const {rail}=fixture({cities});assert.ok(rail.build('a','b').ok);
   const existing=rail.lines.at(-1),point=sampleAlignment(existing.alignment,22),station=rail.stations.find(s=>s.cityId==='a');
-  const options={attachments:{from:{x:point.x+.2,z:point.z+.2}}},draft=rail.preview('a','c',options);assert.ok(draft.valid,draft.reason);
+  const options={attachments:{from:{x:point.x,z:point.z}}},draft=rail.preview('a','c',options);assert.ok(draft.valid,draft.reason);
   assert.equal(draft.fromJunction.lineId,existing.id);assert.equal(draft.fromJunction.distance,22);
   const start=sampleAlignment(draft.lines.at(-1).alignment,0);
   assert.ok(Math.hypot(start.x-point.x,start.z-point.z)<1e-7);
   assert.ok(Math.abs(start.tangent.x*point.tangent.x+start.tangent.z*point.tangent.z)>.999999);
   const full=rail.evaluate('a','c',options);assert.deepEqual(full.handles,draft.handles);assert.equal(full.valid,true);
+  const dragged=rail.preview('a','c',{attachments:{from:{x:point.x+.2,z:point.z+.2}}});assert.ok(dragged.valid,dragged.reason);assert.equal(dragged.fromJunction,null);
+  const spine=rail.lines.find(line=>line.id===station.lineId);
+  assert.ok([spine.points[0],spine.points.at(-1)].some(p=>Math.hypot(p.x-dragged.handles[0].x,p.z-dragged.handles[0].z)<1e-7));
   assert.deepEqual(rail.stations.find(s=>s.cityId==='a'),station);
 });
 
@@ -279,14 +292,14 @@ test('terrain validation can reject an immediate draft but never reshapes it or 
 });
 
 test('a bounded control-count snapshot preserves edited nodes when city growth crosses a distance threshold',()=>{
-  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:195,z:0,ownerId:'coral',level:1,houseCount:3}],f=fixture({cities});
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:239,z:0,ownerId:'coral',level:1,houseCount:3}],f=fixture({cities});
   const initial=f.rail.preview('a','b'),options={controlCount:railwayControlCount(cities[0],cities[1]),waypoints:interior(initial)};
   assert.equal(initial.waypointCount,options.controlCount);
-  assert.equal(options.controlCount,6);
-  cities[1].x=197;cities[1].houseCount=4;
-  assert.equal(f.rail.preview('a','b').waypointCount,7,'new drafts use the new city distance');
+  assert.equal(options.controlCount,4);
+  cities[1].x=241;cities[1].houseCount=4;
+  assert.equal(f.rail.preview('a','b').waypointCount,5,'new drafts use the new city distance');
   const preserved=f.rail.preview('a','b',options);assert.ok(preserved.valid,preserved.reason);
-  assert.equal(preserved.waypointCount,6);assert.deepEqual(interior(preserved),options.waypoints);
+  assert.equal(preserved.waypointCount,4);assert.deepEqual(interior(preserved),options.waypoints);
   assert.deepEqual(preserved.handles.map(h=>h.id),initial.handles.map(h=>h.id));
   const worker=createSettlementRailways(f.world,{session:f.session,surfaceAt:flat,initialState:f.rail.snapshot()});
   const validated=worker.evaluate('a','b',options);assert.ok(validated.valid,validated.reason);
@@ -296,4 +309,54 @@ test('a bounded control-count snapshot preserves edited nodes when city growth c
     const invalid=f.rail.preview('a','b',{controlCount});assert.equal(invalid.code,'invalid-waypoints');assert.ok(invalid.handles.length<=14);
   }
   assert.equal(f.session.player.gold,20);
+});
+
+test('an impossible close bend keeps the complete draft and diagnoses only the actual radius failure',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:200,z:0,ownerId:'coral',level:1,houseCount:3}],f=fixture({cities});
+  const initial=f.rail.preview('a','b'),options={attachments:endpoints(initial),waypoints:interior(initial)};
+  options.waypoints[1]={x:options.waypoints[0].x,z:options.waypoints[0].z+1};
+  const bad=f.rail.preview('a','b',options);assert.equal(bad.siteValid,false);assert.equal(bad.code,'route-blocked');
+  assert.equal(bad.reason,'Give this bend more room');
+  assert.deepEqual(interior(bad),options.waypoints);assert.deepEqual(endpoints(bad),endpoints(initial));
+  assert.ok(bad.invalidBends.length);assert.deepEqual([...new Set(bad.invalidBends.map(bend=>bend.index))],[1]);
+  for(const bend of bad.invalidBends){
+    assert.equal(bend.reason,'radius');assert.equal(bend.x,options.waypoints[1].x);assert.equal(bend.z,options.waypoints[1].z);
+    assert.ok(bend.points.length>1);for(let i=1;i<bend.points.length;i++)assert.ok(Math.hypot(bend.points[i].x-bend.points[i-1].x,bend.points[i].z-bend.points[i-1].z)<.6,'local fragments never jump across an unrelated part of the curve');
+    const center=bend.points.findIndex(point=>Math.hypot(point.x-bend.x,point.z-bend.z)<1e-8);
+    assert.ok(center>0&&center<bend.points.length-1,'the warning includes both sides of its control');
+    const length=points=>points.slice(1).reduce((sum,point,i)=>sum+Math.hypot(point.x-points[i].x,point.z-points[i].z),0);
+    for(const side of [bend.points.slice(0,center+1),bend.points.slice(center)]){
+      assert.ok(length(side)>=10&&length(side)<10.6,'even a tiny failed span includes ten units of adjacent curve, without coloring distant track');
+    }
+  }
+  const branch=bad.lines.at(-1);assert.equal(branch.previewOnly,true);assert.equal(branch.alignment,undefined);
+  assert.ok(branch.points.length>300,'the rest of the route remains visible');
+  const start=branch.points[0],end=branch.points.at(-1);
+  assert.ok(Math.hypot(start.x-bad.handles[0].x,start.z-bad.handles[0].z)<1e-8);
+  assert.ok(Math.hypot(end.x-bad.handles.at(-1).x,end.z-bad.handles.at(-1).z)<1e-8);
+  for(let i=1;i<branch.points.length;i++)assert.ok(Math.hypot(branch.points[i].x-branch.points[i-1].x,branch.points[i].z-branch.points[i-1].z)<.6,'the preview guide remains continuous through the failed span');
+  const validated=f.rail.evaluate('a','b',options);assert.deepEqual(validated.lines,bad.lines);assert.deepEqual(validated.invalidBends,bad.invalidBends);
+  assert.equal(f.rail.build('a','b',{...options,requireCached:true}).ok,false);assert.equal(f.session.player.gold,20);
+  options.waypoints[1]={...options.waypoints[0]};
+  const collapsed=f.rail.preview('a','b',options);assert.equal(collapsed.siteValid,false);
+  assert.ok(collapsed.invalidBends.some(bend=>bend.reason==='radius'&&bend.points.length>40),'exactly overlapping controls retain visible neighboring curve context');
+  assert.equal(f.rail.evaluate('a','b',options).siteValid,false,'validation also rejects the hidden cusp');
+  assert.equal(f.rail.build('a','b',{...options,requireCached:true}).ok,false);assert.equal(f.session.player.gold,20);
+  options.waypoints[1]={x:options.waypoints[0].x+3,z:options.waypoints[0].z};
+  const healed=f.rail.preview('a','b',options);assert.equal(healed.siteValid,true);assert.deepEqual(healed.invalidBends,[]);
+  assertSmooth(healed.lines.at(-1));
+});
+
+test('a blocked orbital station stays visibly snapped to its tangent circle',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:200,z:0,ownerId:'coral',level:1,houseCount:3}],f=fixture({cities});
+  const initial=f.rail.preview('a','b'),station=initial.stations.find(s=>s.cityId==='a'),endpoint=initial.handles[0];
+  f.session.buildings.push({id:'occupied-platform-site',kind:'house',x:station.x,z:station.z,width:3,depth:3,rotation:station.rotation});
+  const requested={x:endpoint.x*10,z:endpoint.z*10},options={waypoints:interior(initial),attachments:{...endpoints(initial),from:requested}};
+  const blocked=f.rail.preview('a','b',options);assert.equal(blocked.code,'station-blocked');assert.equal(blocked.siteValid,false);
+  assert.deepEqual(endpoints(blocked).from,{x:endpoint.x,z:endpoint.z});
+  const snapped=blocked.stations.find(s=>s.cityId==='a');assert.equal(snapped.siteBlocked,true);
+  assert.equal(snapped.x,station.x);assert.equal(snapped.z,station.z);assert.equal(snapped.heading,station.heading);
+  assert.ok(blocked.lines.at(-1).points.length>2,'the invalid snapped station still has a visible route guide');
+  const authoritative=f.rail.evaluate('a','b',options);assert.deepEqual(authoritative.handles,blocked.handles);assert.deepEqual(authoritative.stations,blocked.stations);
+  assert.equal(f.rail.build('a','b',{...options,requireCached:true}).ok,false);assert.equal(f.session.player.gold,20);
 });

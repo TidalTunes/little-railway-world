@@ -103,6 +103,7 @@
 .settlement-rail-selection { font-size: 15px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
 .settlement-rail-status { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .settlement-rail-status[data-kind="error"] { color: var(--settlement-invalid); }
+.settlement-rail-status[data-kind="cost"] { color: var(--settlement-accent); }
 .settlement-rail-status[data-kind="success"] { color: var(--settlement-city); }
 .settlement-placement-note { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 650; }
 .settlement-cost { display: inline-flex; align-items: center; flex: none; gap: 6px; color: var(--settlement-accent); }

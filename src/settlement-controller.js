@@ -191,9 +191,11 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       }else{railPreview=result;if(result.code==='world-changed')railPreviewFlow.clear();notify(result.reason??'Choose another route');}
     }
     pendingRailBuild=false;
-    railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:destination,visible:true,editable:!!railTarget,handles:railDrag?.points??railPreview?.handles??[],activeHandle:railDrag?.index??-1});
+    // Endpoints follow the fitted station port, rather than the unconstrained
+    // cursor. Interior handles retain their requested edit positions.
+    railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:destination,visible:true,editable:!!railTarget,handles:railPreview?.handles??[],activeHandle:railDrag?.index??-1});
     return {stage:railPlanning?'planning':railTarget&&railPreview?'preview':railSource?'destination':'source',hasCity,cost:5,hovering:!!railHover,siteValid:!!railPreview?.siteValid,
-      canBuild:!!railTarget&&railConfirmed&&!railDrag&&!railPlanning&&!!railPreview?.valid,reason:railPreview?.reason??message,
+      canBuild:!!railTarget&&railConfirmed&&!railDrag&&!railPlanning&&!!railPreview?.valid,reason:railPreview?.reason??message,code:railPreview?.code??'',
       sourceLabel:railwayCityLabel(cities.find(city=>city.id===railSource),game.ownerId),targetLabel:railwayCityLabel(cities.find(city=>city.id===destination),game.ownerId)};
   }
   function develop(player){

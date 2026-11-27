@@ -118,26 +118,65 @@ export function combineAlignments(parts,radius=8){
   return packageSegments(parts.flatMap(part=>part?.segments??(part?[part]:[])),radius);
 }
 
-/** Interpolates intermediate poses; isAllowed can reject paths outside terrain. */
-export function createAlignment(start,end,{radius=8,y=.42,waypoints=[],isAllowed=()=>true}={}){
+function waypointPoses(start,end,waypoints){
   const nodes=[start,...waypoints,end];
-  const poses=nodes.map((p,i)=>{
+  return nodes.map((p,i)=>{
     if(i===0||i===nodes.length-1)return{...p,heading:heading(p)};
     if(Number.isFinite(p.heading))return p;
     const before=nodes[i-1],after=nodes[i+1];
     return {...p,heading:Math.atan2(after.z-before.z,after.x-before.x)};
   });
+}
+const noLoop=candidate=>candidate.segments.every(s=>s.type!=='arc'||Math.abs(s.sweep)<=Math.PI+1e-7)
+  &&candidate.segments.reduce((turn,s)=>turn+(s.type==='arc'?Math.abs(s.sweep):0),0)<=Math.PI*1.5+1e-7;
+const sameHeading=(a,b)=>Math.abs(Math.atan2(Math.sin(a.heading-b.heading),Math.cos(a.heading-b.heading)))<=1e-7;
+
+/** Interpolates intermediate poses; isAllowed can reject paths outside terrain. */
+export function createAlignment(start,end,{radius=8,y=.42,waypoints=[],isAllowed=()=>true}={}){
+  const poses=waypointPoses(start,end,waypoints);
   const parts=[];
   for(let i=1;i<poses.length;i++){
-    if(distance(poses[i-1],poses[i])<EPS)continue;
+    if(distance(poses[i-1],poses[i])<EPS){
+      if(!sameHeading(poses[i-1],poses[i]))throw new TypeError('Invalid world: coincident waypoints cannot change heading within the minimum turning radius');
+      continue;
+    }
     const candidates=alignmentCandidates(poses[i-1],poses[i],{radius,y});
-    const chosen=candidates.find(candidate=>candidate.segments.every(s=>s.type!=='arc'||Math.abs(s.sweep)<=Math.PI+1e-7)
-      &&candidate.segments.reduce((turn,s)=>turn+(s.type==='arc'?Math.abs(s.sweep):0),0)<=Math.PI*1.5+1e-7
-      &&sampleAlignmentPoints(candidate,.45).points.every(isAllowed));
+    const chosen=candidates.find(candidate=>noLoop(candidate)&&sampleAlignmentPoints(candidate,.45).points.every(isAllowed));
     if(!chosen)throw new TypeError('Invalid world: waypoints cannot fit the outline and minimum turning radius without a railway loop');
     parts.push(chosen);
   }
   const result=combineAlignments(parts,radius);
   if(!result.segments.length)throw new TypeError('Invalid world: railway alignment has no length');
   return result;
+}
+
+/** Inspect the same exact pose solver after a draft fails. Valid spans retain
+ * their real bounded-curvature geometry. Only unsolved spans use a short
+ * Hermite guide, which is explicitly preview-only and can never be built. */
+export function inspectAlignment(start,end,{radius=8,y=.42,waypoints=[],isAllowed=()=>true}={}){
+  const poses=waypointPoses(start,end,waypoints),spans=[],points=[];
+  for(let i=1;i<poses.length;i++){
+    const a=poses[i-1],b=poses[i],length=distance(a,b);
+    if(length<EPS){
+      if(sameHeading(a,b))continue;
+      const sampled=[{x:a.x,y,z:a.z},{x:b.x,y,z:b.z}];
+      spans.push({fromIndex:i-1,toIndex:i,alignment:undefined,points:sampled,reason:'radius'});
+      points.push(...(points.length?sampled.slice(1):sampled));continue;
+    }
+    const shapes=alignmentCandidates(a,b,{radius,y}).filter(noLoop);
+    const alignment=shapes.find(candidate=>sampleAlignmentPoints(candidate,.45).points.every(isAllowed));
+    let sampled;
+    if(alignment)sampled=sampleAlignmentPoints(alignment,.45).points;
+    else{
+      const reach=Math.min(length/3,radius),count=Math.max(6,Math.min(160,Math.ceil(length/.45)));
+      const c={x:a.x+Math.cos(a.heading)*reach,z:a.z+Math.sin(a.heading)*reach};
+      const d={x:b.x-Math.cos(b.heading)*reach,z:b.z-Math.sin(b.heading)*reach};
+      sampled=Array.from({length:count+1},(_,j)=>{const t=j/count,u=1-t;return {
+        x:u*u*u*a.x+3*u*u*t*c.x+3*u*t*t*d.x+t*t*t*b.x,y,
+        z:u*u*u*a.z+3*u*u*t*c.z+3*u*t*t*d.z+t*t*t*b.z};});
+    }
+    spans.push({fromIndex:i-1,toIndex:i,alignment,points:sampled,reason:alignment?null:shapes.length?'obstacle':'radius'});
+    points.push(...(points.length?sampled.slice(1):sampled));
+  }
+  return {poses,spans,points};
 }

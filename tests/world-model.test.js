@@ -321,6 +321,8 @@ test('authored routes create bridges and tunnels at arbitrary world orientations
     assert.equal(world.lines.length, 1);
     const line = world.lines[0];
     assertLineGeometry(line);
+    close(Math.hypot(line.fromPort.x-ax,line.fromPort.z-az),4,'repeated authored endpoints retain the station throat');
+    close(Math.cos(line.fromPort.heading-angle),1,'the station points along the real route rather than a zero-length bearing');
     assert.equal(line.bridges.length, 1, `rotation ${angle} crosses the river once`);
     assert.equal(line.tunnels.length, 1, `rotation ${angle} crosses the mountain once`);
     const bridge = line.bridges[0];
@@ -339,6 +341,14 @@ test('authored routes create bridges and tunnels at arbitrary world orientations
     close(Math.hypot(first.x - ax, first.z - az), 0, 'custom line starts at its first city');
     close(Math.hypot(last.x - bx, last.z - bz), 0, 'custom line ends at its second city');
   }
+});
+
+test('redundant unheaded city endpoints normalize to the same authored route',()=>{
+  const cities=[{id:'a',x:-30,z:-20},{id:'b',x:30,z:20}],common={seed:17,density:0,cities,mountains:[],rivers:[]};
+  const plain=generateWorld({...common,connections:[{from:'a',to:'b'}]});
+  const repeated=generateWorld({...common,connections:[{from:'a',to:'b',points:[[-30,-20],[-30,-20],[30,20],[30,20]]}]});
+  assert.deepEqual(repeated.lines[0].alignment,plain.lines[0].alignment);
+  assert.deepEqual(repeated.cities.map(city=>city.railAxis),plain.cities.map(city=>city.railAxis));
 });
 
 test('low mountain crossings are excavated even when there is too little cover for a tunnel', () => {

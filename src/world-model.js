@@ -858,6 +858,14 @@ export function generateWorld(input = {}, options = {}) {
   assert(Array.isArray(rawConnections)&&(rawConnections.length>0||world.gameplay&&cities.length===0),'at least one connection is required outside settlement mode');
   const connections=rawConnections.map((c,i)=>({...c,id:String(c.id??`line-${i+1}`),from:String(c.from),to:String(c.to),waypoints:(c.points??c.waypoints??[]).map(p=>({...point(p),...(Number.isFinite(p.heading)?{heading:p.heading}:{})}))}));
   assert(connections.every(c=>cities.some(t=>t.id===c.from)&&cities.some(t=>t.id===c.to)&&c.from!==c.to),'connections must reference two different existing city IDs');
+  // Older authored polylines repeat their city endpoints. They are already
+  // supplied by the route, and must not become zero-length station bearings.
+  // Keep explicitly headed poses intact so contradictory constraints still fail.
+  for(const connection of connections){
+    const from=cities.find(city=>city.id===connection.from),to=cities.find(city=>city.id===connection.to),points=connection.waypoints;
+    while(points.length&&!Number.isFinite(points[0].heading)&&distance(points[0],from)<EPS)points.shift();
+    while(points.length&&!Number.isFinite(points.at(-1).heading)&&distance(points.at(-1),to)<EPS)points.pop();
+  }
   const edgeKeys=connections.map(c=>[c.from,c.to].sort().join('|'));
   assert(new Set(edgeKeys).size===edgeKeys.length,'overlapping duplicate city connections must be represented by one railway');
   const minTurnRadius=Number(input.minTurnRadius??WORLD_DEFAULTS.minTurnRadius),throatLength=Number(input.throatLength??WORLD_DEFAULTS.throatLength);

@@ -69,11 +69,11 @@ test('preview follows the proposed alignment, changes color when invalid, and ke
   assert.equal(art.root.getObjectByName('railway-preview').visible,false);
   const result={valid:true,lines:[line],stations};art.preview(result,{cities,sourceCityId:'home',targetCityId:'other',visible:true});
   const preview=art.root.getObjectByName('railway-preview'),route=preview.getObjectByName('railway-route-preview');
-  assert.ok(preview.visible);assert.equal(preview.children.filter(child=>child.visible&&child.isMesh).length,6);const positions=route.geometry.attributes.position;
+  assert.ok(preview.visible);assert.equal(preview.children.filter(child=>child.visible&&child.isMesh).length,4);const positions=route.geometry.attributes.position;
   assert.ok(Math.abs(positions.getY(0)-.48)<1e-7);assert.ok(Math.abs(positions.getZ(route.geometry.drawRange.count-1)-20)<1e-7);
   const good=route.material.color.clone(),geometry=route.geometry;
   art.preview(result,{cities,sourceCityId:'home',targetCityId:'other',visible:true});assert.equal(route.geometry,geometry);
-  art.preview({...result,valid:false},{cities,sourceCityId:'home',targetCityId:'other',visible:true});
+  art.preview({...result,valid:false,siteValid:false},{cities,sourceCityId:'home',targetCityId:'other',visible:true});
   const badRoute=preview.getObjectByName('railway-route-preview');assert.ok(!badRoute.material.color.equals(good));
   const target=new THREE.Color();halos.getColorAt(1,target);assert.ok(Math.abs(target.r-badRoute.material.color.r)<1e-7&&Math.abs(target.g-badRoute.material.color.g)<1e-7&&Math.abs(target.b-badRoute.material.color.b)<1e-7);
   art.preview(null,{cities,visible:false});art.update({mapBlend:1});assert.equal(halos.visible,false);assert.equal(preview.visible,false);
@@ -94,11 +94,12 @@ test('blocked alignments still display a clearly dashed red guide between select
   art.preview(null,{cities,visible:false});assert.equal(art.root.getObjectByName('blocked-railway-guide').visible,false);assert.equal(art.root.getObjectByName('blocked-railway-guide').geometry.drawRange.count,0);
 });
 
-test('preview glow has a bright unlit core and soft layered halos with a pixel width floor',t=>{
+test('preview uses two restrained outline and ink rail layers with a pixel width floor',t=>{
   const {art}=fixture(t);art.preview({valid:true,lines:[line],stations:[]},{cities,visible:true});
   const pool=art.root.getObjectByName('railway-preview'),core=pool.getObjectByName('railway-route-preview');
   const layers=pool.children.filter(mesh=>mesh.isMesh&&mesh.visible);
-  assert.equal(layers.length,4);assert.equal(new Set(layers.map(mesh=>mesh.geometry)).size,1,'all glow layers share the uploaded route');
+  assert.equal(layers.length,2);assert.equal(new Set(layers.map(mesh=>mesh.geometry)).size,1,'outline and rails share the uploaded route');
+  assert.equal(pool.getObjectByName('railway-invalid-bend-glow').visible,false,'valid routes have no broad halo');
   const widths=[],pixels=[];
   for(const layer of layers){
     assert.ok(layer.material.isMeshBasicMaterial);assert.equal(layer.material.toneMapped,false);assert.equal(layer.material.depthTest,false);assert.equal(layer.material.depthWrite,false);assert.equal(layer.material.fog,false);assert.equal(layer.material.forceSinglePass,true);
@@ -109,37 +110,95 @@ test('preview glow has a bright unlit core and soft layered halos with a pixel w
     art.update({viewportHeight:1100});assert.equal(shader.uniforms.previewViewport.value,1100);
   }
   assert.ok(widths.every((width,i)=>!i||width<widths[i-1]));assert.ok(pixels.every((width,i)=>!i||width<pixels[i-1]));
-  assert.equal(core.material.opacity,1);assert.equal(core.material.color.getHexString(),'41ffcf');
+  assert.ok(Math.max(...pixels)<=4);assert.equal(core.material.color.getHexString(),'243d39');assert.equal(layers[0].material.color.getHexString(),'eee9d5');
+  const shader={uniforms:{},vertexShader:'#include <begin_vertex>',fragmentShader:'#include <color_fragment>'};core.material.onBeforeCompile(shader);
+  assert.ok(shader.fragmentShader.includes('railMask'));assert.ok(shader.fragmentShader.includes('sleeperMask'));assert.ok(shader.fragmentShader.includes('fwidth(vPreviewDistance)'),'distant sleepers fade before they alias');
+  assert.ok(core.geometry.attributes.previewDistance);
 });
 
-test('pending validation stays teal for routes, city targets and endpoint handles; blocking validation turns red',t=>{
+test('pending validation uses normal ink rails and only a geometric blocking result turns the route red',t=>{
   const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',visible:true,editable:true},handles=[{x:0,z:0,kind:'from'},{x:0,z:20,kind:'to'}];
   art.preview({valid:false,provisional:true,lines:[line],stations,handles},options);
-  const core=art.root.getObjectByName('railway-route-preview'),color=core.material.color.clone(),target=new THREE.Color(),endpoint=new THREE.Color();
+  const core=art.root.getObjectByName('railway-route-preview'),target=new THREE.Color(),endpoint=new THREE.Color();
+  assert.equal(core.material.color.getHexString(),'243d39');
   art.root.getObjectByName('railway-city-targets').getColorAt(1,target);art.root.getObjectByName('railway-handle-centres').getColorAt(0,endpoint);
-  for(const value of [target,endpoint])assert.ok(Math.abs(value.r-color.r)<1e-7&&Math.abs(value.g-color.g)<1e-7&&Math.abs(value.b-color.b)<1e-7);
-  art.preview({valid:false,provisional:false,lines:[line],stations,handles},options);assert.equal(core.material.color.getHexString(),'ff665b');
+  for(const value of [target,endpoint])assert.equal(value.getHexString(),'5db6a5');
+  art.preview({valid:false,siteValid:false,provisional:false,lines:[line],stations,handles},options);assert.equal(core.material.color.getHexString(),'ee7666');
   art.root.getObjectByName('railway-city-targets').getColorAt(1,target);art.root.getObjectByName('railway-handle-centres').getColorAt(0,endpoint);
   assert.ok(target.r>target.g&&endpoint.r>endpoint.g);
 });
 
+test('unaffordable routes never turn red, including after validation and wallet changes',t=>{
+  const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',visible:true,editable:true};
+  const handles=[{x:0,z:0,kind:'from'},{x:0,z:20,kind:'to'}],result={valid:true,siteValid:true,affordable:true,lines:[line],stations,handles};
+  art.preview(result,options);
+  const route=art.root.getObjectByName('railway-route-preview'),station=art.root.getObjectByName('railway-station-preview'),target=new THREE.Color(),endpoint=new THREE.Color();
+  const color=route.material.color.clone(),platformColor=station.material.color.clone();
+  for(const provisional of [true,false]){
+    art.preview({...result,valid:false,affordable:false,code:'not-enough-gold',provisional},options);
+    assert.ok(route.material.color.equals(color));assert.ok(station.material.color.equals(platformColor));
+    art.root.getObjectByName('railway-city-targets').getColorAt(1,target);art.root.getObjectByName('railway-handle-centres').getColorAt(0,endpoint);
+    assert.equal(target.getHexString(),'5db6a5');assert.equal(endpoint.getHexString(),'5db6a5');assert.equal(art.root.getObjectByName('railway-invalid-bend-glow').visible,false);
+  }
+  art.preview({...result,valid:false,siteValid:undefined,affordable:false},options);assert.ok(route.material.color.equals(color),'missing site validity is pending, never a financial geometry error');
+});
+
+test('operational validation failures and wallet errors cannot mark a feasible draft red',t=>{
+  const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',visible:true,editable:true};
+  const handles=[{kind:'from',x:0,z:0},{kind:'to',x:0,z:20}],result={valid:false,siteValid:false,lines:[line],stations,handles};
+  for(const code of ['planning-failed','world-changed','not-enough-gold']){
+    art.preview({...result,code},options);
+    assert.equal(art.root.getObjectByName('railway-route-preview').material.color.getHexString(),'243d39');
+    assert.equal(art.root.getObjectByName('railway-invalid-bend-glow').visible,false);
+    const color=new THREE.Color();art.root.getObjectByName('railway-city-targets').getColorAt(1,color);assert.equal(color.getHexString(),'5db6a5');
+    art.root.getObjectByName('railway-handle-centres').getColorAt(0,color);assert.equal(color.getHexString(),'5db6a5');
+  }
+  art.preview({...result,code:'route-blocked'},options);assert.equal(art.root.getObjectByName('railway-route-preview').material.color.getHexString(),'ee7666','actual impossibility still produces red feedback');
+});
+
+test('a bad bend highlights only its local span and handle while the rest of the railway remains normal',t=>{
+  const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',visible:true,editable:true};
+  const handles=[{kind:'from',x:0,z:0},{kind:'bend',index:0,x:0,z:5},{kind:'bend',index:1,x:0,z:10},{kind:'to',x:0,z:20}];
+  const invalidBends=[{index:1,x:0,z:10,reason:'radius',points:[{x:0,y:.42,z:8},{x:.3,y:.42,z:10},{x:0,y:.42,z:12}]}];
+  const result={valid:false,siteValid:false,provisional:true,lines:[{...line,previewOnly:true}],stations,handles,invalidBends};art.preview(result,options);
+  const route=art.root.getObjectByName('railway-route-preview'),highlight=art.root.getObjectByName('railway-invalid-bend-glow'),geometry=highlight.geometry,allocations=art.stats.previewBufferAllocations;
+  assert.equal(route.material.color.getHexString(),'243d39');assert.ok(highlight.visible);assert.equal(highlight.material.color.getHexString(),'ee7666');
+  const positions=geometry.attributes.position;for(let i=0;i<geometry.drawRange.count;i++)assert.ok(positions.getZ(i)>=8&&positions.getZ(i)<=12,'red feedback cannot spill over the full route');
+  const color=new THREE.Color(),pins=art.root.getObjectByName('railway-handle-pins');
+  pins.getColorAt(1,color);assert.equal(color.getHexString(),'5db6a5');pins.getColorAt(2,color);assert.equal(color.getHexString(),'ee7666');
+  art.root.getObjectByName('railway-handle-centres').getColorAt(0,color);assert.equal(color.getHexString(),'5db6a5');
+  art.root.getObjectByName('railway-city-targets').getColorAt(1,color);assert.equal(color.getHexString(),'5db6a5');
+  for(let frame=0;frame<60;frame++){invalidBends[0].points[1].x=frame*.01;art.preview({...result},options);assert.equal(highlight.geometry,geometry);}
+  assert.equal(art.stats.previewBufferAllocations,allocations);
+  art.preview({...result,valid:true,siteValid:true,invalidBends:[]},options);assert.equal(highlight.visible,false);assert.equal(highlight.geometry.drawRange.count,0);
+});
+
+test('endpoint rings follow snapped model handles even when a caller supplies raw drag coordinates',t=>{
+  const {art}=fixture(t),handles=[{kind:'from',x:2,z:3},{kind:'to',x:4,z:20}];
+  art.preview({valid:true,siteValid:true,lines:[line],stations:[],handles},{visible:true,editable:true,handles:handles.map(handle=>({...handle,x:90,z:90})),activeHandle:0});
+  const camera=new THREE.OrthographicCamera(-100,100,100,-100,.1,1000);camera.position.set(0,100,0);camera.lookAt(0,0,0);art.update({camera});
+  for(const root of [art.root,art.mapRoot]){
+    const matrix=new THREE.Matrix4();root.getObjectByName('railway-handle-rims').getMatrixAt(0,matrix);assert.equal(matrix.elements[12],2);assert.equal(matrix.elements[14],3);
+  }
+});
+
 test('an impossible provisional alignment is already red before worker validation',t=>{
   const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',visible:true},pending={valid:false,siteValid:true,provisional:true,lines:[line],stations:[]};
-  art.preview(pending,options);assert.equal(art.root.getObjectByName('railway-route-preview').material.color.getHexString(),'41ffcf');
+  art.preview(pending,options);assert.equal(art.root.getObjectByName('railway-route-preview').material.color.getHexString(),'243d39');
   art.preview({...pending,siteValid:false,lines:[],code:'invalid-alignment'},options);
   const guide=art.root.getObjectByName('blocked-railway-guide'),target=new THREE.Color();
   assert.ok(guide.visible);assert.ok(guide.material.color.r>guide.material.color.g);
-  assert.equal(art.root.getObjectByName('railway-route-preview').visible,true);assert.equal(art.root.getObjectByName('railway-route-preview').material.color.getHexString(),'ff665b');
+  assert.equal(art.root.getObjectByName('railway-route-preview').visible,true);assert.equal(art.root.getObjectByName('railway-route-preview').material.color.getHexString(),'ee7666');
   art.root.getObjectByName('railway-city-targets').getColorAt(1,target);assert.ok(target.r>target.g);
 });
 
-test('invalid endpoint edits keep a visible red glow and dashed guide attached to the requested endpoints',t=>{
+test('impossible placements keep a restrained red outlined guide attached to model endpoints',t=>{
   const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',visible:true};
   const handles=[{kind:'from',x:31,z:12},{kind:'bend',x:36,z:20},{kind:'to',x:42,z:17}],attachments={from:{x:29,z:13},to:{x:40,z:18}};
   const result={valid:false,siteValid:false,provisional:true,lines:[],stations:[],handles,attachments,waypoints:[handles[1]]};art.preview(result,options);
   for(const root of [art.root,art.mapRoot]){
     const core=root.getObjectByName('railway-route-preview'),guide=root.getObjectByName('blocked-railway-guide'),positions=core.geometry.attributes.position,last=core.geometry.drawRange.count-1;
-    assert.ok(core.visible&&guide.visible);assert.equal(core.material.color.getHexString(),'ff665b');assert.ok(guide.material.color.g>core.material.color.g,'pale dashes remain distinct over the bright red core');
+    assert.ok(core.visible&&guide.visible);assert.equal(core.material.color.getHexString(),'ee7666');assert.equal(root.getObjectByName('railway-invalid-bend-glow').visible,false);
     assert.equal(positions.getX(0),31);assert.equal(positions.getZ(0),12);assert.equal(positions.getX(last),42);assert.equal(positions.getZ(last),17);
     assert.equal(guide.geometry.attributes.position.getX(0),31);assert.equal(guide.geometry.attributes.position.getX(guide.geometry.drawRange.count-1),42);
     assert.ok(Array.from({length:guide.geometry.drawRange.count},(_,i)=>guide.geometry.attributes.position.getX(i)).includes(36),'the failed corridor still passes through the requested bend');
@@ -159,7 +218,7 @@ test('continuous route dragging updates pooled buffers and station poses without
   const allocations=art.stats.previewBufferAllocations,rebuilds=art.stats.rebuilds,committed=art.meshes.map(mesh=>mesh.geometry),platform=pools[0].getObjectByName('railway-station-preview');
   let disposals=0;for(const geometry of geometries)geometry.addEventListener('dispose',()=>disposals++);
   for(let frame=0;frame<120;frame++){
-    points[80].x=frame*.01;result.stations[0].x=-2.5+frame*.02;art.preview(result,options);
+    points[80].x=frame*.01;result.stations[0].x=-2.5+frame*.02;art.preview({...result},options);
     for(let i=0;i<pools.length;i++){assert.deepEqual(pools[i].children,children[i]);assert.equal(routes[i].geometry,geometries[i]);assert.equal(routes[i].geometry.attributes.position.array,arrays[i]);}
   }
   assert.equal(disposals,0);assert.equal(art.stats.previewBufferAllocations,allocations);assert.equal(art.stats.rebuilds,rebuilds);assert.deepEqual(art.meshes.map(mesh=>mesh.geometry),committed);
@@ -169,7 +228,20 @@ test('continuous route dragging updates pooled buffers and station poses without
   art.preview({valid:true,lines:[line],stations:[]},options);assert.equal(routes[0].geometry,geometries[0]);assert.equal(geometries[0].drawRange.count,6);assert.equal(platform.visible,false);
 });
 
-test('adjacent curved preview segments share their edge vertices so the wide glow has no seams',t=>{
+test('an unchanged provisional result never rewrites or uploads pooled geometry while validation is pending',t=>{
+  const {art}=fixture(t),options={cities,visible:true,editable:true},result={valid:true,siteValid:true,provisional:true,lines:[line],stations,handles:[{kind:'from',x:0,z:0},{kind:'to',x:0,z:20}]};
+  art.preview(result,options);
+  const geometries=new Set();for(const root of [art.root,art.mapRoot])root.traverse(mesh=>{if(mesh.geometry)geometries.add(mesh.geometry);});
+  const versions=[...geometries].flatMap(geometry=>Object.values(geometry.attributes).map(attribute=>[attribute,attribute.version]));
+  const updates=art.stats.previewUpdates,allocations=art.stats.previewBufferAllocations;
+  for(let i=0;i<120;i++)art.preview(result,{...options,activeHandle:i%2});
+  assert.equal(art.stats.previewUpdates,updates);assert.equal(art.stats.previewBufferAllocations,allocations);
+  for(const [attribute,version]of versions)assert.equal(attribute.version,version,'idle geometry retains its GPU version');
+  art.preview(result,{...options,visible:false});assert.equal(art.root.getObjectByName('railway-preview').visible,false,'visibility still responds independently of geometry identity');
+  art.preview({...result},options);assert.equal(art.stats.previewUpdates,updates+1,'a changed geometry key publishes a new result and updates the same pools');
+});
+
+test('adjacent curved preview segments share their edge vertices so the track outline has no seams',t=>{
   const {art}=fixture(t),points=[{x:0,y:.42,z:0},{x:3,y:.42,z:3},{x:3,y:.42,z:6}];
   art.preview({valid:true,lines:[{...line,points}],stations:[]},{visible:true});
   for(const root of [art.root,art.mapRoot]){

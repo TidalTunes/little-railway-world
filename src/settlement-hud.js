@@ -18,22 +18,27 @@ export function settlementHudProgress(houseCount){
 export function settlementHudRailway(railway,{gold=0,ready=true}={}){
   const stage=['source','destination','planning','preview'].includes(railway?.stage)?railway.stage:'source';
   const cost=Number.isFinite(railway?.cost)?count(railway.cost):5,hasCity=Boolean(railway?.hasCity);
-  const affordable=count(gold)>=cost,showConfirm=stage==='preview';
+  const missingGold=Math.max(0,cost-count(gold)),affordable=missingGold===0,showConfirm=stage==='preview';
   const source=railway?.sourceLabel||'Your city',target=railway?.targetLabel||'Destination';
   const selection=stage==='source'?'Choose your city':stage==='destination'&&!railway?.hovering?`${source} → …`:`${source} → ${target}`;
-  const reason=typeof railway?.reason==='string'?railway.reason.replace(/[.!]$/,''):'';
-  const canBuild=Boolean(ready&&hasCity&&affordable&&showConfirm&&railway?.canBuild);
+  const reason=typeof railway?.reason==='string'?railway.reason.replace(/[.!]$/,''):'',code=railway?.code;
+  // A wallet or worker problem is not evidence that the route is impossible.
+  // Local geometric failures still need feedback while a handle is being dragged.
+  const siteInvalid=railway?.siteValid===false&&!['not-enough-gold','planning-failed','world-changed'].includes(code)
+    &&(showConfirm||railway?.hovering||stage==='planning'&&Boolean(code));
+  const canBuild=Boolean(ready&&hasCity&&affordable&&showConfirm&&railway?.canBuild&&railway?.siteValid!==false);
   let status,statusKind='info';
   if(!ready)status='Preparing…';
   else if(!hasCity)status='3 homes to start';
+  else if(siteInvalid){status=reason||'Give the route more room';statusKind='error';}
   else if(stage==='planning')status='Checking route…';
   else if(stage==='destination'&&railway?.hovering&&railway?.siteValid)status='Click to shape route';
-  else if(!affordable&&showConfirm){status=`${cost-count(gold)} gold short`;statusKind='error';}
+  else if(!affordable&&showConfirm){status=`${missingGold} more gold needed`;statusKind='cost';}
   else if(canBuild){status='Drag dots to shape the line';statusKind='success';}
-  else if(reason){status=reason;statusKind='error';}
-  else if(showConfirm){status='Choose another city';statusKind='error';}
+  else if(reason&&code!=='ready'&&code!=='not-enough-gold')status=reason;
+  else if(showConfirm)status='Checking route…';
   else status=stage==='source'?'': 'Hover a city · click to choose';
-  return {stage,cost,hasCity,affordable,showConfirm,canBuild,selection,status,statusKind};
+  return {stage,cost,hasCity,affordable,missingGold,showConfirm,canBuild,selection,status,statusKind};
 }
 
 // Compact faceted symbols share the timber, metal and paint of the world.
@@ -62,7 +67,7 @@ const keyAction=(action,key,label,extra='')=>`<button type="button" data-action=
  * palette. Callback events stop here rather than reaching character input.
  * update accepts the existing settlement state plus gold, dayPhase and optional
  * nightAmount (lighting blend, so dusk text stays legible before the day ends),
- * and railway:{stage,canBuild,cost,reason,sourceLabel,targetLabel,hasCity}.
+ * and railway:{stage,canBuild,siteValid,cost,code,reason,sourceLabel,targetLabel,hasCity}.
  * showIncome({amount, days}) presents a brief third-person payout notification.
  */
 export function createSettlementHud({

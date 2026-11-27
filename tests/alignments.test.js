@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { alignmentCandidates, createAlignment, sampleAlignment, sampleAlignmentPoints } from '../src/alignments.js';
+import { alignmentCandidates, createAlignment, inspectAlignment, sampleAlignment, sampleAlignmentPoints } from '../src/alignments.js';
 import { generateWorld, sampleLine, validateWorld } from '../src/world-model.js';
 
 const samePoint=(a,b,tolerance=1e-6)=>assert.ok(Math.hypot(a.x-b.x,a.z-b.z)<tolerance);
@@ -52,6 +52,33 @@ test('exact alignment primitives meet endpoint poses with continuous tangents an
 test('infeasible authored poses fail instead of drawing a full-circle railway loop',()=>{
   assert.throws(()=>createAlignment({x:0,z:0,heading:0},{x:0,z:1,heading:0},{radius:8}),/minimum turning radius.*loop/);
   assert.throws(()=>createAlignment({x:0,z:0,heading:0},{x:20,z:0,heading:0},{radius:0}),/positive/);
+});
+
+test('alignment diagnostics use the same solver and preserve solved spans around an infeasible bend',()=>{
+  const start={x:0,z:0,heading:0},end={x:60,z:0,heading:0};
+  const options={radius:8,waypoints:[{x:20,z:0},{x:20,z:1},{x:40,z:0}]};
+  assert.throws(()=>createAlignment(start,end,options),/minimum turning radius/);
+  const inspected=inspectAlignment(start,end,options),failed=inspected.spans.filter(span=>span.reason);
+  assert.equal(failed.length,1);assert.equal(failed[0].fromIndex,1);assert.equal(failed[0].toIndex,2);assert.equal(failed[0].reason,'radius');
+  for(const span of inspected.spans.filter(span=>!span.reason))checkAlignment(span.alignment,8);
+  assert.ok(inspected.points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)&&Number.isFinite(p.z)));
+  samePoint(inspected.points[0],start);samePoint(inspected.points.at(-1),end);
+  const smooth={...options,waypoints:[{x:20,z:0},{x:23,z:0},{x:40,z:0}]};
+  assert.ok(createAlignment(start,end,smooth));assert.ok(inspectAlignment(start,end,smooth).spans.every(span=>!span.reason));
+});
+
+test('coincident controls cannot hide a cusp, while collinear duplicates remain valid',()=>{
+  const start={x:0,z:0,heading:0},end={x:60,z:40,heading:Math.PI/4};
+  const options={radius:8,waypoints:[{x:20,z:0},{x:20,z:0},{x:40,z:20}]};
+  assert.throws(()=>createAlignment(start,end,options),/coincident.*minimum turning radius/);
+  const inspected=inspectAlignment(start,end,options),failed=inspected.spans.filter(span=>span.reason);
+  assert.equal(failed.length,1);assert.equal(failed[0].fromIndex,1);assert.equal(failed[0].toIndex,2);assert.equal(failed[0].reason,'radius');
+  samePoint(failed[0].points[0],failed[0].points.at(-1));
+  assert.ok(inspected.points.length>100,'the coincident failure preserves the surrounding draft');
+  for(const span of inspected.spans.filter(span=>!span.reason))checkAlignment(span.alignment,8);
+  const straightEnd={x:60,z:0,heading:Math.PI*2},straight={radius:8,waypoints:[{x:20,z:0},{x:20,z:0}]};
+  checkAlignment(createAlignment(start,straightEnd,straight),8);
+  assert.ok(inspectAlignment(start,straightEnd,straight).spans.every(span=>!span.reason));
 });
 
 function checkWorldNetwork(world){

@@ -1,4 +1,4 @@
-import {alignmentCandidates,combineAlignments,createAlignment,sampleAlignment,sampleAlignmentPoints,straightSegment} from './alignments.js';
+import {alignmentCandidates,combineAlignments,createAlignment,inspectAlignment,sampleAlignment,sampleAlignmentPoints,straightSegment} from './alignments.js';
 import {worldSurface,generateWorldRegion,mountainHeight,CLEARANCES} from './world-model.js';
 import {mountainFootprintDistance} from './mountain-shape.js';
 import {riverBankDistance} from './hydrology.js';
@@ -20,7 +20,7 @@ const routeOptions=options=>({waypoints:(options?.waypoints===undefined?[]:Array
   attachments:Object.fromEntries(['from','to'].filter(key=>options?.attachments?.[key]!==undefined).map(key=>[key,{x:options.attachments[key]?.x,z:options.attachments[key]?.z}])),
   ...(options?.controlCount!==undefined?{controlCount:options.controlCount}:{})});
 const validControlCount=count=>Number.isInteger(count)&&count>=1&&count<=12;
-export const railwayControlCount=(from,to)=>Math.max(1,Math.min(12,Math.ceil(dist(from,to)/28)-1));
+export const railwayControlCount=(from,to)=>Math.max(1,Math.min(12,Math.ceil(dist(from,to)/48)-1));
 const waypointCount=(from,to,controlCount)=>validControlCount(controlCount)?controlCount:railwayControlCount(from,to);
 function routeHandles(from,to,alignment,{waypoints=[],attachments={},controlCount}={},start,end){
   const count=waypointCount(from,to,controlCount),point=(p,kind,index)=>({x:p.x,z:p.z,id:kind==='bend'?`bend:${index}`:kind,kind,role:kind==='bend'?'waypoint':kind,...(kind==='bend'?{index}:{}),...(Number.isFinite(p.distance)?{distance:p.distance}:{})});
@@ -29,13 +29,18 @@ function routeHandles(from,to,alignment,{waypoints=[],attachments={},controlCoun
     {x:first.x+(last.x-first.x)*(i+1)/(count+1),z:first.z+(last.z-first.z)*(i+1)/(count+1)}));
   return [point(first,'from'),...interiors.map((p,i)=>point(p,'bend',i)),point(last,'to')];
 }
-function selfIntersects(alignment){
-  const count=Math.max(2,Math.ceil(alignment.length/1.5)),points=Array.from({length:count+1},(_,i)=>sampleAlignment(alignment,alignment.length*i/count));
+function crossingPoint(points){
   const cross=(a,b,c)=>(b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x);
   for(let i=1;i<points.length;i++)for(let j=i+3;j<points.length;j++){
     const a=points[i-1],b=points[i],c=points[j-1],d=points[j];
-    if(cross(a,b,c)*cross(a,b,d)<-1e-8&&cross(c,d,a)*cross(c,d,b)<-1e-8)return true;
-  }return false;
+    if(cross(a,b,c)*cross(a,b,d)<-1e-8&&cross(c,d,a)*cross(c,d,b)<-1e-8){
+      const t=cross(c,d,a)/(cross(c,d,a)-cross(c,d,b));return{x:a.x+(b.x-a.x)*t,z:a.z+(b.z-a.z)*t};
+    }
+  }return null;
+}
+function selfIntersects(alignment){
+  const count=Math.max(2,Math.ceil(alignment.length/1.5)),points=Array.from({length:count+1},(_,i)=>sampleAlignment(alignment,alignment.length*i/count));
+  return !!crossingPoint(points);
 }
 function intervalsFor(line,signedDistance){
   const result=[];let start=signedDistance(line.points[0],0)<=0?0:null;
@@ -171,13 +176,17 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   function stationOptions(city,other,occupied,attachment){
     const existing=stations.find(station=>station.cityId===city.id);if(existing)return [existing];
     const blocked=occupied.blocked,homes=[...session.buildings,...world.gameplay?.farmVillages?.houses??[]].filter(item=>item.cityId===city.id&&item.kind==='house');
-    const radius=Math.max(3,...homes.map(home=>dist(home,city)+1.6)),bearing=Math.atan2(other.z-city.z,other.x-city.x),options=[];
-    const make=(center,heading,side)=>{
+    const cityExtent=Math.max(3,...homes.map(home=>dist(home,city)+1.6)),orbitRadius=Math.max(10,cityExtent+5),bearing=Math.atan2(other.z-city.z,other.x-city.x);
+    const endpointOffset=Math.atan2(7,orbitRadius);
+    const make=angle=>{
+        angle=Math.round(((angle%TAU+TAU)%TAU)*1e12)/1e12;
+        const center={x:city.x+Math.cos(angle)*orbitRadius,z:city.z+Math.sin(angle)*orbitRadius},heading=angle+Math.PI/2;
         const normal={x:-Math.sin(heading),z:Math.cos(heading)},station={id:`rail-station:${city.id}`,kind:'station',cityId:city.id,ownerId:city.ownerId,
-          x:center.x+normal.x*SETTLEMENT_RAILWAY.stationOffset*side,y:0,z:center.z+normal.z*SETTLEMENT_RAILWAY.stationOffset*side,
-          rotation:Math.atan2(-normal.x*side,-normal.z*side),width:6.4,depth:2.4,radius:Math.hypot(3.2,1.2),
-          platform:{width:2.4,length:6.4},lineId:`rail-spine:${city.id}`,distance:7,center,heading,side,cityHouseIds:[...city.houseIds??homes.map(home=>home.id)]};
-        return {...station,score:dist(city,station)*1.8+dist(center,other)*.35+Math.abs(angleDelta(heading,bearing))*2};
+          x:center.x+normal.x*SETTLEMENT_RAILWAY.stationOffset,y:0,z:center.z+normal.z*SETTLEMENT_RAILWAY.stationOffset,
+          rotation:Math.atan2(-normal.x,-normal.z),width:6.4,depth:2.4,radius:Math.hypot(3.2,1.2),
+          platform:{width:2.4,length:6.4},lineId:`rail-spine:${city.id}`,distance:7,center,heading,side:1,attachmentSide:1,orbitRadius,
+          cityHouseIds:[...city.houseIds??homes.map(home=>home.id)]};
+        return {...station,score:dist(port(station,1),other)*.35+Math.abs(angleDelta(heading,bearing))*2};
     };
     const fits=station=>{
         if(!boxSamples({...station,width:7,depth:3},point=>!blocked(point,.22)))return false;
@@ -189,30 +198,40 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
         const start={x:center.x-Math.cos(heading)*7,z:center.z-Math.sin(heading)*7},end={x:center.x+Math.cos(heading)*7,z:center.z+Math.sin(heading)*7};
         return acceptable(combineAlignments([straightSegment(start,end,SETTLEMENT_RAILWAY.railY)]),allowed);
     };
-    const cacheKey=`${city.id}:${city.x}:${city.z}:${other.x}:${other.z}:${radius}:${revision}`;
+    const cacheKey=`${city.id}:${city.x}:${city.z}:${other.x}:${other.z}:${orbitRadius}:${revision}`;
+    const grounded=station=>{
+      const key=`site:${cacheKey}:${station.heading}`;
+      if(!stationCache.has(key)){
+        while(stationCache.size>=512)stationCache.delete(stationCache.keys().next().value);
+        stationCache.set(key,fits(station)?station:null);
+      }
+      return stationCache.get(key);
+    };
+    // The active port is itself on a concentric circle. Its angular offset
+    // makes cursor→site→snapped-cursor replay exactly idempotent, without
+    // storing a mutable station pose in UI state.
+    if(attachment){
+      const angle=Math.atan2(attachment.z-city.z,attachment.x-city.x)-endpointOffset,requested=make(angle),station=grounded(requested);
+      return [station??{...requested,siteBlocked:true}];
+    }
     let selected=stationCache.get(cacheKey);
     if(!selected){
-      for(const extra of [3.4,6.4,9.4,12.4,16.4,20.4])for(let i=0;i<16;i++){
-        const a=bearing+i/16*TAU,center={x:city.x+Math.cos(a)*(radius+extra),z:city.z+Math.sin(a)*(radius+extra)};
-        for(const heading of [bearing,bearing-Math.PI/6,bearing+Math.PI/6])for(const side of [-1,1])options.push(make(center,heading,side));
-      }
+      const options=Array.from({length:24},(_,i)=>make(bearing+i/24*TAU));
       selected=[];
       for(const option of options.sort((a,b)=>a.score-b.score)){
-        if(selected.some(other=>dist(option,other)<2.5&&Math.abs(Math.sin(option.heading-other.heading))<.3)||!fits(option))continue;
-        selected.push(option);if(selected.length===SETTLEMENT_RAILWAY.stationOptions)break;
+        if(selected.some(other=>dist(option,other)<2.5&&Math.abs(Math.sin(option.heading-other.heading))<.3))continue;
+        const site=grounded(option);if(!site)continue;
+        selected.push(site);if(selected.length===SETTLEMENT_RAILWAY.stationOptions)break;
       }
-      if(stationCache.size>64)stationCache.clear();stationCache.set(cacheKey,selected);
+      while(stationCache.size>=512)stationCache.delete(stationCache.keys().next().value);
+      stationCache.set(cacheKey,selected);
     }
-    if(!attachment)return selected;
-    const exact=selected.filter(station=>[-1,1].some(side=>dist(port(station,side),attachment)<1e-5));
-    if(exact.length)return exact;
-    if(dist(attachment,city)>radius+27.4)return [];
-    const center={x:attachment.x-Math.cos(bearing)*7,z:attachment.z-Math.sin(bearing)*7};
-    return [-1,1].map(side=>make(center,bearing,side)).sort((a,b)=>dist(a,city)-dist(b,city)).filter(fits).slice(0,1);
+    return selected;
   }
   function port(station,side,outgoing=true){return {x:station.center.x+Math.cos(station.heading)*7*side,z:station.center.z+Math.sin(station.heading)*7*side,
     heading:station.heading+(side<0?Math.PI:0)+(outgoing?0:Math.PI)};}
   function ports(station,other,outgoing,attachment){
+    if(!stations.some(item=>item.id===station.id)&&station.attachmentSide)return [port(station,station.attachmentSide,outgoing)];
     const ends=[port(station,-1,outgoing),port(station,1,outgoing)],junctions=[];
     if(stations.some(item=>item.id===station.id))for(const line of lines){
       if(line.id===station.lineId||!line.stationIds.includes(station.id))continue;
@@ -227,7 +246,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     const score=p=>dist(p,other)+Math.abs(angleDelta(p.heading+(outgoing?0:Math.PI),Math.atan2(other.z-p.z,other.x-p.x)))*8;
     // Even a busy station always exposes both physical ends. Junction search
     // must never crowd the back port out of the bounded candidate budget.
-    if(attachment){const choices=[...ends,...junctions],nearest=Math.min(...choices.map(p=>dist(p,attachment)));
+    if(attachment){const retained=junctions.filter(p=>dist(p,attachment)<1e-5),choices=retained.length?retained:ends,nearest=Math.min(...choices.map(p=>dist(p,attachment)));
       return choices.filter(p=>dist(p,attachment)<nearest+1e-5).sort((a,b)=>score(a)-score(b));}
     return [...ends,...junctions.sort((a,b)=>score(a)-score(b)).slice(0,8)].sort((a,b)=>score(a)-score(b));
   }
@@ -262,10 +281,72 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     line.cuts.sort((a,b)=>a.start-b.start);line.tunnels.sort((a,b)=>a.start-b.start);return line;
   }
   function makeSpine(station,metadata=true){return makeLine(station.lineId,combineAlignments([straightSegment(port(station,-1),port(station,1),SETTLEMENT_RAILWAY.railY)]),station.cityId,station.cityId,[station.id],metadata);}
+  function guideLine(from,to,points){
+    const distances=[0];for(let i=1;i<points.length;i++)distances.push(distances.at(-1)+dist(points[i-1],points[i]));
+    return {id:`rail-link:${keyFor(from.id,to.id)}`,from:from.id,to:to.id,ownerId:session.player.ownerId,color:session.player.ownerId,
+      points,distances,length:distances.at(-1),previewOnly:true,closed:false,bridges:[],tunnels:[],cuts:[],stops:[]};
+  }
+  function failedDraft(from,to,attempt,options){
+    const inspection=inspectAlignment(attempt.start,attempt.end,{radius:SETTLEMENT_RAILWAY.minRadius,y:SETTLEMENT_RAILWAY.railY,
+      waypoints:options.waypoints,isAllowed:attempt.allowed}),bad=[];
+    const severity=index=>{
+      const a=inspection.poses[index],p=inspection.poses[index+1],b=inspection.poses[index+2];
+      const turn=Math.abs(angleDelta(Math.atan2(b.z-p.z,b.x-p.x),Math.atan2(p.z-a.z,p.x-a.x)));
+      return Math.tan(Math.min(Math.PI-.001,turn)/2)*SETTLEMENT_RAILWAY.minRadius/Math.max(.01,Math.min(dist(a,p),dist(p,b)));
+    };
+    const poseSamples=new Map();let sampleOffset=0;
+    for(const span of inspection.spans){
+      poseSamples.set(span.fromIndex,sampleOffset);
+      sampleOffset+=span.points.length-1;poseSamples.set(span.toIndex,sampleOffset);
+    }
+    const bendContext=index=>{
+      const center=poseSamples.get(index+1);if(center===undefined)return [];
+      let first=center,last=center,length=0;
+      while(first>0&&length<10){length+=dist(inspection.points[first],inspection.points[first-1]);first--;}
+      length=0;
+      while(last<inspection.points.length-1&&length<10){length+=dist(inspection.points[last],inspection.points[last+1]);last++;}
+      // A collapsed failed span can be hidden beneath its handle. Include the
+      // adjoining real curve so the warning remains visible at map scale.
+      return inspection.points.slice(first,last+1);
+    };
+    const mark=(index,points,reason,focus,limit=SETTLEMENT_RAILWAY.minRadius*2.5)=>{
+      if(index<0||index>=options.waypoints.length)return;
+      const p=options.waypoints[index],runs=[];let current=[];
+      for(const point of points){
+        if(dist(point,focus??p)<=limit)current.push(point);
+        else if(current.length){if(current.length>1)runs.push(current);current=[];}
+      }
+      if(current.length>1)runs.push(current);
+      // Keep separate fragments for the same bend; joining distant samples
+      // would draw a red chord through otherwise valid track.
+      for(const fragment of runs.length?runs:points.length>1?[points]:[])bad.push({index,x:p.x,z:p.z,reason,points:fragment});
+    };
+    for(const span of inspection.spans){
+      if(!span.reason)continue;
+      const choices=[span.fromIndex-1,span.toIndex-1].filter(i=>i>=0&&i<options.waypoints.length).sort((a,b)=>severity(b)-severity(a));
+      mark(choices[0],bendContext(choices[0]),span.reason);
+    }
+    const crossing=crossingPoint(inspection.points);
+    if(crossing&&!bad.length){
+      const index=options.waypoints.reduce((best,p,i)=>dist(p,crossing)<dist(options.waypoints[best],crossing)?i:best,0);
+      mark(index,inspection.points,'intersection',crossing,SETTLEMENT_RAILWAY.minRadius*1.5);
+    }
+    const newStations=[attempt.sa,attempt.sb].filter(station=>!stations.some(existing=>existing.id===station.id));
+    const branch=guideLine(from,to,inspection.points);
+    return {lines:[...newStations.map(station=>makeSpine(station,false)),branch],stations:newStations,invalidBends:bad,
+      handles:routeHandles(from,to,null,options,attempt.start,attempt.end)};
+  }
   function findGeometry(from,to,occupied,options){
     const {waypoints=[],attachments={}}=options,a=stationOptions(from,to,occupied,attachments.from),b=stationOptions(to,from,occupied,attachments.to);
     const blocked=(code,reason,extra={})=>({code,reason,lines:[],stations:[],handles:routeHandles(from,to,null,options),waypoints:copy(waypoints),attachments:copy(attachments),waypointCount:waypointCount(from,to,options.controlCount),...extra});
-    if(!a.length||!b.length)return blocked('station-blocked','Keep the platform near this city on clear level land',{blockedCityId:!a.length?from.id:to.id});
+    if(!a.length||!b.length||a[0].siteBlocked||b[0].siteBlocked){
+      const start=a.length?ports(a[0],to,true,attachments.from)[0]:{...from,heading:Math.atan2(to.z-from.z,to.x-from.x)};
+      const end=b.length?ports(b[0],from,false,attachments.to)[0]:{...to,heading:Math.atan2(to.z-from.z,to.x-from.x)};
+      const newStations=[a[0],b[0]].filter(station=>station&&!stations.some(existing=>existing.id===station.id));
+      const points=inspectAlignment(start,end,{radius:SETTLEMENT_RAILWAY.minRadius,y:SETTLEMENT_RAILWAY.railY,waypoints}).points;
+      return blocked('station-blocked','Choose clear level ground around this city',{blockedCityId:!a.length||a[0].siteBlocked?from.id:to.id,
+        stations:newStations,handles:routeHandles(from,to,null,options,start,end),lines:[...newStations.map(station=>makeSpine(station,false)),guideLine(from,to,points)]});
+    }
     const attempts=[];
     for(const sa of a)for(const sb of b){
       if(dist(sa,sb)<sa.radius+sb.radius+1)continue;
@@ -296,12 +377,20 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
         if(acceptable(route,attempt.allowed)&&!selfIntersects(route)){chosen={...attempt,route};break;}
       }if(chosen)break;
     }
-    if(!chosen)return blocked('route-blocked',waypoints.length?'Give the curve more room around buildings':'No clear railway route between these cities');
+    if(!chosen){
+      const result=blocked('route-blocked',waypoints.length?'Give the curve more room around buildings':'No clear railway route between these cities');
+      if(waypoints.length&&attempts.length){const attempt=attempts[0];attempt.allowed??=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end],false);
+        const draft=failedDraft(from,to,attempt,options);
+        const reason=draft.invalidBends.some(bend=>bend.reason==='radius')?'Give this bend more room':
+          draft.invalidBends.some(bend=>bend.reason==='intersection')?'Keep this bend from crossing the line':result.reason;
+        return {...result,...draft,reason};}
+      return result;
+    }
     const newStations=[chosen.sa,chosen.sb].filter(station=>!stations.some(existing=>existing.id===station.id));
     const branch=makeLine(`rail-link:${keyFor(from.id,to.id)}`,chosen.route,from.id,to.id,[chosen.sa.id,chosen.sb.id],false);
     return {code:'ready',reason:'Connect these cities',lines:[...newStations.map(station=>makeSpine(station,false)),branch],stations:newStations,
       fromStationId:chosen.sa.id,toStationId:chosen.sb.id,fromJunction:chosen.start.junction??null,toJunction:chosen.end.junction??null,
-      handles:routeHandles(from,to,chosen.route,options,chosen.start,chosen.end),waypoints:copy(waypoints),attachments:copy(attachments),waypointCount:waypointCount(from,to,options.controlCount)};
+      handles:routeHandles(from,to,chosen.route,options,chosen.start,chosen.end),waypoints:copy(waypoints),attachments:copy(attachments),waypointCount:waypointCount(from,to,options.controlCount),invalidBends:[]};
   }
   function findPlan(geometry,placements,occupied){
     if(geometry.code!=='ready')return geometry;
@@ -353,7 +442,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     if(geometryCache?.key!==cacheKey)geometryCache={key:cacheKey,plan:findGeometry(from,to,occupied,route)};
     const plan=provisional?geometryCache.plan:findPlan(geometryCache.plan,scenery(),occupied);
     if(!provisional)cached={key:cacheKey,plan};
-    if(plan.code!=='ready')return {...base,...plan,valid:false,siteValid:false};
+    if(plan.code!=='ready')return {...base,...copy(plan),valid:false,siteValid:false};
     return {...base,...copy(plan),siteValid:true,valid:base.affordable,code:base.affordable?'ready':'not-enough-gold',reason:base.affordable?plan.reason:'A railway costs 5 gold'};
   }
   const preview=(from,to,options={})=>resultFor(from,to,options,true),evaluate=(from,to,options={})=>resultFor(from,to,options,false);
@@ -361,7 +450,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   function adoptPreview(fromCityId,toCityId,result,key,options={}){
     if(result?.provisional||key!==geometryKey(fromCityId,toCityId,options)||result?.fromCityId!==fromCityId||result?.toCityId!==toCityId)return false;
     const plan={code:result.siteValid?'ready':result.code,reason:result.siteValid?'Connect these cities':result.reason};
-    for(const field of ['lines','stations','paths','fromStationId','toStationId','fromJunction','toJunction','clearedTreeIds','clearedPlacements','clearedPlacementIds','handles','waypoints','attachments','waypointCount','blockedCityId'])if(field in result)plan[field]=copy(result[field]);
+    for(const field of ['lines','stations','paths','fromStationId','toStationId','fromJunction','toJunction','clearedTreeIds','clearedPlacements','clearedPlacementIds','handles','waypoints','attachments','waypointCount','invalidBends','blockedCityId'])if(field in result)plan[field]=copy(result[field]);
     cached={key,plan};return true;
   }
   function build(fromCityId,toCityId,{requireCached=false,...options}={}){
