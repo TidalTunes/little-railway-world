@@ -6,6 +6,8 @@ import {house} from '../src/assets.js';
 import {consolidate} from '../src/geometry.js';
 import {M} from '../src/palette.js';
 import {createWalkingPlayer} from '../src/walking-player.js';
+import {buildSettlementBuilding} from '../src/settlement-building-assets.js';
+import {SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
 
 function world(){return {seed:'art-test',players:[{id:'teal',color:{l:.62,c:.12,h:170}}],
   gameplay:{ownerId:'teal'},outline:[[-100,-100],[100,-100],[100,100],[-100,100]],mountains:[],cities:[],stations:[],placements:[],lines:[],
@@ -13,6 +15,8 @@ function world(){return {seed:'art-test',players:[{id:'teal',color:{l:.62,c:.12,
 function setup(){const scene=new Group(),map=new Group(),model=world();return{scene,map,model,art:createSettlementArt(scene,map,model)};}
 const homes=()=>Array.from({length:4},(_,variant)=>({id:`home-${variant}`,kind:'house',x:variant*5-7,y:variant*.2,z:variant*3+2,
   rotation:variant*Math.PI/5,variant,ownerId:'teal',scale:1}));
+const civics=()=>SETTLEMENT_MILESTONES.map((spec,index)=>({...spec,id:`civic-${spec.type}`,kind:'civic',buildingType:spec.type,
+  x:index*6-9,y:index*.08,z:-6-index,rotation:index*Math.PI/6,ownerId:'teal',scale:1}));
 function nearBounds(actual,expected){for(const bound of ['min','max'])for(const axis of ['x','y','z'])
   assert.ok(Math.abs(actual[bound][axis]-expected[bound][axis])<1e-5,`${bound}.${axis}: ${actual[bound][axis]} versus ${expected[bound][axis]}`);}
 function previewMesh(root){return root.getObjectByName('settlement-blueprint');}
@@ -101,7 +105,7 @@ test('committed houses expose real transformed collision bounds and retract a ne
 });
 
 test('disposing settlement art releases every owned visible resource without disposing shared world materials',()=>{
-  const {art,scene,map}=setup();art.sync(homes());
+  const {art,scene,map}=setup();art.sync(homes(),[],civics());
   const resources=new Set();
   const remember=()=>{for(const root of [art.root,art.mapRoot])root.traverse(node=>{
     if(node.geometry)resources.add(node.geometry);if(node.material)resources.add(node.material);if(node.isInstancedMesh)resources.add(node);
@@ -116,6 +120,41 @@ test('disposing settlement art releases every owned visible resource without dis
   assert.equal(art.root.parent,null);assert.equal(art.mapRoot.parent,null);assert.equal(scene.children.length,0);assert.equal(map.children.length,0);
   assert.equal(sharedDisposals,0);
   for(const [resource,count]of counts)assert.equal(count,1,`${resource.type??'resource'} must dispose exactly once`);
+});
+
+test('milestone templates retain their exact placement, distinguish map marks and join collision mesh selection',()=>{
+  const {art}=setup();
+  try{
+    const buildings=civics();art.sync(homes(),[],buildings);
+    const glyphs=[];
+    for(const item of buildings){
+      const original=new Group();buildSettlementBuilding(original,item);consolidate(original);original.updateMatrixWorld(true);
+      const expected=new Box3().setFromObject(original),actual=new Box3();
+      const batches=art.root.children.filter(node=>node.isInstancedMesh&&node.userData.buildingType===item.buildingType);
+      for(const batch of batches){
+        assert.equal(batch.count,1);const pose=new Matrix4(),point=new Vector3();batch.getMatrixAt(0,pose);
+        // A circular plaza rotated inside an instanced AABB is intentionally
+        // conservative. Compare actual transformed vertices, not that box.
+        const vertices=batch.geometry.attributes.position;
+        for(let index=0;index<vertices.count;index++)actual.expandByPoint(point.fromBufferAttribute(vertices,index).applyMatrix4(pose));
+      }
+      nearBounds(actual,expected);
+      assert.ok(art.meshes.some(mesh=>mesh.userData.buildingType===item.buildingType));
+      const marker=art.mapRoot.getObjectByName(`settlement-civic-map-${item.buildingType}`),pose=new Matrix4();marker.getMatrixAt(0,pose);
+      assert.equal(marker.count,1);assert.equal(pose.elements[12],item.x);assert.equal(pose.elements[14],item.z);
+      glyphs.push(Array.from(marker.geometry.attributes.position.array).join(','));
+      for(const mesh of original.children)mesh.geometry.dispose();
+    }
+    assert.equal(new Set(glyphs).size,SETTLEMENT_MILESTONES.length,'every milestone has a different wordless map symbol');
+    const before=art.root.children.filter(node=>node.isInstancedMesh&&node.userData.buildingType),geometries=before.map(batch=>batch.geometry);
+    const expanded=[...buildings,...buildings.map((item,index)=>({...item,id:`second-${index}`,x:item.x+30}))];
+    art.sync(homes(),[],expanded);
+    const grown=art.root.children.filter(node=>node.isInstancedMesh&&node.userData.buildingType);
+    assert.deepEqual(grown.map(batch=>batch.geometry),geometries,'capacity growth reuses the same authored building geometry');
+    for(const batch of grown)assert.equal(batch.count,2);
+    art.sync(homes(),[],[]);assert.ok(grown.every(batch=>batch.count===0));
+    assert.equal(art.meshes.some(mesh=>mesh.userData.buildingType),false,'removed civic batches cannot affect the camera');
+  }finally{art.dispose();}
 });
 
 

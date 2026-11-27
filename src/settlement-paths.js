@@ -7,19 +7,22 @@ const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 const finitePoint=point=>Number.isFinite(point?.x)&&Number.isFinite(point?.z);
 const radiusOf=item=>item.radius??({tree:.85,rock:.6,cactus:.7,landmark:2,station:3.42,apartment:2.05,civic:2.8,tower:2.1}[item.kind]??1)*(item.scale??1);
 
-/** A town keeps a common street/frontage axis. Individual roof styles vary,
- * but rotating the pointer cannot turn a house away from its neighbours. */
+/** New frontages face the homes in their own city at placement time. Existing
+ * homes retain their saved yaw as the centre of mass moves with later growth. */
 export function settlementHouseRotation(world,point,homes){
-  let nearest=null,best=Infinity;
-  for(const home of homes){const delta=surfaceDisplacement(world,point,home),d=Math.hypot(delta.x,delta.z);
-    if(d<best){best=d;nearest=home;}}
-  return Number.isFinite(nearest?.rotation)?nearest.rotation:0;
+  if(!homes.length)return 0;
+  let x=0,z=0;
+  for(const home of homes){const delta=surfaceDisplacement(world,point,home);x+=delta.x;z+=delta.z;}
+  return Math.hypot(x,z)>1e-7?Math.atan2(x,z):(homes[0].rotation??0);
 }
 
-export function settlementDoor(world,house,offset=SETTLEMENT_PATH.doorOffset){
+export function settlementDoor(world,house,offset=house.doorOffset??SETTLEMENT_PATH.doorOffset){
   const angle=house.rotation??0;
   return surfaceOffset(world,house.x,house.z,Math.sin(angle)*offset,Math.cos(angle)*offset);
 }
+
+const footprintDimensions=item=>({width:item.width??SETTLEMENT_PATH.houseWidth,depth:item.depth??SETTLEMENT_PATH.houseDepth});
+const landingOffset=item=>Math.max((item.depth??SETTLEMENT_PATH.houseDepth)/2+.42,(item.doorOffset??SETTLEMENT_PATH.doorOffset)+.35);
 
 export function sampleSettlementPath(points,visit,spacing=SETTLEMENT_PATH.sampleSpacing){
   for(let segment=1;segment<points.length;segment++){
@@ -35,7 +38,7 @@ export function sampleSettlementPath(points,visit,spacing=SETTLEMENT_PATH.sample
 /** Returns true when a proposed foundation covers an established walking
  * route. Paths may meet/cross each other; they never become building lots. */
 export function houseBlocksSettlementPath(world,house,path,gap=.12){
-  const halfWidth=SETTLEMENT_PATH.houseWidth/2,halfDepth=SETTLEMENT_PATH.houseDepth/2;
+  const {width,depth}=footprintDimensions(house),scale=house.scale??1,halfWidth=width*scale/2,halfDepth=depth*scale/2;
   const margin=(path.width??SETTLEMENT_PATH.width)/2+gap,c=Math.cos(house.rotation??0),s=Math.sin(house.rotation??0);
   return !sampleSettlementPath(path.points,point=>{
     const delta=surfaceDisplacement(world,house,point),x=delta.x*c-delta.z*s,z=delta.x*s+delta.z*c;
@@ -58,9 +61,9 @@ class MinHeap{
  * eight-neighbour search handles a tree, another house, or a shallow bay.
  * Line-of-sight simplification removes grid stair-steps without cutting corners.
  * This remains pure data, so detailed and overhead views share the same path. */
-export function planSettlementPath(world,from,to,{placements=[],surfaceAt,removedTreeIds=new Set(),width=SETTLEMENT_PATH.width}={}){
+export function planSettlementPath(world,from,to,{placements=[],surfaceAt,removedTreeIds=new Set(),width=SETTLEMENT_PATH.width,maxNodes=SETTLEMENT_PATH.maxNodes}={}){
   if(!finitePoint(from)||!finitePoint(to)||typeof surfaceAt!=='function')return null;
-  const start=settlementDoor(world,from,SETTLEMENT_PATH.landingOffset),end=settlementDoor(world,to,SETTLEMENT_PATH.landingOffset);
+  const start=settlementDoor(world,from,landingOffset(from)),end=settlementDoor(world,to,landingOffset(to));
   const doorA=settlementDoor(world,from),doorB=settlementDoor(world,to),margin=width/2+SETTLEMENT_PATH.clearance;
   const pad=4,minX=Math.min(start.x,end.x)-pad,maxX=Math.max(start.x,end.x)+pad;
   const minZ=Math.min(start.z,end.z)-pad,maxZ=Math.max(start.z,end.z)+pad;
@@ -70,12 +73,13 @@ export function planSettlementPath(world,from,to,{placements=[],surfaceAt,remove
     if(item.id!=null&&seenIds.has(item.id))continue;if(item.id!=null)seenIds.add(item.id);
     if(item.kind==='tree'&&removedTreeIds.has(String(item.id??`tree:${item.x}:${item.z}:${item.variant??0}`)))continue;
     // Keep whole tree canopies free so the route reads clearly from above too.
-    const radius=radiusOf(item),scale=item.scale??1;
+    const rectangle=item.kind==='house'||['farm','civic'].includes(item.kind)&&item.width&&item.depth;
+    const dimensions=rectangle?footprintDimensions(item):null,scale=item.scale??1;
+    const radius=rectangle?Math.hypot(dimensions.width,dimensions.depth)*scale/2:radiusOf(item);
     if(item.x+radius<minX||item.x-radius>maxX||item.z+radius<minZ||item.z-radius>maxZ)continue;
-    const rectangle=item.kind==='house'||item.kind==='farm'&&item.width&&item.depth;
     obstacles.push({item,rectangle,radius:radius+margin,c:Math.cos(item.rotation??0),s:Math.sin(item.rotation??0),
-      halfWidth:(item.kind==='house'?SETTLEMENT_PATH.houseWidth:item.width??0)*scale/2,
-      halfDepth:(item.kind==='house'?SETTLEMENT_PATH.houseDepth:item.depth??0)*scale/2});
+      halfWidth:(dimensions?.width??0)*scale/2,
+      halfDepth:(dimensions?.depth??0)*scale/2});
   }
   const terrainCache=new Map(),clearanceCache=new Map();
   const pointKey=(x,z)=>`${Math.round(x*1e6)}:${Math.round(z*1e6)}`;
@@ -120,7 +124,7 @@ export function planSettlementPath(world,from,to,{placements=[],surfaceAt,remove
     const step=SETTLEMENT_PATH.step,nodes=new Map(),queue=new MinHeap(),key=(ix,iz)=>`${ix}:${iz}`;
     const initial={x:start.x,z:start.z,ix:0,iz:0,cost:0,score:distance(start,end),parent:null};
     nodes.set('0:0',initial);queue.push(initial);let found=null,visited=0;
-    while(queue.length&&visited++<SETTLEMENT_PATH.maxNodes){
+    while(queue.length&&visited++<maxNodes){
       const current=queue.pop();if(current.closed||nodes.get(key(current.ix,current.iz))!==current)continue;current.closed=true;
       if(distance(current,end)<=step*1.5&&clearSegment(current,end)){found=current;break;}
       for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++){

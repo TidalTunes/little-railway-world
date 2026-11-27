@@ -255,7 +255,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. Houses align with your settlement and connect by paths. V switches between your traveller and overview; N changes day and night.');
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. New houses face the current center of their settlement and connect by paths. At 3, 5, 8 and 12 connected homes, a well, market, clock tower and town hall appear when there is clear space. Larger towns unlock a water tower, fountain garden, library, guild hall and chapel. V switches between your traveller and overview; N changes day and night.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
@@ -368,7 +368,7 @@ function frame(now){
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
     const renderFocus=groundLayer?walker.renderPosition:view.renderTarget;
-    clockHands.update(time,{focus:renderFocus,placements:detail.placements,revision:detail.placementRevision,
+    clockHands.update(time,{focus:renderFocus,placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       visible:blend<.999,reducedMotion:reducedMotion.matches});
     detail.updateVisibility(activeCamera,{dt,reveal:shaderReady&&blend<.999,reducedMotion:reducedMotion.matches||entryFrame});
     entryFrame=false;detailBase.root.visible=groundLayer||!detail.settled;

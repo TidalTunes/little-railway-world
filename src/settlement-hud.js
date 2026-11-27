@@ -1,3 +1,5 @@
+import {SETTLEMENT_MILESTONES} from './settlement-progression.js';
+
 // The island stays the interface: all visible controls are small, faceted objects.
 // Descriptions and exact inventory values remain available to assistive technology.
 const icon = body => `<svg viewBox="0 0 32 32" fill="none" aria-hidden="true">${body}</svg>`;
@@ -13,8 +15,19 @@ const icons = {
   blocked: icon('<path stroke="currentColor" stroke-width="3" d="m10 3 12 0 7 7v12l-7 7H10l-7-7V10zM8 8l16 16"/>'),
   tree: icon('<path fill="#986b44" d="M14 20h4v10h-4z"/><path fill="#91b36a" d="m16 1 12 19-12 6-12-6z"/><path fill="#497e50" d="m16 1 12 19-12 6z"/>'),
   water: icon('<path fill="#83b9cb" d="m16 2 11 16v7l-6 5H11l-6-5v-7z"/><path fill="#3c849e" d="m16 2 11 16v7l-6 5h-5z"/>'),
+  well: icon('<path fill="#adbaa6" d="m5 21 11-5 11 5v7l-11 4-11-4z"/><path fill="#e2dfc4" d="m5 21 11-5 11 5-11 4z"/><path fill="#487d87" d="m10 21 6-3 6 3-6 2z"/><path fill="#785834" d="M7 9h3v13H7zM22 9h3v13h-3z"/><path class="settlement-owner-fill" d="m3 11 13-10 13 10z"/><path fill="#e6cf98" d="M15 11h2v8h-2z"/>'),
+  market: icon('<path fill="#785834" d="M6 14h3v16H6zM23 14h3v16h-3z"/><path fill="#d4af78" d="M4 23h24v5H4z"/><path fill="#a77549" d="M4 28h24v3H4z"/><path class="settlement-owner-fill" d="M7 4h18l6 11H1z"/><path fill="#f4e6bd" d="M11 4h5l-2 11H7zM21 4h4l6 11h-7z"/><path fill="#8cac69" d="M7 20h5v3H7zM13 19h5v4h-5z"/><path fill="#e7b96b" d="M19 20h6v3h-6z"/>'),
+  clock: icon('<path fill="#e7dfc1" d="M9 9h14v21H9z"/><path fill="#aeba9e" d="M20 9h3v21h-3z"/><path class="settlement-owner-fill" d="m6 10 10-9 10 9z"/><path fill="#b9c0a3" d="M6 29h20v3H6z"/><circle fill="#f5edcf" cx="16" cy="16" r="5"/><path stroke="#23574b" stroke-width="1.5" d="M16 12v4l3 1"/><path fill="#6e8e7e" d="M14 24h4v5h-4z"/>'),
+  hall: icon('<path fill="#e7dfc1" d="M4 13h24v15H4z"/><path fill="#b8c3a9" d="M24 13h4v15h-4z"/><path class="settlement-owner-fill" d="m1 14 15-10 15 10z"/><path fill="#c7ceb7" d="M1 28h30v4H1z"/><path fill="#315f52" d="M13 20h6v8h-6zM6 17h4v5H6zM22 17h4v5h-4z"/><path fill="#e2cc99" d="M15 1h2v5h-2z"/><path fill="#e4ba63" d="M17 1h7l-2 2 2 2h-7z"/>'),
+  waterTower: icon('<path stroke="#315f52" stroke-width="2.5" d="M8 16v15M24 16v15M8 29l16-11M8 18l16 11"/><path class="settlement-owner-fill" d="M5 7h22v11l-11 3-11-3z"/><path fill="#e7dfc1" d="M5 16l11 2 11-2v3l-11 3-11-3z"/><path fill="#377d70" d="m3 8 13-7 13 7z"/>'),
+  plaza: icon('<path fill="#b8c3a9" d="m1 20 15-9 15 9v6l-15 6-15-6z"/><path fill="#96b471" d="m1 20 15-9 15 9-15 6z"/><path fill="#e7dfc1" d="m10 19 6-4 6 4v5l-6 3-6-3z"/><path fill="#83b9cb" d="m11 19 5-3 5 3-5 2z"/><path class="settlement-owner-fill" d="M15 10h2v10h-2z"/><path fill="#e7dfc1" d="m11 10 5-2 5 2-5 3z"/><path fill="#83b9cb" d="M15 5h2v5h-2z"/>'),
+  library: icon('<path fill="#e7dfc1" d="M4 16h24v14H4z"/><path class="settlement-owner-fill" d="m1 17 15-6 15 6zM9 10V7l3-4h8l3 4v3z"/><path fill="#315f52" d="M8 21h3v7H8zM14 21h4v9h-4zM21 21h3v7h-3z"/><path fill="#c7ceb7" d="M2 29h28v3H2zM8 10h16v3H8z"/><path fill="#e4ba63" d="M15 1h2v3h-2z"/>'),
+  guildhall: icon('<path fill="#e7dfc1" d="M4 13h24v17H4zM5 6h6v10H5zM21 6h6v10h-6z"/><path class="settlement-owner-fill" d="m1 16 15-7 15 7zM3 7l5-6 5 6zM19 7l5-6 5 6z"/><path fill="#315f52" d="M13 21h6v9h-6zM7 20h3v5H7zM22 20h3v5h-3z"/><path fill="#c7ceb7" d="M2 29h28v3H2z"/>'),
+  chapel: icon('<path fill="#e7dfc1" d="M3 17h26v13H3zM12 8h10v22H12z"/><path class="settlement-owner-fill" d="m1 18 14-10 16 10zM10 9l7-9 7 9z"/><path fill="#315f52" d="M15 24h4v6h-4zM16 12h2v5h-2z"/><path fill="#c7ceb7" d="M1 29h30v3H1z"/>'),
   close: icon('<path fill="currentColor" d="m7 3 9 9 9-9 4 4-9 9 9 9-4 4-9-9-9 9-4-4 9-9-9-9z"/>'),
 };
+
+const milestoneNames = {well:'well',market:'market',clock:'clock tower',hall:'town hall',waterTower:'water tower',plaza:'fountain garden',library:'library',guildhall:'guild hall',chapel:'chapel'};
 
 const logSlot = () => `<span class="settlement-log" aria-hidden="true">${icon('<path d="m4 11 17-7 7 5v14l-17 6-7-5z"/><path class="settlement-log-top" d="m4 11 17-7 7 5-17 7z"/><path class="settlement-log-end" d="m4 11 7 5v13l-7-5z"/><path class="settlement-log-ring" d="m6 16 3 2v6l-3-2z"/>')}</span>`;
 const text = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -27,7 +40,8 @@ const setIcon = (element, name) => {
 /**
  * Callbacks: onTool('axe'|'house'), onView(), onBuild(), onCancel().
  * State: logs, houses, connectedHouses, tool, walking, ready, canBuild, connected,
- * reason, targetTree, message, visible. Visible UI intentionally contains no text.
+ * reason, targetTree, message, visible, buildings, pendingMilestones.
+ * Visible UI intentionally contains no text.
  */
 export function createSettlementHud({
   parent = document.body,
@@ -51,6 +65,14 @@ export function createSettlementHud({
         ${icons.house}<span class="settlement-home-marks" aria-hidden="true">${Array.from({ length: 8 }, () => '<i></i>').join('')}</span>
       </div>
     </div>
+    <div class="settlement-development" data-hud="development" role="group" aria-label="Settlement development">
+      <span class="settlement-earned" data-hud="earned">${SETTLEMENT_MILESTONES.map(milestone => `<span data-milestone="${milestone.type}" role="img" hidden>${icons[milestone.type]}</span>`).join('')}</span>
+      <span class="settlement-next" data-hud="next" role="img">
+        <svg class="settlement-progress" viewBox="0 0 40 40" aria-hidden="true"><circle class="settlement-progress-track" cx="20" cy="20" r="18"/><circle class="settlement-progress-arc" data-hud="progress" cx="20" cy="20" r="18" pathLength="1"/></svg>
+        <span class="settlement-next-symbol" data-hud="next-symbol" aria-hidden="true"></span>
+        <svg class="settlement-space-needed" viewBox="0 0 16 16" aria-hidden="true"><path d="M1 6V1h5M10 1h5v5M15 10v5h-5M6 15H1v-5"/></svg>
+      </span>
+    </div>
     <div class="settlement-dock">
       <div class="settlement-build-actions" data-hud="build-actions" role="group" aria-label="House placement" hidden>
         <span class="settlement-placement" data-hud="placement" role="img" aria-label="Joins your settlement">${icons.link}</span>
@@ -71,6 +93,7 @@ export function createSettlementHud({
   const logsShown = [...root.querySelectorAll('.settlement-log')];
   const bundleMarks = [...root.querySelectorAll('.settlement-bundles i')];
   const houseMarks = [...root.querySelectorAll('.settlement-home-marks i')];
+  const earnedMarks = [...root.querySelectorAll('[data-milestone]')];
   let current = {};
   let announced = '';
   let rendered = '';
@@ -89,9 +112,12 @@ export function createSettlementHud({
     current = { ...current, ...next };
     const { logs = 0, houses = 1, connectedHouses = houses, tool = 'axe', walking = true,
       ready = true, canBuild = false, connected = true, reason = '', targetTree = false,
-      message = '', visible = true } = current;
+      message = '', visible = true, buildings = [], pendingMilestones = [] } = current;
+    const earned = new Set(buildings.map(building => building.buildingType));
+    const pending = new Set(pendingMilestones);
+    const milestoneState = SETTLEMENT_MILESTONES.map(milestone => [earned.has(milestone.type), pending.has(milestone.type)]);
     const signature = JSON.stringify([logs, houses, connectedHouses, tool, walking, ready,
-      Boolean(canBuild), Boolean(connected), reason, Boolean(targetTree), message, visible]);
+      Boolean(canBuild), Boolean(connected), reason, Boolean(targetTree), message, visible, milestoneState]);
     if (signature === rendered) return;
     rendered = signature;
     const building = tool === 'house';
@@ -111,6 +137,29 @@ export function createSettlementHud({
     });
     nodes.stockpile.setAttribute('aria-label', `${logs} logs. Ten logs builds one house.`);
     nodes.homes.setAttribute('aria-label', `${houses} ${houses === 1 ? 'house' : 'houses'}, ${connectedHouses} connected to your settlement.`);
+    let developmentAnnouncement = '';
+    earnedMarks.forEach(mark => {
+      const milestone = SETTLEMENT_MILESTONES.find(item => item.type === mark.dataset.milestone);
+      mark.hidden = !earned.has(milestone.type);
+      mark.setAttribute('aria-label', `${milestoneNames[milestone.type]} earned free at ${milestone.houses} connected homes.`);
+    });
+    const upcomingIndex = SETTLEMENT_MILESTONES.findIndex(milestone => !earned.has(milestone.type));
+    const upcoming = SETTLEMENT_MILESTONES[upcomingIndex];
+    nodes.next.hidden = !upcoming;
+    nodes.development.dataset.complete = String(!upcoming);
+    if (upcoming) {
+      const previous = SETTLEMENT_MILESTONES[upcomingIndex - 1]?.houses ?? 0;
+      const progress = Math.max(0, Math.min(1, (connectedHouses - previous) / (upcoming.houses - previous)));
+      const waitingForSpace = pending.has(upcoming.type) || connectedHouses >= upcoming.houses;
+      setIcon(nodes['next-symbol'], upcoming.type);
+      nodes.next.dataset.pending = String(waitingForSpace);
+      nodes.progress.setAttribute('stroke-dasharray', `${progress} 1`);
+      const needed = Math.max(0, upcoming.houses - connectedHouses);
+      developmentAnnouncement = waitingForSpace
+        ? `Free ${milestoneNames[upcoming.type]} earned at ${upcoming.houses} connected homes. Clear space near the settlement for it to appear.`
+        : `${needed} more connected ${needed === 1 ? 'home unlocks' : 'homes unlock'} a free ${milestoneNames[upcoming.type]} at ${upcoming.houses} homes.`;
+      nodes.next.setAttribute('aria-label', developmentAnnouncement);
+    } else developmentAnnouncement = 'All civic buildings earned.';
     nodes['build-actions'].hidden = !building;
     const placementKind = connected ? 'link' : 'outpost';
     setIcon(nodes.placement, placementKind);
@@ -132,7 +181,7 @@ export function createSettlementHud({
     buttons.view.setAttribute('aria-label', walking ? 'Switch to overview' : 'Return to your traveller');
     // Aim validity is described on its symbols, rather than announced each frame.
     const announcement = [ready ? `${logs} logs. ${houses} ${houses === 1 ? 'house' : 'houses'}.` : 'Preparing your clearing.',
-      building ? 'House placement selected. Aim at clear ground. Enter builds; Escape cancels.' : 'Axe selected. E or click chops a nearby tree.', walking ? '' : 'Overview.', message].filter(Boolean).join(' ');
+      building ? 'House placement selected. Aim at clear ground. Enter builds; Escape cancels.' : 'Axe selected. E or click chops a nearby tree.', walking ? '' : 'Overview.', developmentAnnouncement, message].filter(Boolean).join(' ');
     if (announcement !== announced) { text(nodes.announcements, announcement); announced = announcement; }
   }
   update();

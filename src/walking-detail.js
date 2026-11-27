@@ -7,6 +7,7 @@ import {polylineTree,SpatialGrid,pointBox} from './spatial-index.js';
 import {surfaceFor,surfaceDistance,surfaceDisplacement,surfacePoint,rigidSurfacePoseMatrix} from './world-surface.js';
 import {fieldOutline,fieldContains,fieldFeatureFootprint,fieldDetailSeed,farmRandom} from './farm-layout.js';
 import {walkingGrassGeometry,addWalkingVegetationShader,WALKING_GRASS_ROOTS} from './walking-vegetation.js';
+import {walkingFlowerGeometry} from './walking-flowers.js';
 import {walkingGroundSampler} from './walking-ground.js';
 
 // These are embellishments of the existing world, never replacement terrain or
@@ -41,6 +42,7 @@ function grassObstacle(item,x,z,margin=.40){
   const scale=item.scale??1,dx=(x-item.x)/scale,dz=(z-item.z)/scale,angle=item.rotation??0;
   const u=dx*Math.cos(angle)-dz*Math.sin(angle),v=dx*Math.sin(angle)+dz*Math.cos(angle),pad=margin/scale;
   if(item.kind==='tree')return Math.hypot(dx,dz)<.22+pad;
+  if(item.buildingType&&item.width&&item.depth)return Math.abs(u)<item.width/2+pad&&Math.abs(v)<item.depth/2+pad;
   if(item.kind==='farm')return (item.parcels??[{x:0,z:0,width:item.width??3,depth:item.depth??4}])
     .some(field=>fieldContains(fieldOutline(field),u-(field.x??0),v-(field.z??0),-pad));
   if(item.kind==='house')return Math.abs(u)<1.1+pad&&Math.abs(v)<1.1+pad;
@@ -136,6 +138,16 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
     });
     const cx=Math.round(focus.x/WALKING_DETAIL_LIMITS.refreshDistance)*WALKING_DETAIL_LIMITS.refreshDistance;
     const cz=Math.round(focus.z/WALKING_DETAIL_LIMITS.refreshDistance)*WALKING_DETAIL_LIMITS.refreshDistance;
+    const clearGround=(x,z)=>{
+      const biome=biomeAt(world,x,z);if(!['plains','forest','farmland','desert','mountain'].includes(biome))return null;
+      if(!fitsBiome(world,['plains','forest','farmland','desert','mountain'],x,z,.35)||riverBankDistance(world,x,z)<1.10)return null;
+      if(obstacles.query(pointBox(x,z,.40)).some(p=>grassObstacle(p,x,z)))return null;
+      // Physical ballast is 1.88 units wide. One blade envelope beyond that
+      // edge (and each paved edge) leaves crisp verges without bare strips.
+      if(rails.nearest(x,z,s=>distanceToSegment(x,z,s),1.34)<1.34)return null;
+      if(roads.nearest(x,z,s=>distanceToSegment(x,z,s)-(s.line.width??1)/2,.40,1.5)<.40)return null;
+      const ground=groundSampler.sample(x,z);return nearCut(x,z,ground)?null:ground;
+    };
     const candidates=[];
     for(let gx=Math.floor((cx-radius)/step);gx<=Math.ceil((cx+radius)/step);gx++)for(let gz=Math.floor((cz-radius)/step);gz<=Math.ceil((cz+radius)/step);gz++){
       const id=`ground:${world.seed??0}:${gx}:${gz}`,r=farmRandom(hash(id));
@@ -152,14 +164,7 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
       groundCache?.set(id,null);
       const entries=[];
       const scatter=(kind,...args)=>{const item=add(kind,...args);entries.push([kind,item]);};
-      const biome=biomeAt(world,x,z);if(!['plains','forest','farmland','desert','mountain'].includes(biome))continue;
-      if(!fitsBiome(world,['plains','forest','farmland','desert','mountain'],x,z,.35)||riverBankDistance(world,x,z)<1.10)continue;
-      if(obstacles.query(pointBox(x,z,.40)).some(p=>grassObstacle(p,x,z)))continue;
-      // Physical ballast is 1.88 units wide. One blade envelope beyond that
-      // edge (and each paved edge) leaves crisp verges without bare strips.
-      if(rails.nearest(x,z,s=>distanceToSegment(x,z,s),1.34)<1.34)continue;
-      if(roads.nearest(x,z,s=>distanceToSegment(x,z,s)-(s.line.width??1)/2,.40,1.5)<.40)continue;
-      const ground=groundSampler.sample(x,z);if(nearCut(x,z,ground))continue;
+      const ground=clearGround(x,z);if(!ground)continue;
       const cover=groundSampler.vegetation(x,z,ground),choice=r();
       const anchor={x,y:ground.height-.006,z,rotation:0,scale:1};
       const patch=.5+.5*Math.sin(x*.21+Math.sin(z*.17))*Math.cos(z*.25-x*.08);
@@ -173,11 +178,47 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
           // Sharing the tile centre's height would float roots across slopes.
           item.rootHeights=WALKING_GRASS_ROOTS.map(([u,v])=>groundSampler.heightAt(x+(u*ca+v*sa)*item.sx,z+(-u*sa+v*ca)*item.sz,ground)-ground.height);
         }
-        if(choice<.012&&patch>.50&&cover.density>.8)scatter('flowers',anchor,`${id}:flower`,0,height*.82,0,.035,.025,.035,r()*tau);
       }else if(choice>.986&&cover.density<.3)scatter('pebbles',anchor,`${id}:stone`,0,.025,0,.07+r()*.08,.035+r()*.03,.07,r()*tau,'desertRock');
       if(groundCache){
         groundCache.set(id,entries);
       }
+    }
+    // Flower patches have a second, much coarser world-space lattice. Each
+    // patch retains its identity while the player moves, with a tight, varied
+    // family of blooms instead of isolated confetti in every grass tile.
+    const flowerStep=5.8,clumps=[];
+    for(let gx=Math.floor((cx-radius-1)/flowerStep);gx<=Math.ceil((cx+radius+1)/flowerStep);gx++)for(let gz=Math.floor((cz-radius-1)/flowerStep);gz<=Math.ceil((cz+radius+1)/flowerStep);gz++){
+      const id=`ground:${world.seed??0}:flowers:${gx}:${gz}`,r=farmRandom(hash(id));
+      if(r()>.46)continue;
+      const x=(gx+.14+r()*.72)*flowerStep,z=(gz+.14+r()*.72)*flowerStep;
+      const distance=(x-focus.x)**2+(z-focus.z)**2;if(distance>(radius+1)**2)continue;
+      clumps.push({id,r,x,z,distance});
+    }
+    clumps.sort((a,b)=>a.distance-b.distance||a.id.localeCompare(b.id));
+    for(const clump of clumps){
+      if(result.flowers.length>WALKING_DETAIL_LIMITS.flowers-3)break;
+      const {id,r,x,z}=clump;
+      let entries=groundCache?.get(id);
+      if(!groundCache?.has(id)){
+        entries=[];
+        const count=5+Math.floor(r()*5),reach=.5+r()*.5,rotation=r()*tau;
+        const tint=palette.flowers[Math.floor(r()*palette.flowers.length)];
+        for(let index=0;index<count;index++){
+          const a=rotation+index*2.39996323+(r()-.5)*.35,d=Math.sqrt((index+.15+r()*.35)/count)*reach;
+          const px=x+Math.cos(a)*d,pz=z+Math.sin(a)*d,ground=clearGround(px,pz);
+          const height=.25+r()*.11,width=.18+r()*.07,turn=r()*tau;
+          if(!ground||groundSampler.vegetation(px,pz,ground).density<.70)continue;
+          entries.push(['flowers',{id:`${id}:${index}`,clump:id,anchor:{x:px,y:ground.height-.002,z:pz,rotation:0,scale:1},
+            x:0,y:0,z:0,sx:width,sy:height,sz:width,rotation:turn,color:tint}]);
+        }
+        if(entries.length<3)entries=[];
+        groundCache?.set(id,entries);
+      }
+      const visible=(entries??empty).filter(([,item])=>(item.anchor.x-focus.x)**2+(item.anchor.z-focus.z)**2<radius*radius);
+      // Keep complete clumps when the pool fills; never leave a lone bloom at
+      // its outer boundary just because it happened to be instance number 100.
+      if(visible.length<3||visible.length>WALKING_DETAIL_LIMITS.flowers-result.flowers.length)continue;
+      for(const [,item]of visible)result.flowers.push(item);
     }
     // Repeated exploration retains a small reusable neighborhood, never the
     // whole planet. Distance fading hides incoming/retired outer cells.
@@ -192,9 +233,9 @@ export function createWalkingDetail(parent,world){
   const batches={},pose=new THREE.Matrix4(),local=new THREE.Matrix4(),matrix=new THREE.Matrix4();
   const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0),color=new THREE.Color();
   for(const kind of kinds){
-    const vegetation=kind==='grass'||kind==='crops',geometry=vegetation?walkingGrassGeometry({crop:kind==='crops'}):new THREE.IcosahedronGeometry(1,0);
+    const vegetation=kind==='grass'||kind==='crops'||kind==='flowers',geometry=kind==='flowers'?walkingFlowerGeometry():vegetation?walkingGrassGeometry({crop:kind==='crops'}):new THREE.IcosahedronGeometry(1,0);
     if(kind==='grass')for(let i=0;i<6;i++)geometry.setAttribute(`grassRoots${i}`,new THREE.InstancedBufferAttribute(new Float32Array(WALKING_DETAIL_LIMITS.grass*4),4).setUsage(THREE.DynamicDrawUsage));
-    const material=applySceneStyle(new THREE.MeshLambertMaterial({color:0xffffff,flatShading:!vegetation,side:vegetation?THREE.DoubleSide:THREE.FrontSide}));
+    const material=applySceneStyle(new THREE.MeshLambertMaterial({color:0xffffff,vertexColors:kind==='flowers',flatShading:!vegetation,side:vegetation?THREE.DoubleSide:THREE.FrontSide}));
     addWalkingVegetationShader(material,{focus:focusUniform,time:timeUniform,player:playerUniform,visibility:visibilityUniform},kind);
     const batch=new THREE.InstancedMesh(geometry,material,WALKING_DETAIL_LIMITS[kind]);batch.name=`walking-${kind}`;
     // Allocate colors even for currently empty pools, so precompilation uses

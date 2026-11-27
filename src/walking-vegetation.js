@@ -40,12 +40,13 @@ export const WALKING_GRASS_ROOTS=Object.freeze((()=>{
  * all blade roots exactly on their authored surface, including paused gusts. */
 export function addWalkingVegetationShader(material,{focus,time,player,visibility={value:1}},kind){
   const before=material.onBeforeCompile,key=material.customProgramCacheKey();
-  const vegetation=kind==='grass'||kind==='crops';
+  const vegetation=kind==='grass'||kind==='crops'||kind==='flowers';
   material.onBeforeCompile=(shader,renderer)=>{
     before(shader,renderer);
     shader.uniforms.walkFocus=focus;shader.uniforms.walkTime=time;shader.uniforms.walkPlayer=player;shader.uniforms.walkVisibility=visibility;
     shader.vertexShader=`uniform vec3 walkFocus; uniform vec3 walkPlayer; uniform float walkTime; uniform float walkVisibility;
       varying float walkDistance; varying float bladeHeight;
+      ${kind==='flowers'?'attribute float flowerPetal;':''}
       ${kind==='grass'?`attribute vec3 grassRoot;
       attribute vec4 grassRoots0; attribute vec4 grassRoots1; attribute vec4 grassRoots2;
       attribute vec4 grassRoots3; attribute vec4 grassRoots4; attribute vec4 grassRoots5;
@@ -71,7 +72,7 @@ export function addWalkingVegetationShader(material,{focus,time,player,visibilit
       bladeAxisY = normalize(bladeAxisY);
       float gust = 0.055 + 0.020 * sin(dot(walkOrigin.xz, vec2(0.23, 0.31)) - walkTime * 1.25);
       float flutter = 0.007 * sin(dot(walkOrigin.xz, vec2(2.8, -1.7)) - walkTime * 2.7);
-      vec3 worldWind = (vec3(0.88, 0.0, 0.47) * gust + vec3(0.30, 0.0, -0.90) * flutter) * clamp(plantHeight / 0.23, 0.7, 1.6);
+      vec3 worldWind = (vec3(0.88, 0.0, 0.47) * gust + vec3(0.30, 0.0, -0.90) * flutter) * clamp(plantHeight / 0.23, 0.7, 1.6)${kind==='flowers'?' * 0.42':''};
       // Project the same world-space wind into each randomly rotated tile.
       // Dividing out instance scale preserves its physical displacement.
       transformed.x += dot(worldWind, normalize(bladeAxisX)) / max(length(bladeAxisX), 0.01) * rootWeight;
@@ -88,6 +89,9 @@ export function addWalkingVegetationShader(material,{focus,time,player,visibilit
       `:''}
       ${kind==='grass'?'transformed.y += mix(grassGround(grassRoot.x), grassGround(grassRoot.y), grassRoot.z);':''}
       transformed *= detailCoverage;`);
+    if(kind==='flowers')shader.vertexShader=shader.vertexShader.replace('#include <color_vertex>',
+      THREE.ShaderChunk.color_vertex.replace('vColor.rgb *= instanceColor.rgb;',
+        'vColor.rgb *= mix(vec3(1.0), instanceColor.rgb, flowerPetal);'));
     shader.fragmentShader='varying float walkDistance; varying float bladeHeight;\n'+shader.fragmentShader;
     if(vegetation){
       shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`#include <color_fragment>
@@ -96,6 +100,6 @@ export function addWalkingVegetationShader(material,{focus,time,player,visibilit
         normal = normalize(vNormal);`);
     }
   };
-  material.customProgramCacheKey=()=>`${key}|walking-vegetation-v4:${kind}`;
+  material.customProgramCacheKey=()=>`${key}|walking-vegetation-v5:${kind}`;
   return material;
 }

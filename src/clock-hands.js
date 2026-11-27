@@ -17,7 +17,8 @@ export function createClockHands(parent,world){
     frames.length=0;
     const clocks=[];
     for(const item of placements){
-      const specs=clockFaceSpecs(item.kind,item.variant);
+      const kind=item.buildingType?(item.buildingType==='clock'?'landmark':item.buildingType==='hall'?'civic':null):item.kind;
+      const specs=kind?clockFaceSpecs(kind,item.buildingType?0:item.variant):[];
       if(!specs.length)continue;
       const distance=surfaceDistance(world,item,focus);
       if(distance<=CLOCK_LIMITS.radius)clocks.push({item,specs,distance});

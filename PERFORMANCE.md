@@ -133,3 +133,7 @@ Rules and terrain validation are separate from rendering. Footprint checks sampl
 
 
 Settlement footpaths are planned only when the candidate position, nearby scenery or player state changes. Completed lanes are unioned into a shared mesh on construction; preview cubes and path lines reuse geometry. Path changes invalidate only the traveller’s nearby grass cache. The HUD uses fixed SVG icons and updates on state changes; low meadow leaves retain their existing terrain material batch and geometry budget.
+
+Civic milestones are checked after construction, clearing, a new terrain publication or the traveller moving out of a reserved site. Searches yield bounded routing work across frames; exhausted site searches remain pending without repeatedly scanning an unchanged town. Bonus buildings share baked templates, use the same near-player collision and grass caches as homes, and reuse the existing bounded clock-hand batch. House rotations are calculated once from the current component’s centroid and never trigger town-wide instance updates during camera motion.
+
+Walking wildflowers share one 39-triangle mesh in the existing 100-instance batch. Seeded patch sampling runs only on local scenery refreshes. Petal tint masks preserve green stems and leaves; the existing wind uniforms bend upper vertices without per-flower CPU animation or extra draw calls.

@@ -44,6 +44,29 @@
 .settlement-home-marks { display: grid; grid-template-columns: repeat(4, 5px); gap: 4px; }
 .settlement-home-marks i { width: 5px; height: 7px; background: oklch(0.95 0.027 95 / 0.38); clip-path: polygon(0 36%, 50% 0, 100% 36%, 100% 100%, 0 100%); }
 .settlement-home-marks i[data-connected="true"] { background: var(--settlement-ink); }
+.settlement-development {
+  position: absolute;
+  top: max(78px, calc(env(safe-area-inset-top) + 58px));
+  left: max(20px, env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 40px;
+  filter: drop-shadow(0 1px 1px var(--settlement-shadow));
+}
+.settlement-earned { display: flex; align-items: center; gap: 8px; }
+.settlement-earned:not(:has([data-milestone]:not([hidden]))) { display: none; }
+.settlement-earned svg { width: 21px; height: 25px; }
+.settlement-development[data-complete="true"] .settlement-earned svg { width: 24px; height: 28px; }
+.settlement-next { position: relative; display: grid; place-items: center; width: 40px; height: 40px; }
+.settlement-next > .settlement-progress { position: absolute; inset: 0; width: 40px; height: 40px; transform: rotate(-90deg); }
+.settlement-progress circle { fill: none; stroke-width: 1.5; }
+.settlement-progress-track { stroke: oklch(0.95 0.027 95 / 0.2); }
+.settlement-progress-arc { stroke: var(--settlement-accent); stroke-linecap: butt; }
+.settlement-next-symbol svg { width: 24px; height: 27px; opacity: 0.78; }
+.settlement-next[data-pending="true"] .settlement-next-symbol svg { opacity: 1; }
+.settlement-next > .settlement-space-needed { display: none; position: absolute; right: -6px; bottom: -1px; width: 12px; height: 12px; fill: none; stroke: var(--settlement-accent); stroke-width: 2; }
+.settlement-next[data-pending="true"] > .settlement-space-needed { display: block; }
 .settlement-dock {
   position: absolute;
   bottom: max(18px, env(safe-area-inset-bottom));
@@ -95,10 +118,11 @@
 .settlement-build-actions button { width: 44px; height: 44px; padding: 12px; }
 .settlement-build-actions button svg { width: 23px; height: 23px; }
 .settlement-build-actions .settlement-build:not(:disabled) { color: var(--settlement-accent); background: oklch(0.20 0.035 165 / 0.18); }
-.settlement-hud[data-ready="false"] .settlement-inventory { opacity: 0.45; }
+.settlement-hud[data-ready="false"] .settlement-inventory, .settlement-hud[data-ready="false"] .settlement-development { opacity: 0.45; }
 .settlement-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (max-width: 420px) {
   .settlement-inventory { left: max(14px, env(safe-area-inset-left)); top: max(14px, env(safe-area-inset-top)); gap: 16px; }
+  .settlement-development { left: max(14px, env(safe-area-inset-left)); top: max(72px, calc(env(safe-area-inset-top) + 58px)); }
   .settlement-bundles { gap: 0; }
   .settlement-bundles svg { width: 14px; }
   .settlement-dock { left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom)); }

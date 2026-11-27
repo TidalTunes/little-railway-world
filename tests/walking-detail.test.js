@@ -180,3 +180,14 @@ test('a newly built settlement lane clears existing grass while keeping the surr
     assert.equal(grass.instanceMatrix.version,version,'unchanged paths do not upload the grass again');
   }finally{layer.dispose();}
 });
+
+
+test('civic footprint masks rotate with the new buildings and preserve adjacent grass',()=>{
+  const building={kind:'civic',buildingType:'market',id:'civic-market',x:0,z:0,width:3.4,depth:2.6,radius:2.15,rotation:.72,scale:1};
+  const plan=walkingDetailPlan(meadow(),[building],{x:0,z:0}),c=Math.cos(building.rotation),s=Math.sin(building.rotation);
+  for(const item of plan.grass){
+    const {x,z}=item.anchor,u=x*c-z*s,v=x*s+z*c;
+    assert.ok(Math.abs(u)>=building.width/2+.4||Math.abs(v)>=building.depth/2+.4,'no blades intersect the pavilion envelope');
+  }
+  assert.ok(plan.grass.some(({anchor:{x,z}})=>Math.hypot(x,z)<2.9),'ground remains alive immediately around the pavilion');
+});

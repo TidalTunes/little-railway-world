@@ -105,7 +105,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   function placementBlocked(point,height=position.y){
     for(const item of obstacles){
       const kind=item.kind??'station',scale=item.scale??1;
-      if(height>(item.y??0)+(kind==='tree'?2.7:kind==='rock'?.6:kind==='cactus'?2.4:8)*scale)continue;
+      if(height>(item.y??0)+(item.height??(kind==='tree'?2.7:kind==='rock'?.6:kind==='cactus'?2.4:8))*scale)continue;
       surfaceDisplacement(world,item,point,collisionDelta);
       let radius;
       if(kind==='tree')radius=.14*scale;
@@ -118,7 +118,17 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       const angle=surfaceHeading(world,item.x,item.z,item.rotation??0),ca=Math.cos(angle),sa=Math.sin(angle);
       let x=collisionDelta.x*ca-collisionDelta.z*sa,z=collisionDelta.x*sa+collisionDelta.z*ca;
       let w=(((item.variant??0)%4)===1?1.62:1.82)*scale,d=(((item.variant??0)%4)===1?1.9:1.72)*scale;
-      if(kind==='station'){x+=1.45*scale;z+=.42*scale;w=2.62*scale;d=1.42*scale;}
+      if(item.buildingType){
+        if(item.collisionBoxes){
+          for(const box of item.collisionBoxes){
+            if(Math.abs(x-box.x*scale)<box.width*scale/2+WALKING.radius&&Math.abs(z-box.z*scale)<box.depth*scale/2+WALKING.radius)return true;
+          }
+          continue;
+        }
+        w=(item.collisionWidth??item.width)*scale;d=(item.collisionDepth??item.depth)*scale;
+        z-=(item.collisionOffsetZ??0)*scale;
+      }
+      else if(kind==='station'){x+=1.45*scale;z+=.42*scale;w=2.62*scale;d=1.42*scale;}
       else if(kind==='apartment'){w=2.52*scale;d=2.48*scale;}
       else if(kind==='civic'){z+=.15*scale;w=3.35*scale;d=2.72*scale;}
       else if(kind==='tower'){w=2.32*scale;d=2.48*scale;}

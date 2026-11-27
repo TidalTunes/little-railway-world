@@ -84,3 +84,16 @@ test('town clock update has a fixed draw budget, skips paused uploads and hides 
   clocks.update(40,{placements,reducedMotion:true});assert.deepEqual(Array.from(clocks.hands.instanceMatrix.array),frozen);
   clocks.update(50,{visible:false});assert.equal(clocks.root.visible,false);clocks.dispose();
 });
+
+
+test('earned clock tower and hall reuse animated clock faces without inventing clocks on wells or markets',()=>{
+  const clocks=createClockHands(new THREE.Group(),{}),placements=['well','market','clock','hall'].map((buildingType,index)=>({
+    id:`civic-${buildingType}`,kind:'civic',buildingType,x:index*5,z:0,y:0,rotation:index*.7,scale:1,
+  }));
+  try{
+    clocks.update(0,{placements});assert.equal(clocks.hands.count,10,'four tower dials and one hall dial');
+    const before=Array.from(clocks.hands.instanceMatrix.array.slice(0,160));
+    clocks.update(3,{placements});assert.notDeepEqual(Array.from(clocks.hands.instanceMatrix.array.slice(0,160)),before);
+    clocks.update(3,{placements:placements.slice(0,2),revision:1});assert.equal(clocks.hands.count,0);
+  }finally{clocks.dispose();}
+});

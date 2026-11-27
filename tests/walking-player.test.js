@@ -4,6 +4,7 @@ import {Box3,BoxGeometry,Group,Mesh,MeshBasicMaterial,Vector3} from 'three';
 import {createWalkingPlayer,WALKING} from '../src/walking-player.js';
 import {generateWorld,worldSurface,distanceToRoutes} from '../src/world-model.js';
 import {person} from '../src/assets.js';
+import {SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
 import {createIslandWorld} from '../src/island-world.js';
 import {surfaceChartCoordinates,surfaceDistance,surfaceNormal,surfacePoint} from '../src/world-surface.js';
 
@@ -220,4 +221,41 @@ test('the traveller shares station passenger scale and proportions, with distinc
   assert.ok(Math.abs(coat.scale.x-.24)<1e-9&&Math.abs(face.scale.x-.115)<1e-9,'torso and head share passenger proportions');
   assert.ok(player.root.getObjectByName('cap-brim')&&player.root.getObjectByName('traveller-axe'),'cap and axe retain the player identity');
   player.dispose();
+});
+
+
+test('earned civic buildings use their own rotated body bounds instead of a generic hall',()=>{
+  for(const spec of SETTLEMENT_MILESTONES)for(const rotation of [0,.67,Math.PI/2]){
+    const building={...spec,id:`civic-${spec.type}`,kind:'civic',buildingType:spec.type,x:0,z:0,y:0,rotation,scale:1};
+    const world=flat({placements:[building]}),player=createWalkingPlayer(new Group(),world);
+    const c=Math.cos(rotation),s=Math.sin(rotation),edge=spec.collisionOffsetZ-spec.collisionDepth/2;
+    try{
+      assert.equal(player.enter({x:-s*4,z:-c*4},rotation),true);
+      run(player,2,{forward:1,sprint:true});
+      const local=player.position.x*s+player.position.z*c;
+      assert.ok(local<=edge-WALKING.radius+.015,`${spec.type} stays outside its actual body`);
+      assert.ok(local>edge-WALKING.radius-.12,`${spec.type} has no oversized invisible collision wall`);
+    }finally{player.dispose();}
+  }
+});
+
+test('the fountain garden leaves its entrances open while benches and planters remain solid',()=>{
+  const spec=SETTLEMENT_MILESTONES.find(item=>item.type==='plaza');
+  for(const rotation of [0,.67]){
+    const c=Math.cos(rotation),s=Math.sin(rotation),point=(x,z)=>({x:x*c+z*s,z:-x*s+z*c});
+    const building={...spec,id:'civic-plaza',kind:'civic',buildingType:'plaza',x:0,z:0,y:0,rotation,scale:1};
+    const player=createWalkingPlayer(new Group(),flat({placements:[building]}));
+    try{
+      const entrance=point(0,-2);assert.equal(player.enter(entrance,rotation),true);
+      assert.ok(Math.hypot(player.position.x-entrance.x,player.position.z-entrance.z)<.01,'the plaza path is walkable');
+      run(player,.15,{forward:1});
+      assert.ok(player.position.x*s+player.position.z*c>-1.8,'the player can advance along the path');
+    }finally{player.dispose();}
+    const sidePlayer=createWalkingPlayer(new Group(),flat({placements:[building]}));
+    try{
+      sidePlayer.enter(point(3.5,0),rotation-Math.PI/2);run(sidePlayer,1,{forward:1,sprint:true});
+      const localX=sidePlayer.position.x*c-sidePlayer.position.z*s;
+      assert.ok(localX>=1.71+WALKING.radius-.015&&localX<1.71+WALKING.radius+.12,'the side bench blocks the traveller before the fountain');
+    }finally{sidePlayer.dispose();}
+  }
 });

@@ -10,7 +10,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
   const game=createSettlementGame(world),art=createSettlementArt(parent,mapParent,world);
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingHit=null,message='',messageTime=0;
-  let revision=-1,detailRevision=-1,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
+  let revision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),intersection=new THREE.Vector3();
   const listeners=[];
   const focusCanvas=()=>canvas.focus({preventScroll:true});
@@ -41,16 +41,18 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
   function synchronize(){
     const changed=game.revision!==revision;
     if(changed){
-      const previousCount=snapshot.houses.length;snapshot=game.snapshot();
-      if(revision<0||snapshot.houses.length!==previousCount){art.sync(snapshot.houses,snapshot.paths??[]);houseMeshes=art.meshes;}
+      const previousCount=snapshot.houses.length,previousBuildings=snapshot.buildings?.length??0;snapshot=game.snapshot();
+      if(revision<0||snapshot.houses.length!==previousCount||(snapshot.buildings?.length??0)!==previousBuildings){
+        art.sync(snapshot.houses,snapshot.paths??[],snapshot.buildings??[]);houseMeshes=art.meshes;
+      }
       revision=game.revision;
     }
     if(changed||detail.placementRevision!==detailRevision){
       detailRevision=detail.placementRevision;
-      scenery=[...detail.placements,...snapshot.houses];
-      collisions=[...detail.getCollisionPlacements(),...snapshot.houses];
+      scenery=[...detail.placements,...snapshot.houses,...(snapshot.buildings??[])];
+      collisions=[...detail.getCollisionPlacements(),...snapshot.houses,...(snapshot.buildings??[])];
       meshes=[...detail.getTerrainMeshes(),...houseMeshes];
-      streets=[...detail.cityStreets,...snapshot.paths??[]];
+      streets=[...detail.cityStreets,...(snapshot.paths??[])];
     }
   }
   function findTree(player){
@@ -80,6 +82,11 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
   const isReadyAt=point=>detail.hasCoverageAt(point,1);
   function context(player,pose){return {player:player.position,enforceReach:walking,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
   function notify(text){message=text;messageTime=3.2;}
+  function develop(player){
+    if(!snapshot.pendingMilestones?.length)return;
+    developmentPlayer={x:player.position.x,z:player.position.z};
+    game.develop({player:player.position,placements:scenery,ready,isReadyAt});synchronize();
+  }
   synchronize();
   return{
     game,art,hud,
@@ -110,6 +117,12 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       walking=walkingNow;transitioning=transitionNow;camera=activeCamera;const player=getPlayer();
       detail.updateTrees(reducedMotion?.matches?1:dt);synchronize();
       ready=!!player?.initialized&&detail.hasCoverageAt(player.position,2);
+      // A search may yield its bounded routing budget across frames. Once a
+      // pass is exhausted, only new terrain, clearing or a moved player retries it.
+      const playerFreedSpace=ready&&snapshot.pendingMilestones?.length&&(!developmentPlayer||surfaceDistance(world,developmentPlayer,player.position)>1);
+      if(ready&&(developmentDetailRevision!==detailRevision||game.developmentSearching||playerFreedSpace)){
+        developmentDetailRevision=detailRevision;develop(player);
+      }
       if(messageTime>0){messageTime-=dt;if(messageTime<=0)message='';}
       if(pendingHit){
         pendingHit.time-=dt;
@@ -118,7 +131,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
           // Recheck reach at impact, not just when the swing was requested.
           if(walking&&surfaceDistance(world,tree,player.position)<=SETTLEMENT.chopReach&&!game.isTreeRemoved(tree)){
             const result=game.chop(tree,{player:player.position});
-            if(result.ok){detail.fellTree(result.treeId,{direction:{x:tree.x-player.position.x,z:tree.z-player.position.z}});notify(`+${result.logs} logs`);synchronize();}
+            if(result.ok){detail.fellTree(result.treeId,{direction:{x:tree.x-player.position.x,z:tree.z-player.position.z}});notify(`+${result.logs} logs`);synchronize();develop(player);}
           }
         }
       }
@@ -138,11 +151,12 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       pendingBuild=false;
       art.preview(placement,{visible:tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
-      hud.update({logs:snapshot.logs,houses:snapshot.houses.length,connectedHouses,tool,walking,ready,
+      hud.update({logs:snapshot.logs,houses:snapshot.houses.length,connectedHouses,buildings:snapshot.buildings??[],pendingMilestones:snapshot.pendingMilestones??[],tool,walking,ready,
         canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message});
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
-        buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',targetTree:targetTree?.id??''});
+        civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
+        buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
     dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();},
   };

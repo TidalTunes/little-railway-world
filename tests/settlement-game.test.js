@@ -49,7 +49,7 @@ test('a house costs exactly ten logs, belongs to the player, and repeated overla
   assert.equal(game.build(point).ok,false);assert.equal(game.revision,0);
   earn(game);const before=game.logs,result=game.build(point);
   assert.equal(result.ok,true);assert.equal(game.logs,before-10);
-  assert.equal(result.house.ownerId,'teal');assert.equal(result.house.rotation,0,'the city sets the frontage axis');
+  assert.equal(result.house.ownerId,'teal');assert.equal(result.house.rotation,-Math.PI/2,'the new front door faces the city centre');
   assert.equal(result.house.connected,true);assert.equal(game.houses.length,2);
   const after=game.logs,revision=game.revision;
   assert.equal(game.build(point).code,'house-blocked');assert.equal(game.logs,after);assert.equal(game.revision,revision);
@@ -71,7 +71,7 @@ test('the full rotated footprint rejects water, boundaries and steep terrain eve
   assert.equal(game.evaluateBuild({x:5,z:0}).code,'wet-ground');
   const angled=config();angled.starterHouse.rotation=Math.PI/4;
   game=createSettlementGame({seed:'rules-test',gameplay:angled},{surfaceAt:(x,z)=>({type:x>6.3?'outside':'ground',height:0})});
-  assert.equal(game.evaluateBuild({x:5,z:0}).code,'wet-ground');
+  assert.equal(game.evaluateBuild({x:5,z:5}).code,'wet-ground');
   game=make((x,z)=>({type:'mountain',height:(x-5)*.4}));
   assert.equal(game.evaluateBuild({x:5,z:0}).code,'steep-ground');
   game=make(()=>({type:'mountain',height:2}));earn(game);
@@ -89,7 +89,7 @@ test('blueprints reject unloaded ground, distant locations and the player footpr
   assert.equal(game.evaluateBuild({x:5,z:0},{player:{x:5,z:0}}).code,'player-blocked');
   assert.equal(game.evaluateBuild({x:5,z:0},{player:{x:2.8,z:0}}).valid,true);
   assert.equal(game.evaluateBuild({x:NaN,z:0}).code,'invalid-position');
-  assert.equal(game.evaluateBuild({x:5,z:0,rotation:Infinity}).house.rotation,0,'a caller cannot override the city orientation');
+  assert.equal(game.evaluateBuild({x:5,z:0,rotation:Infinity}).house.rotation,-Math.PI/2,'a caller cannot override the city orientation');
 });
 
 test('overview can build at a distance without building over or trapping the persistent traveller',()=>{
@@ -124,26 +124,26 @@ test('chopped trees stop blocking a site while unchopped neighboring trees remai
 
 test('house spacing uses oriented foundations instead of oversized circular city lots',()=>{
   const game=make();earn(game);
-  assert.equal(game.evaluateBuild({x:2.5,z:0}).valid,true);
+  assert.equal(game.evaluateBuild({x:3.2,z:0}).valid,true);
   assert.equal(game.evaluateBuild({x:2.3,z:0}).code,'house-blocked');
-  assert.equal(game.evaluateBuild({x:2.5,z:0,rotation:Math.PI/4}).valid,true,'manual rotation does not change the city-aligned footprint');
+  assert.equal(game.evaluateBuild({x:3.2,z:0,rotation:Math.PI/4}).valid,true,'manual rotation does not change the city-aligned footprint');
   assert.equal(SETTLEMENT.houseCost,10);
 });
 
 
-test('the city axis propagates, its lane joins front doors, and snapshots cannot mutate it',()=>{
+test('new homes face the city centre, their lanes join doors, and snapshots cannot mutate them',()=>{
   const input=config();input.starterHouse.rotation=Math.PI/2;
   const game=createSettlementGame({seed:'aligned',gameplay:input},{surfaceAt:flat});earn(game);
   const preview=game.evaluateBuild({x:0,z:5,rotation:-.4});
-  assert.equal(preview.house.rotation,Math.PI/2);
+  assert.equal(preview.house.rotation,Math.PI);
   assert.ok(preview.path);assert.equal(preview.path.toHouseId,'home-1');
   const result=game.build({x:0,z:5,rotation:-.4});
-  assert.equal(result.ok,true);assert.equal(result.house.rotation,Math.PI/2);
+  assert.equal(result.ok,true);assert.equal(result.house.rotation,Math.PI);
   assert.equal(result.paths.length,1);assert.equal(result.paths[0].fromHouseId,result.house.id);
-  assert.equal(game.paths[0].points[0].x,.9);
-  assert.equal(game.paths[0].points[0].z,5);
+  assert.ok(Math.abs(game.paths[0].points[0].x)<1e-8);
+  assert.equal(game.paths[0].points[0].z,4.1);
   game.paths[0].points[0].x=100;game.snapshot().paths.length=0;
-  assert.equal(game.paths[0].points[0].x,.9);assert.equal(game.paths.length,1);
+  assert.ok(Math.abs(game.paths[0].points[0].x)<1e-8);assert.equal(game.paths.length,1);
 });
 
 test('established lanes stay open and unloaded routes cannot silently become town connections',()=>{

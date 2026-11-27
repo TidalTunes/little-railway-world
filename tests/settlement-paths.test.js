@@ -55,3 +55,15 @@ test('small whole-route sampling checks gaps between waypoints',()=>{
   assert.equal(sampleSettlementPath(points,point=>{samples++;return point.x<2||point.x>3;}),false);
   assert.ok(samples>2);
 });
+
+
+test('civic routes respect wide rectangular envelopes and use each building’s actual entrance',()=>{
+  const hall={id:'hall',kind:'civic',buildingType:'hall',x:0,z:0,rotation:Math.PI/2,width:3.9,depth:3.9,doorOffset:1.9};
+  const connection=route(hall,home('destination',6,0,Math.PI));assert.ok(connection);
+  assert.ok(Math.abs(connection.points[0].x-1.9)<1e-9);assert.ok(Math.abs(connection.points[0].z)<1e-9);
+  const market={id:'market',kind:'civic',buildingType:'market',x:0,z:2.5,rotation:0,width:3.4,depth:2.6,doorOffset:1.12};
+  const path=route(home('left',-5,1),home('right',5,1),{placements:[market]});assert.ok(path);
+  assert.equal(houseBlocksSettlementPath({},market,path,0),false);
+  const through={width:.45,points:[{x:-3,z:2.5},{x:3,z:2.5}]};
+  assert.equal(houseBlocksSettlementPath({},market,through),true);
+});
