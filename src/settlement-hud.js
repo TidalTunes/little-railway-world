@@ -12,6 +12,15 @@ export function settlementHudProgress(houseCount){
   return {houses,level,complete,progress:complete?1:(houses-level*3)/3,next:complete?null:(level+1)*3};
 }
 
+// Compact faceted symbols share the timber, metal and paint of the world.
+const symbol=body=>`<svg class="settlement-symbol" viewBox="0 0 32 32" fill="none" aria-hidden="true">${body}</svg>`;
+const symbols={
+  log:symbol('<path class="settlement-log-bark" d="m3 15 15-9 11 6v11l-15 8-11-6z"/><path class="settlement-log-light" d="m3 15 15-9 11 6-15 8z"/><path class="settlement-log-cut" d="m3 15 11 5v11L3 25z"/><path class="settlement-log-grain" d="m6 20 5 2v5l-5-3z"/><path class="settlement-log-seam" d="m17 23 9-5"/>'),
+  coin:symbol('<path class="settlement-coin-edge" d="m16 2 7 2 6 7 1 7-4 8-7 4-8-1-7-6-2-8 4-8z"/><path class="settlement-coin-face" d="m16 5 6 2 4 5 1 6-4 6-5 3-6-1-5-5-2-6 4-6z"/><path class="settlement-coin-shine" d="m6 14 3-5 7-4 6 2-7 1-6 4-2 8z"/><path class="settlement-coin-mark" d="M14 10h4v13h-4z"/>'),
+  sun:symbol('<path class="settlement-sun-rays" d="M14 0h4v5h-4zM14 27h4v5h-4zM0 14h5v4H0zM27 14h5v4h-5zM4 6l2-2 4 4-2 2zM22 24l2-2 4 4-2 2zM4 26l4-4 2 2-4 4zM22 8l4-4 2 2-4 4z"/><path class="settlement-sun-face" d="m16 7 7 3 3 6-3 7-7 3-6-3-3-7 3-6z"/><path class="settlement-sun-shade" d="m16 7 7 3 3 6-3 7-7 3 5-10z"/>'),
+  moon:symbol('<path class="settlement-moon-face" d="m19 3-8 2-6 6-1 8 4 7 8 3 8-3 4-6-6 1-6-3-3-6 1-5z"/><path class="settlement-moon-shade" d="m4 19 4 7 8 3 8-3 4-6-6 1-6 4-7-2z"/>'),
+};
+
 const keyAction=(action,key,label,extra='')=>`<button type="button" data-action="${action}" ${extra}><kbd>${key}</kbd><span>${label}</span></button>`;
 
 /** Numeric resources, nearby city growth and keyboard controls share the world
@@ -29,20 +38,21 @@ export function createSettlementHud({
   root.style.setProperty('--settlement-owner',playerColor);
   root.innerHTML=`
     <div class="settlement-inventory" role="group" aria-label="Resources">
-      <div class="settlement-resource" data-hud="wood-stock" aria-label="No logs. Ten logs builds a house."><strong data-hud="logs">0</strong><span>Logs</span></div>
-      <div class="settlement-resource settlement-gold" data-hud="gold-stock" aria-label="No gold"><strong data-hud="gold">0</strong><span>Gold</span></div>
+      <div class="settlement-resource settlement-wood" data-hud="wood-stock" aria-label="No logs. Ten logs builds a house."><strong data-hud="logs">0</strong><span class="settlement-resource-caption">${symbols.log}<span>Logs</span></span></div>
+      <div class="settlement-resource settlement-gold" data-hud="gold-stock" aria-label="No gold"><strong data-hud="gold">0</strong><span class="settlement-resource-caption">${symbols.coin}<span>Gold</span></span></div>
     </div>
     <div class="settlement-development" data-hud="development" role="group" aria-label="Settlement development">
       <span class="settlement-level" aria-hidden="true">
+        <svg class="settlement-level-paint" viewBox="0 0 64 64"><path d="m32 8 17 7 7 17-7 17-17 7-17-7-7-17 7-17z"/><path d="m32 8 17 7 7 17-7 17-17 7 11-24z"/></svg>
         <svg class="settlement-progress" viewBox="0 0 64 64"><circle class="settlement-progress-track" cx="32" cy="32" r="29"/><circle class="settlement-progress-arc" data-hud="progress" cx="32" cy="32" r="29" pathLength="1"/></svg>
         <strong data-hud="level">0</strong>
       </span>
       <span class="settlement-growth"><span class="settlement-label" data-hud="city-label">Outpost</span><strong data-hud="city-progress">1 / 3</strong><span class="settlement-growth-caption" data-hud="growth-caption">toward city</span></span>
     </div>
-    <div class="settlement-day-control"><span class="settlement-label" data-hud="day-phase">Daytime</span>${keyAction('day-night','N','Night','aria-keyshortcuts="N" aria-label="Skip to night and collect daily income"')}</div>
+    <div class="settlement-day-control"><span class="settlement-phase-label"><span data-hud="phase-symbol" data-kind="sun">${symbols.sun}</span><span class="settlement-label" data-hud="day-phase">Daytime</span></span>${keyAction('day-night','N','Night','aria-keyshortcuts="N" aria-label="Skip to night and collect daily income"')}</div>
     <div class="settlement-income" data-hud="income" role="status" aria-live="polite" aria-atomic="true" hidden>
       <span class="settlement-income-rule" aria-hidden="true"></span>
-      <span class="settlement-income-copy"><span class="settlement-income-amount"><strong data-hud="income-amount">+0</strong><span>Gold</span></span><span class="settlement-income-label" data-hud="income-label">Day's earnings</span></span>
+      <span class="settlement-income-copy"><span class="settlement-income-amount"><strong data-hud="income-amount">+0</strong><span class="settlement-income-currency">${symbols.coin}<span>Gold</span></span></span><span class="settlement-income-label" data-hud="income-label">Day's earnings</span></span>
       <span class="settlement-income-rule" aria-hidden="true"></span>
     </div>
     <div class="settlement-dock">
@@ -93,6 +103,8 @@ export function createSettlementHud({
     const development=growth.complete?`City level 5. ${growth.houses} homes. Maximum level.`:`${growth.level?`City level ${growth.level}`:'Outpost'}. ${growth.houses} of ${growth.next} homes toward ${growth.level?'the next level':'forming a city'}.`;
     nodes.development.setAttribute('aria-label',development);
     text(nodes['day-phase'],night?'Nighttime':'Daytime');text(phaseLabel,night?'Day':'Night');
+    const phaseSymbol=night?'moon':'sun';
+    if(nodes['phase-symbol'].dataset.kind!==phaseSymbol){nodes['phase-symbol'].innerHTML=symbols[phaseSymbol];nodes['phase-symbol'].dataset.kind=phaseSymbol;}
     buttons['day-night'].setAttribute('aria-label',night?'Skip to day':'Skip to night and collect daily income');
     nodes['build-actions'].hidden=!building;
     text(nodes.placement,connected?'10 logs · joins city':'10 logs · new home');

@@ -13,3 +13,8 @@ canvas { display: block; width: 100%; height: 100%; outline: none; touch-action:
 canvas:active { cursor: grabbing; }
 canvas:focus-visible { outline: 2px solid oklch(0.52 0.16 355); outline-offset: -4px; }
 @media (prefers-reduced-motion: reduce) { canvas { scroll-behavior: auto; } }
+/* A canvas-only cursor policy wins over strategy hover's incidental inline
+   cursor writes. HUD controls retain their ordinary visible pointer. */
+#world { cursor: url('./cursors/overview.svg') 4 3, default !important; }
+#world[data-cursor="hidden"] { cursor: none !important; }
+#world[data-cursor="build"] { cursor: url('./cursors/build.svg') 16 16, crosshair !important; }

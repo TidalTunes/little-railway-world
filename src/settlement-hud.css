@@ -1,6 +1,16 @@
 .settlement-hud {
   --settlement-ink: oklch(0.29 0.045 165);
   --settlement-accent: oklch(0.45 0.105 75);
+  --settlement-wood: oklch(0.39 0.095 48);
+  --settlement-city: oklch(0.37 0.085 166);
+  --settlement-view: oklch(0.38 0.075 236);
+  --settlement-log-bark: oklch(0.44 0.10 47);
+  --settlement-log-light: oklch(0.64 0.12 54);
+  --settlement-log-cut: oklch(0.83 0.11 75);
+  --settlement-log-grain: oklch(0.56 0.115 50);
+  --settlement-gold-edge: oklch(0.51 0.11 75);
+  --settlement-gold-face: oklch(0.80 0.16 83);
+  --settlement-gold-light: oklch(0.94 0.08 90);
   --settlement-invalid: oklch(0.43 0.13 35);
   --settlement-shadow: oklch(0.96 0.028 95 / 0.4);
   --settlement-key: oklch(0.96 0.028 95 / 0.08);
@@ -11,7 +21,7 @@
   text-shadow: 0 1px 2px var(--settlement-shadow);
   -webkit-font-smoothing: antialiased;
 }
-.settlement-hud[data-theme="night"] { --settlement-invalid: oklch(0.81 0.13 35); --settlement-ink: oklch(0.96 0.028 95); --settlement-accent: oklch(0.87 0.12 86); --settlement-shadow: oklch(0.2 0.035 165 / 0.78); --settlement-key: oklch(0.22 0.035 165 / 0.16); }
+.settlement-hud[data-theme="night"] { --settlement-invalid: oklch(0.81 0.13 35); --settlement-ink: oklch(0.96 0.028 95); --settlement-accent: oklch(0.87 0.12 86); --settlement-shadow: oklch(0.2 0.035 165 / 0.78); --settlement-key: oklch(0.22 0.035 165 / 0.16); --settlement-wood: oklch(0.82 0.11 62); --settlement-city: oklch(0.80 0.11 166); --settlement-view: oklch(0.81 0.09 236); }
 .settlement-hud[hidden], .settlement-hud [hidden] { display: none !important; }
 .settlement-inventory {
   position: absolute; top: max(28px, env(safe-area-inset-top)); left: max(30px, env(safe-area-inset-left));
@@ -20,48 +30,72 @@
 .settlement-resource { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 60px; }
 .settlement-resource strong { font-size: 44px; font-weight: 700; line-height: 1; letter-spacing: -1px; }
 .settlement-resource > span, .settlement-label { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.settlement-wood { color: var(--settlement-wood); }
+.settlement-resource-caption { color: var(--settlement-ink); display: flex; align-items: center; gap: 5px; }
+.settlement-symbol { display: block; width: 27px; height: 27px; flex: none; filter: drop-shadow(0 1px 1px oklch(0.2 0.03 160 / 0.22)); }
+.settlement-log-bark { fill: var(--settlement-log-bark); }
+.settlement-log-light { fill: var(--settlement-log-light); }
+.settlement-log-cut { fill: var(--settlement-log-cut); }
+.settlement-log-grain { fill: var(--settlement-log-grain); }
+.settlement-log-seam { stroke: oklch(0.29 0.07 50); stroke-width: 1.2; }
+.settlement-coin-edge, .settlement-coin-mark { fill: var(--settlement-gold-edge); }
+.settlement-coin-face { fill: var(--settlement-gold-face); }
+.settlement-coin-shine { fill: var(--settlement-gold-light); }
+.settlement-sun-rays, .settlement-sun-shade { fill: oklch(0.67 0.15 68); }
+.settlement-sun-face { fill: var(--settlement-gold-face); }
+.settlement-moon-face { fill: oklch(0.90 0.055 225); }
+.settlement-moon-shade { fill: oklch(0.72 0.09 235); }
 .settlement-gold { color: var(--settlement-accent); }
 .settlement-development {
   position: absolute; top: max(116px, calc(env(safe-area-inset-top) + 88px)); left: max(28px, env(safe-area-inset-left));
   display: flex; align-items: center; gap: 15px;
 }
 .settlement-level { position: relative; display: grid; place-items: center; width: 64px; height: 64px; }
-.settlement-level strong { font-size: 33px; line-height: 1; font-weight: 700; }
+.settlement-level strong { position: relative; color: oklch(0.97 0.025 95); font-size: 31px; line-height: 1; font-weight: 700; text-shadow: 0 1px 1px oklch(0.2 0.04 166 / 0.4); }
+.settlement-level-paint { position: absolute; inset: 0; width: 64px; height: 64px; fill: color-mix(in oklch, var(--settlement-owner) 80%, oklch(0.25 0.045 166)); filter: drop-shadow(0 1px 1px oklch(0.2 0.03 160 / 0.28)); }
+.settlement-level-paint path:last-child { fill: oklch(0.22 0.055 166 / 0.22); }
 .settlement-progress { position: absolute; inset: 0; width: 64px; height: 64px; transform: rotate(-90deg); filter: drop-shadow(0 1px 2px var(--settlement-shadow)); }
 .settlement-progress circle { fill: none; stroke-width: 2.5; }
 .settlement-progress-track { stroke: color-mix(in oklch, var(--settlement-ink) 25%, transparent); }
-.settlement-progress-arc { stroke: var(--settlement-accent); stroke-linecap: round; transition: stroke-dasharray 350ms ease-out; }
-.settlement-growth { display: flex; flex-direction: column; gap: 1px; }
-.settlement-growth .settlement-label { font-size: 13px; opacity: 0.88; }
+.settlement-progress-arc { stroke: var(--settlement-city); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dasharray 350ms ease-out; }
+.settlement-growth { color: var(--settlement-city); display: flex; flex-direction: column; gap: 1px; }
+.settlement-growth .settlement-label { color: var(--settlement-ink); font-size: 13px; }
 .settlement-growth > strong { font-size: 22px; font-weight: 650; line-height: 1.1; }
-.settlement-growth-caption { font-size: 13px; font-weight: 500; opacity: 0.88; }
+.settlement-growth-caption { color: var(--settlement-ink); font-size: 13px; font-weight: 500; opacity: 0.88; }
 .settlement-day-control { position: absolute; top: max(27px, env(safe-area-inset-top)); right: max(26px, env(safe-area-inset-right)); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.settlement-day-control > .settlement-label { font-size: 13px; opacity: 0.88; padding-right: 4px; }
+.settlement-phase-label { display: inline-flex; align-items: center; gap: 7px; padding-right: 2px; }
+.settlement-phase-label .settlement-label { font-size: 13px; }
+.settlement-phase-label .settlement-symbol { width: 23px; height: 23px; }
 .settlement-dock { position: absolute; bottom: max(24px, env(safe-area-inset-bottom)); left: max(26px, env(safe-area-inset-left)); display: flex; flex-direction: column; align-items: flex-start; gap: 15px; max-width: calc(100% - 52px); }
 .settlement-actions, .settlement-placement-keys { display: flex; align-items: center; gap: 23px; }
 .settlement-hud button {
   appearance: none; position: relative; display: inline-flex; justify-content: flex-start; align-items: center; gap: 9px;
   min-height: 44px; padding: 3px 2px; margin: 0; border: 0; border-radius: 4px; background: transparent;
-  color: inherit; font: inherit; font-size: 15px; font-weight: 650; text-shadow: inherit;
+  color: var(--settlement-ink); font: inherit; font-size: 15px; font-weight: 650; text-shadow: inherit;
   pointer-events: auto; cursor: pointer; touch-action: manipulation;
   transition: color 140ms ease-out, opacity 140ms ease-out;
 }
 .settlement-hud kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 33px; height: 34px; padding: 0 7px; box-sizing: border-box; border: 1px solid color-mix(in oklch, var(--settlement-ink) 65%, transparent); border-bottom-width: 3px; border-radius: 5px; color: inherit; background: var(--settlement-key); font: inherit; font-size: 14px; line-height: 1; font-weight: 700; box-shadow: 0 1px 4px oklch(0.2 0.035 165 / 0.18); }
-.settlement-hud button:hover:not(:disabled), .settlement-hud button[aria-pressed="true"] { color: var(--settlement-accent); }
-.settlement-hud button:hover:not(:disabled) kbd, .settlement-hud button[aria-pressed="true"] kbd { border-color: var(--settlement-accent); background: color-mix(in oklch, var(--settlement-accent) 9%, transparent); }
+.settlement-actions [data-action="axe"] { --settlement-action: var(--settlement-wood); --settlement-key-paint: oklch(0.47 0.13 43); }
+.settlement-actions [data-action="house"], .settlement-placement-keys [data-action="build"] { --settlement-action: var(--settlement-city); --settlement-key-paint: oklch(0.42 0.10 166); }
+.settlement-actions [data-action="view"], .settlement-day-control { --settlement-action: var(--settlement-view); }
+.settlement-actions button kbd { border-color: color-mix(in oklch, var(--settlement-action) 65%, transparent); background: color-mix(in oklch, var(--settlement-action) 9%, transparent); }
+.settlement-hud button:hover:not(:disabled), .settlement-hud button[aria-pressed="true"] { color: var(--settlement-ink); }
+.settlement-hud button:hover:not(:disabled) kbd, .settlement-hud button[aria-pressed="true"] kbd { border-color: var(--settlement-action, var(--settlement-accent)); background: color-mix(in oklch, var(--settlement-action, var(--settlement-accent)) 12%, transparent); }
+.settlement-actions button[aria-pressed="true"] kbd { color: oklch(0.97 0.025 95); border-color: var(--settlement-key-paint); background: var(--settlement-key-paint); text-shadow: none; }
 .settlement-hud button:active:not(:disabled) kbd { border-bottom-width: 1px; padding-top: 2px; }
 .settlement-hud button:focus-visible { outline: 2px solid var(--settlement-ink); outline-offset: 5px; }
 .settlement-hud button:disabled { opacity: 0.38; cursor: default; }
 .settlement-hud[data-target="true"] [data-action="axe"] kbd { box-shadow: 0 0 0 3px oklch(0.87 0.12 86 / 0.15); }
-.settlement-movement { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding-left: 2px; opacity: 0.78; }
+.settlement-movement { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding-left: 2px; opacity: 0.90; }
 .settlement-movement > span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 550; }
 .settlement-movement kbd { min-width: 0; height: 23px; padding: 0 5px; border-bottom-width: 2px; border-radius: 4px; font-size: 12px; }
 .settlement-build-actions { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; padding: 0 2px 5px; }
 .settlement-placement-note { font-size: 14px; font-weight: 650; }
 .settlement-validity { max-width: 330px; font-size: 13px; color: var(--settlement-invalid); }
-.settlement-validity[data-valid="true"] { color: var(--settlement-accent); }
+.settlement-validity[data-valid="true"] { color: var(--settlement-city); }
 .settlement-placement-keys { gap: 24px; margin-top: 8px; }
-.settlement-placement-keys [data-action="build"]:not(:disabled) { color: var(--settlement-accent); }
+.settlement-placement-keys [data-action="build"]:not(:disabled) { color: var(--settlement-ink); }
 .settlement-hud[data-ready="false"] .settlement-inventory, .settlement-hud[data-ready="false"] .settlement-development { opacity: 0.45; }
 .settlement-income { position: absolute; top: 24%; left: 50%; width: min(700px, 82%); display: flex; align-items: center; justify-content: center; gap: 30px; translate: -50% 0; color: var(--settlement-accent); }
 .settlement-income-rule { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--settlement-accent) 65%, transparent)); }
@@ -69,15 +103,18 @@
 .settlement-income-copy { display: flex; flex-direction: column; align-items: center; flex: none; gap: 4px; }
 .settlement-income-amount { display: flex; align-items: baseline; gap: 10px; }
 .settlement-income-amount strong { font-size: 72px; font-weight: 650; letter-spacing: -2px; line-height: 1; }
-.settlement-income-amount > span { font-size: 18px; font-weight: 650; }
-.settlement-income-label { font-size: 14px; font-weight: 600; }
+.settlement-income-currency { display: inline-flex; align-items: center; gap: 5px; font-size: 18px; font-weight: 650; }
+.settlement-income-currency .settlement-symbol { width: 28px; height: 28px; align-self: center; }
+.settlement-income-label { color: var(--settlement-ink); font-size: 14px; font-weight: 600; }
 .settlement-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (max-width: 600px) {
   .settlement-inventory { top: max(20px, env(safe-area-inset-top)); left: max(20px, env(safe-area-inset-left)); gap: 25px; }
   .settlement-resource strong { font-size: 37px; }
   .settlement-resource { min-width: 46px; }
   .settlement-resource > span { font-size: 13px; }
-  .settlement-development { top: max(99px, calc(env(safe-area-inset-top) + 79px)); left: max(18px, env(safe-area-inset-left)); gap: 12px; }
+  .settlement-resource-caption { gap: 3px; }
+  .settlement-resource-caption .settlement-symbol { width: 23px; height: 23px; }
+  .settlement-development { top: max(103px, calc(env(safe-area-inset-top) + 79px)); left: max(18px, env(safe-area-inset-left)); gap: 12px; }
   .settlement-day-control { top: max(19px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); }
   .settlement-day-control button { gap: 7px; font-size: 13px; }
   .settlement-day-control kbd { min-width: 29px; height: 30px; font-size: 12px; }
@@ -87,7 +124,8 @@
   .settlement-movement { gap: 13px; }
   .settlement-income { top: 31%; gap: 16px; width: 90%; }
   .settlement-income-amount strong { font-size: 58px; }
-  .settlement-income-amount > span { font-size: 16px; }
+  .settlement-income-currency { font-size: 16px; }
+  .settlement-income-currency .settlement-symbol { width: 24px; height: 24px; }
   .settlement-income-label { font-size: 13px; }
 }
 @media (max-height: 500px) {

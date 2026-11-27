@@ -54,6 +54,10 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;sc
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
 let settlement;
+function refreshCanvasCursor(){
+  const mode=settlement?.building?'build':walkingMode?'hidden':'overview';
+  if(canvas.dataset.cursor!==mode)canvas.dataset.cursor=mode;
+}
 let transitionMapStart=0,renderedMapBlend=0;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
@@ -113,7 +117,7 @@ function initializeCharacter(){
   // tree records, even when the player has not entered walking mode yet.
   const scale=worldRoot.scale.y;worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
   if(walker.enter(walkSpawn,spawnHeading())){
-    if(settlement){walkingMode=true;view.setInputEnabled(false);entryFrame=true;canvas.style.cursor='default';}
+    if(settlement){walkingMode=true;view.setInputEnabled(false);entryFrame=true;refreshCanvasCursor();}
     else walker.exit();
     walker.root.visible=true;walkSpawn={...walker.position};
   }
@@ -134,13 +138,13 @@ function enterWalking(){
   characterTransition.begin({fromCamera,toCamera:walker.camera,fromTarget,toTarget:walkingTarget(),toWalking:true,sphere:transitionSphere()});
   entryFrame=true;
   if(!characterTransition.active)finishCharacterTransition();
-  canvas.dataset.view='person';canvas.style.cursor='default';clearMeasurements();
+  canvas.dataset.view='person';refreshCanvasCursor();clearMeasurements();
 }
 function leaveWalking(){
   if(!walker||!walkingMode)return;
   settlement?.cancelBuild();
   const fromCamera=snapshotCamera(),fromTarget=displayedTarget(),heading=walker.heading;
-  const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;
+  const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;refreshCanvasCursor();
   view.setInputEnabled(false);view.overlook(point,{heading,zoom:view.zoomScale*1.35});
   const target=view.renderTarget;surfacePoint(model,target.x,target.y,target.z,transitionFocus);
   transitionMapStart=renderedMapBlend;
@@ -149,7 +153,7 @@ function leaveWalking(){
   clearMeasurements();
 }
 let frameWidth=170,frameHeight=112,time=0;
-const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3(-72,94,54);
+const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3();
 const lightFrame=new THREE.Matrix4(),localSun=new THREE.Vector3();
 function disposeLife(){
   if(!life)return;
@@ -201,6 +205,9 @@ function fitWorld(){
   resize();view.setHome();
 }
 function fitShadows(focus=view.renderTarget,walkingWeight=0){
+  // Keep the one shadow light on the current local solar/lunar arc. The
+  // ground frame rotates that direction with the globe without shearing it.
+  sunDirection.copy(daylight.direction).multiplyScalar(130);
   const span=Math.max((camera.right-camera.left)/camera.zoom,(camera.top-camera.bottom)/camera.zoom);
   const overviewExtent=Math.min(480,Math.max(45,span*.72)),extent=THREE.MathUtils.lerp(overviewExtent,18,walkingWeight),texel=extent*2/2048;
   const x=Math.round(focus.x/texel)*texel,z=Math.round(focus.z/texel)*texel;
@@ -240,7 +247,7 @@ async function loadWorld(input={}){
     walkingMode=false;walkingInput.clear();view.setInputEnabled(true);
     characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
     scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
-    settlement?.dispose();settlement=null;
+    settlement?.dispose();settlement=null;refreshCanvasCursor();
     walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();clockHands?.dispose();
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
@@ -394,7 +401,7 @@ function frame(now){
     // Keep the figure where it can be read; its fixed-size locator represents
     // the same position once the figure becomes subpixel geometry.
     walker.root.visible=walker.initialized&&(groundLayer||blend<.999&&characterMarker.characterReadable);
-    canvas.dataset.view=walkingMode?'person':view.mode;
+    canvas.dataset.view=walkingMode?'person':view.mode;refreshCanvasCursor();
     canvas.dataset.cameraTransition=String(characterTransition.active);canvas.dataset.walkingWeight=walkingWeight.toFixed(3);
     canvas.dataset.mapBlend=blend.toFixed(3);canvas.dataset.characterVisible=String(walker.initialized&&walker.root.visible);
     canvas.dataset.characterMarker=String(characterMarker.root.visible||characterMarker.mapRoot.visible);

@@ -172,18 +172,19 @@ test('night sends residents to their own homes without teleporting, and dawn res
   const before=simulation.snapshot();simulation.update(1/60,{night:1});
   for(const [index,resident]of simulation.snapshot().entries())assert.ok(Math.hypot(resident.x-before[index].x,resident.z-before[index].z)<=resident.speed/60+1e-6);
   routineStep(simulation,120,{night:1});const resting=simulation.snapshot();
-  assert.equal(simulation.stats.activities.resting,3);
+  assert.equal(simulation.stats.activities.indoors,3);
   for(const resident of resting){
     const home=snapshot.houses.find(house=>house.id===resident.houseId);
-    assert.equal(resident.activity,'resting');assert.equal(resident.destinationId,resident.houseId);
-    assert.ok(Math.hypot(resident.x-home.x,resident.z-home.z)<2.1,'rest is on their own doorstep approach');
-    assert.ok(roadDistance(resident,snapshot.paths)<1e-6);
+    assert.equal(resident.activity,'indoors');assert.equal(resident.destinationId,resident.houseId);
+    assert.ok(Math.hypot(resident.x-home.x,resident.z-home.z)<.21,'residents finish fully inside their own homes');
+    assert.equal(resident.indoors,true);assert.equal(resident.transition,null);
+    assert.ok(Math.abs(resident.y-RESIDENT_LIMITS.doorstepHeight)<1e-9);
   }
   routineStep(simulation,20,{night:1});
   for(const [index,resident]of simulation.snapshot().entries()){
     assert.equal(resident.x,resting[index].x);assert.equal(resident.z,resting[index].z);assert.equal(resident.distance,resting[index].distance);
   }
-  routineStep(simulation,16,{night:0});assert.equal(simulation.stats.activities.resting,0);
+  routineStep(simulation,16,{night:0});assert.equal(simulation.stats.activities.indoors,0);
   for(const [index,resident]of simulation.snapshot().entries())assert.ok(resident.distance>resting[index].distance+1,'each resident resumes after its own dawn delay');
 });
 
@@ -212,7 +213,7 @@ test('a growing town and night arrival preserve resident identities, positions a
   simulation.sync(snapshot);
   for(const [index,resident]of simulation.snapshot().entries())for(const key of ['id','x','y','z','heading','phase','distance'])assert.equal(resident[key],before[index][key],key);
   for(let frame=0;frame<120*60;frame++){simulation.update(1/60,{dayPhase:'night'});assert.ok(simulation.stats.routeSearches<=RESIDENT_LIMITS.routeBudget);}
-  assert.equal(simulation.stats.activities.resting,3);
+  assert.equal(simulation.stats.activities.indoors,3);
   const paused=simulation.snapshot();simulation.update(0,{dayPhase:'day'});assert.deepEqual(simulation.snapshot(),paused,'simulation pause leaves routine and gait state unchanged');
 });
 
@@ -228,6 +229,83 @@ test('real settlement growth and civic IDs feed routines and preserve citizens w
   const before=simulation.snapshot();assert.equal(game.build({x:18,z:0}).ok,true);while(game.developmentSearching)game.develop();simulation.sync(game.snapshot());
   assert.equal(simulation.residents.size,7);
   for(const old of before){const resident=simulation.snapshot().find(item=>item.id===old.id);assert.equal(resident.x,old.x);assert.equal(resident.z,old.z);assert.equal(resident.phase,old.phase);}
-  routineStep(simulation,130,{dayPhase:'night'});assert.equal(simulation.stats.activities.resting,7);
-  for(const resident of simulation.snapshot()){assert.equal(resident.cityId,game.cities[0].id);assert.equal(resident.destinationId,resident.houseId);assert.ok(roadDistance(resident,game.paths)<1e-6);}
+  routineStep(simulation,130,{dayPhase:'night'});assert.equal(simulation.stats.activities.indoors,7);
+  for(const resident of simulation.snapshot()){assert.equal(resident.cityId,game.cities[0].id);assert.equal(resident.destinationId,resident.houseId);assert.equal(resident.indoors,true);const home=game.houses.find(item=>item.id===resident.houseId);assert.ok(Math.hypot(resident.x-home.x,resident.z-home.z)<.21);}
+});
+
+test('home entry and dawn exit follow each rotated doorway continuously',()=>{
+  const angle=.73,c=Math.cos(angle),s=Math.sin(angle),snapshot=town();
+  const rotate=p=>({...p,x:p.x*c+p.z*s,z:-p.x*s+p.z*c});
+  snapshot.houses=snapshot.houses.map(home=>({...rotate(home),rotation:home.rotation+angle}));
+  snapshot.paths=snapshot.paths.map(path=>({...path,points:path.points.map(rotate)}));
+  const simulation=createSettlementResidentSimulation(world);simulation.sync(snapshot);routineStep(simulation,35);
+  const entering=new Set(),leaving=new Set(),dawnExits=new Map();
+  function check(previous,frame){
+    for(const [index,resident]of simulation.snapshot().entries()){
+      const old=previous[index],travel=Math.hypot(resident.x-old.x,resident.y-old.y,resident.z-old.z);
+      assert.ok(travel<=resident.speed/60+1e-6,'the entire approach, threshold step and exit use bounded continuous movement');
+      if(resident.transition==='entering')entering.add(resident.id);
+      if(resident.transition==='leaving')leaving.add(resident.id);
+      if(old.indoors&&!resident.indoors)dawnExits.set(resident.id,frame);
+      if(resident.transition||resident.indoors){
+        const home=snapshot.houses.find(item=>item.id===resident.houseId),dx=resident.x-home.x,dz=resident.z-home.z;
+        const lateral=dx*Math.cos(home.rotation)-dz*Math.sin(home.rotation),forward=dx*Math.sin(home.rotation)+dz*Math.cos(home.rotation);
+        if(forward<1.14+1e-6){assert.ok(Math.abs(lateral)<1e-6,'residents cross the doorway center, never a wall beside it');assert.ok(forward>=RESIDENT_LIMITS.indoorOffset-1e-6);}
+        else assert.ok(roadDistance(resident,snapshot.paths)<1e-6,'the first approach still follows the road');
+      }else assert.ok(roadDistance(resident,snapshot.paths)<1e-6);
+      if(resident.indoors)assert.equal(resident.activity,'indoors');
+    }
+  }
+  for(let frame=0;frame<100*60;frame++){const previous=simulation.snapshot();simulation.update(1/60,{dayPhase:'night'});check(previous,frame);}
+  assert.equal(simulation.stats.indoors,3);assert.equal(entering.size,3);
+  for(let frame=0;frame<20*60;frame++){const previous=simulation.snapshot();simulation.update(1/60,{dayPhase:'day'});check(previous,frame);}
+  assert.equal(simulation.stats.indoors,0);assert.equal(leaving.size,3);assert.equal(dawnExits.size,3);
+  assert.equal(new Set(dawnExits.values()).size,3,'each neighbour emerges at a separately seeded time');
+});
+
+test('indoor residents consume zero rendered instances and dawn restores them through the doorway',()=>{
+  const residents=createSettlementResidents(new Group(),world);residents.sync(town());
+  for(let frame=0;frame<100*60;frame++){
+    residents.update(1/60,{focus:{x:0,z:0},dayPhase:'night'});
+    assert.equal(residents.stats.visible,residents.snapshot().filter(resident=>!resident.indoors).length,'visibility changes on the exact entry frame, not the selection refresh');
+  }
+  const before=residents.snapshot();assert.equal(residents.stats.residents,3);assert.equal(residents.stats.indoors,3);
+  assert.equal(residents.stats.visible,0);assert.equal(residents.body.count,0);assert.equal(residents.limbs.count,0);assert.equal(residents.stats.draws,0);
+  const observed=new Set();
+  for(let frame=0;frame<12*60;frame++){
+    residents.update(1/60,{focus:{x:0,z:0},dayPhase:'day'});observed.add(residents.stats.visible);
+    assert.equal(residents.body.count,residents.snapshot().filter(resident=>!resident.indoors).length);
+    assert.equal(residents.limbs.count,residents.body.count*4);
+  }
+  assert.ok(observed.has(0)&&observed.has(1)&&observed.has(3),'dawn restores residents gradually');
+  assert.deepEqual(residents.snapshot().map(resident=>resident.id),before.map(resident=>resident.id));residents.dispose();
+});
+
+test('sleeping residents survive city merges and a dawn interrupted at the threshold without snapping',()=>{
+  const simulation=createSettlementResidentSimulation(world),snapshot=town();simulation.sync(snapshot);routineStep(simulation,100,{night:1});
+  const sleeping=simulation.snapshot();snapshot.cities[0].id='city:merged';
+  snapshot.paths.push({id:'split-street',cityId:'city:merged',fromHouseId:'home-a',toHouseId:'home-c',points:[point(-2,-3),point(-2,6)]});
+  simulation.sync(snapshot);
+  for(const [index,resident]of simulation.snapshot().entries()){
+    assert.equal(resident.indoors,true);assert.equal(resident.cityId,'city:merged');
+    for(const key of ['id','x','y','z','phase','distance'])assert.equal(resident[key],sleeping[index][key]);
+  }
+  let interrupted=false;
+  for(let frame=0;frame<100*60;frame++){
+    const before=simulation.snapshot();if(before.some(resident=>resident.transition==='leaving'))interrupted=true;
+    simulation.update(1/60,{dayPhase:interrupted?'night':'day'});
+    for(const [index,resident]of simulation.snapshot().entries())assert.ok(Math.hypot(resident.x-before[index].x,resident.y-before[index].y,resident.z-before[index].z)<=resident.speed/60+1e-6);
+  }
+  assert.equal(interrupted,true);assert.equal(simulation.stats.indoors,3);
+  routineStep(simulation,20,{dayPhase:'day'});assert.equal(simulation.stats.indoors,0);
+  for(const resident of simulation.snapshot())assert.ok(roadDistance(resident,snapshot.paths)<1e-6);
+});
+
+test('construction hides only the new house resident without resetting its logical routine',()=>{
+  const residents=createSettlementResidents(new Group(),world);residents.sync(town());const unavailableHomes=new Set(['home-b']);
+  residents.update(1/60,{unavailableHomes});assert.equal(residents.stats.residents,3);assert.equal(residents.stats.visible,2);assert.equal(residents.limbs.count,8);
+  const before=residents.snapshot();for(let frame=0;frame<120;frame++)residents.update(1/60,{unavailableHomes});
+  const progressing=residents.snapshot().find(resident=>resident.houseId==='home-b');assert.ok(progressing.distance>before.find(resident=>resident.houseId==='home-b').distance);
+  unavailableHomes.clear();residents.update(1/60,{unavailableHomes});assert.equal(residents.stats.visible,3);
+  assert.deepEqual(residents.snapshot().map(resident=>resident.id),before.map(resident=>resident.id));residents.dispose();
 });

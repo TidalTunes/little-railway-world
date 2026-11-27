@@ -10,6 +10,7 @@ import {C} from './palette.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {buildSettlementBuilding} from './settlement-building-assets.js';
 import {SETTLEMENT_BUILDINGS} from './settlement-progression.js';
+import {createSettlementConstruction} from './settlement-construction.js';
 
 function civicMapGeometry(type){
   const polygon=points=>new THREE.Shape(points.map(([x,z])=>new THREE.Vector2(x,-z)));
@@ -42,9 +43,11 @@ function civicMapGeometry(type){
 }
 
 /** Player-built houses use the original house templates in every camera layer.
- * Only building commits upload instance matrices; previews reuse one mesh. */
+ * Settled instances stay static; only new construction animates its own slots.
+ * Previews reuse one mesh. */
 export function createSettlementArt(parent,mapParent,world){
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='player-settlement';mapRoot.name='settlement-map';parent.add(root);mapParent.add(mapRoot);
+  const construction=createSettlementConstruction(root,mapRoot,world);
   const owner=world.players.find(p=>p.id===world.gameplay.ownerId),palette=createPlayerPalette(owner),templates=[];
   for(let variant=0;variant<4;variant++){
     const template=new THREE.Group();house(template,{variant,palette});bakeMaterialColors(consolidate(template));templates.push(template);
@@ -113,13 +116,14 @@ export function createSettlementArt(parent,mapParent,world){
     for(const batch of [...civicBatches,...civicMapBatches])batch.count=0;
     for(const item of buildings){
       rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,matrix);matrix.scale(new THREE.Vector3().setScalar(item.scale??1));
-      for(const batch of civicBatches)if(batch.userData.buildingType===item.buildingType)batch.setMatrixAt(batch.count++,matrix);
+      for(const batch of civicBatches)if(batch.userData.buildingType===item.buildingType){construction.bind(item,batch,batch.count,matrix);batch.setMatrixAt(batch.count++,matrix);}
       mapMatrix.makeRotationY(item.rotation??0);mapMatrix.setPosition(item.x,.68,item.z);
-      for(const batch of civicMapBatches)if(!item.cityId&&batch.userData.buildingType===item.buildingType)batch.setMatrixAt(batch.count++,mapMatrix);
+      for(const batch of civicMapBatches)if(!item.cityId&&batch.userData.buildingType===item.buildingType){construction.bind(item,batch,batch.count,mapMatrix,{map:true});batch.setMatrixAt(batch.count++,mapMatrix);}
     }
     for(const batch of [...civicBatches,...civicMapBatches]){batch.instanceMatrix.needsUpdate=true;batch.computeBoundingSphere();batch.computeBoundingBox();}
   }
-  function sync(houses,paths=[],buildings=[]){
+  function sync(houses,paths=[],buildings=[],options={}){
+    construction.beginSync([...houses,...buildings],options);
     syncPaths(paths);
     syncCivics(buildings);
     if(!mapBatch||houses.length>capacity){
@@ -134,14 +138,14 @@ export function createSettlementArt(parent,mapParent,world){
     let mapIndex=0;
     houses.forEach(item=>{
       rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,matrix);
-      for(const batch of batches)if(batch.userData.variant===(item.variant??0)%4)batch.setMatrixAt(batch.count++,matrix);
-      mapMatrix.makeScale(1.6,1,1.6);mapMatrix.setPosition(item.x,.66,item.z);if(!item.cityId)mapBatch.setMatrixAt(mapIndex++,mapMatrix);
+      for(const batch of batches)if(batch.userData.variant===(item.variant??0)%4){construction.bind(item,batch,batch.count,matrix);batch.setMatrixAt(batch.count++,matrix);}
+      mapMatrix.makeScale(1.6,1,1.6);mapMatrix.setPosition(item.x,.66,item.z);if(!item.cityId){construction.bind(item,mapBatch,mapIndex,mapMatrix,{map:true});mapBatch.setMatrixAt(mapIndex++,mapMatrix);}
     });
     for(const batch of batches){batch.instanceMatrix.needsUpdate=true;batch.computeBoundingSphere();batch.computeBoundingBox();}
     mapBatch.count=mapIndex;mapBatch.instanceMatrix.needsUpdate=true;mapBatch.computeBoundingSphere();revision++;
-    root.updateMatrixWorld(true);
+    construction.finishSync();root.updateMatrixWorld(true);
   }
-  return{root,mapRoot,sync,get meshes(){return [...batches,...civicBatches].filter(batch=>batch.count>0&&batch.material.userData.sceneStyle!=='window');},get revision(){return revision;},
+  return{root,mapRoot,sync,construction,get meshes(){return [...batches,...civicBatches].filter(batch=>batch.count>0&&batch.material.userData.sceneStyle!=='window');},get revision(){return revision;},
     preview(result,{visible=false,targetTree=null}={}){
       ghost.visible=mapGhost.visible=visible&&!!result?.house;link.visible=mapLink.visible=false;treeRing.visible=!visible&&!!targetTree;
       if(treeRing.visible){treeRing.position.set(targetTree.x,(targetTree.y??0)+.025,targetTree.z);treeRing.scale.setScalar(Math.max(1,(targetTree.scale??1)*1.15));}
@@ -176,9 +180,9 @@ export function createSettlementArt(parent,mapParent,world){
         link.visible=mapLink.visible=true;
       }
     },
-    update({mapBlend=0}={}){root.visible=mapBlend<.999;mapRoot.visible=mapBlend>.001;},
+    update({mapBlend=0,dt=0,reducedMotion=false,night=0}={}){root.visible=mapBlend<.999;mapRoot.visible=mapBlend>.001;construction.update(dt,{mapBlend,reducedMotion,night});},
     dispose(){
-      root.removeFromParent();mapRoot.removeFromParent();for(const batch of [...batches,...civicBatches,...civicMapBatches])batch.dispose();mapBatch?.dispose();
+      construction.dispose();root.removeFromParent();mapRoot.removeFromParent();for(const batch of [...batches,...civicBatches,...civicMapBatches])batch.dispose();mapBatch?.dispose();
       for(const template of [...templates,...civicTemplates.values()]){for(const mesh of template.children)mesh.geometry.dispose();for(const material of template.userData.ownedMaterials??[])material.dispose();}
       for(const geometry of civicMarkers.values())geometry.dispose();
       Object.values(palette).forEach(material=>material.dispose());

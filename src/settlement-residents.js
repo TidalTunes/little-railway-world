@@ -6,10 +6,12 @@ import {createPlayerPalette} from './player-palette.js';
 import {M} from './palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {rigidSurfacePoseMatrix,surfaceDistance} from './world-surface.js';
+import {settlementDoor} from './settlement-paths.js';
 
-export const RESIDENT_LIMITS=Object.freeze({visible:192,detailRadius:95,walkingRadius:48,doorInset:.24,selectionInterval:.25,routineRadius:24,routeBudget:3,routeNodes:900,routeLength:160});
+export const RESIDENT_LIMITS=Object.freeze({visible:192,detailRadius:95,walkingRadius:48,doorInset:.24,selectionInterval:.25,routineRadius:24,indoorOffset:.2,doorstepHeight:.14,routeBudget:3,routeNodes:900,routeLength:160});
 const epsilon=1e-5,clamp=(value,a,b)=>Math.max(a,Math.min(b,value));
 const distance=(a,b)=>Math.hypot(b.x-a.x,b.z-a.z);
+const spatialDistance=(a,b)=>Math.hypot(b.x-a.x,b.y-a.y,b.z-a.z);
 const pointKey=p=>`${Math.round(p.x*10000)}:${Math.round(p.z*10000)}:${Math.round(p.y*1000)}`;
 const mix=(a,b,t)=>({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,z:a.z+(b.z-a.z)*t});
 const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
@@ -151,8 +153,8 @@ function routineDestinations(graph,paths,houses,buildings,membership){
  * current segment, position and gait survive new streets and city merges. */
 export function createSettlementResidentSimulation(world={}){
   let graph={nodes:new Map(),edges:new Map()},residents=new Map(),revision=0;
-  let destinations=new Map(),byCity=new Map(),dark=false,routeBudget=0,routeSearches=0;
-  const activityCounts={walking:0,lingering:0,chatting:0,resting:0};
+  let destinations=new Map(),byCity=new Map(),homes=new Map(),dark=false,routeBudget=0,routeSearches=0,visibilityRevision=0;
+  const activityCounts={walking:0,lingering:0,chatting:0,entering:0,indoors:0,leaving:0};
   function enterEdge(resident,node,edge){
     if(!edge||!node.edges.includes(edge)){resident.moving=false;return false;}
     resident.edge=edge;resident.direction=edge.a.id===node.id?1:-1;resident.along=resident.direction===1?0:edge.length;return true;
@@ -172,9 +174,57 @@ export function createSettlementResidentSimulation(world={}){
     for(const item of weighted){roll-=item.weight;if(roll<=0){target=item.target;break;}}
     setDestination(resident,target);
   }
+  function homePassage(resident){
+    const home=homes.get(resident.houseId),target=destinations.get(resident.houseId),node=graph.nodes.get(target?.nodeId);
+    if(!home||!node)return null;
+    const door={...settlementDoor(world,home),y:(home.y??0)+RESIDENT_LIMITS.doorstepHeight};
+    // Only the short, known doorway approach can leave the street graph. A
+    // missing entrance must never send someone through a neighbour's garden.
+    if(distance(door,node)>.85)return null;
+    const inside={...settlementDoor(world,home,RESIDENT_LIMITS.indoorOffset),y:door.y};
+    return {entry:{x:node.x,y:node.y,z:node.z},door,inside};
+  }
+  function beginEntering(resident){
+    const passage=homePassage(resident);
+    if(!passage){resident.activity='lingering';resident.wait=4;return false;}
+    resident.portal={mode:'entering',points:[passage.entry,passage.door,passage.inside],index:0};
+    resident.activity='entering';resident.wait=0;resident.route=[];resident.lookHeading=null;return true;
+  }
+  function beginLeaving(resident){
+    const passage=homePassage(resident);if(!passage){resident.wait=1;return false;}
+    resident.portal={mode:'leaving',points:[passage.door,passage.entry],index:0};
+    resident.indoors=false;visibilityRevision++;resident.activity='leaving';resident.arrived=false;resident.lookHeading=null;return true;
+  }
+  function finishPassage(resident,mode){
+    resident.portal=null;
+    if(mode==='entering'){
+      resident.indoors=true;visibilityRevision++;resident.activity='indoors';resident.wait=dark?0:1+random(resident)*7;
+      resident.lookHeading=null;return;
+    }
+    // Growth can split the old doorway segment or rename its city. Reattach
+    // only at the very same point; never snap from a doorway to a new street.
+    const match=nearestEdge(graph,resident,resident.cityId);
+    if(match&&match.error<.0002&&Math.abs(match.position.y-resident.y)<.002){
+      resident.edge=match.edge;resident.along=match.t*match.edge.length;resident.direction=match.t>.5?-1:1;
+    }else resident.edge=null;
+    resident.route=[];resident.destinationId=null;resident.destinationKind=null;resident.arrived=false;
+    resident.activity=dark?'heading-home':'walking';resident.lookHeading=null;resident.wait=0;
+  }
+  function advancePassage(resident,remaining){
+    let travelled=0;
+    while(resident.portal&&remaining>epsilon){
+      const portal=resident.portal,target=portal.points[portal.index],span=spatialDistance(resident,target);
+      if(span<=epsilon){if(++portal.index>=portal.points.length)finishPassage(resident,portal.mode);continue;}
+      const speed=resident.speed*.94,advance=Math.min(span,speed*remaining),next=mix(resident,target,advance/span);
+      if(distance(resident,target)>epsilon)resident.lookHeading=Math.atan2(target.x-resident.x,target.z-resident.z);
+      Object.assign(resident,next);remaining-=advance/speed;travelled+=advance;
+      if(advance>=span-epsilon&&++portal.index>=portal.points.length)finishPassage(resident,portal.mode);
+    }
+    return {remaining,travelled};
+  }
   function arrive(resident,target){
     resident.arrived=true;resident.route=[];resident.lookHeading=target.lookX===undefined?target.heading:Math.atan2(target.lookX-resident.x,target.lookZ-resident.z);
-    if(dark&&target.id===resident.houseId){resident.activity='resting';resident.wait=0;return;}
+    if(dark&&target.id===resident.houseId){beginEntering(resident);return;}
     resident.activity='lingering';
     const duration=target.kind==='market'?[4,8]:target.kind==='well'?[2,5]:target.kind==='plaza'?[5,10]:target.kind==='junction'?[2,5]:target.kind==='home'?[1,4]:[3,6];
     resident.wait=(duration[0]+random(resident)*duration[1])*resident.tempo;
@@ -201,11 +251,12 @@ export function createSettlementResidentSimulation(world={}){
     resident.route.shift();return enterEdge(resident,node,edge);
   }
   function sync({houses=[],paths=[],cities,buildings=[]}={}){
-    const membership=eligibleHomes(houses,cities);graph=buildResidentPathGraph(paths,membership);const alive=new Set();
+    const membership=eligibleHomes(houses,cities);homes=new Map(houses.map(home=>[home.id,home]));graph=buildResidentPathGraph(paths,membership);const alive=new Set();
     ({destinations,byCity}=routineDestinations(graph,paths,houses,buildings,membership));
     for(const house of houses){const cityId=membership.get(house.id);if(cityId==null)continue;const id=`resident:${house.id}`;alive.add(id);
       let resident=residents.get(id);
       if(resident){resident.cityId=cityId;resident.route=resident.route.filter(edge=>graph.edges.has(edge));
+        if(resident.indoors||resident.portal)continue;
         if(!resident.onRoad){const start=nearestEdge(graph,house,cityId);if(start){Object.assign(resident,start.position);resident.edge=start.edge;resident.along=start.t*start.edge.length;resident.direction=start.t>.5?-1:1;resident.onRoad=true;}continue;}
         const same=resident.edge&&graph.edges.get(resident.edge.id);
         if(same)resident.edge=same;
@@ -220,7 +271,7 @@ export function createSettlementResidentSimulation(world={}){
       const seed=hash(`${world.seed??'island'}:${id}`)||1;
       resident={id,houseId:house.id,cityId,randomState:seed,x:house.x,y:house.y??0,z:house.z,heading:house.rotation??0,
         edge:null,along:0,direction:1,wait:0,phase:0,moving:false,distance:0,onRoad:false,route:[],destinationId:null,destinationKind:null,
-        activity:'lingering',arrived:false,idleTime:0,lookHeading:null,nightDelay:0};
+        activity:'lingering',arrived:false,idleTime:0,lookHeading:null,nightDelay:0,indoors:false,portal:null};
       resident.speed=.58+random(resident)*.32;resident.wait=random(resident)*1.8;resident.phase=random(resident)*Math.PI*2;
       resident.tempo=.85+random(resident)*.3;resident.arrivalOffset=.18+random(resident)*.7;
       const start=nearestEdge(graph,house,cityId);
@@ -234,25 +285,29 @@ export function createSettlementResidentSimulation(world={}){
     if(!Number.isFinite(dt)||dt<=0)return;
     const nextDark=dayPhase?dayPhase==='night':night>(dark?.35:.65);
     if(nextDark!==dark){dark=nextDark;for(const resident of residents.values()){
-      resident.route=[];resident.arrived=false;resident.destinationId=null;resident.destinationKind=null;
-      resident.nightDelay=dark?random(resident)*6:0;resident.wait=dark?Math.min(resident.wait,resident.nightDelay):1+random(resident)*7;
-      resident.activity=dark?'heading-home':'lingering';
+      resident.route=[];resident.nightDelay=dark?random(resident)*6:0;
+      if(resident.indoors){resident.wait=dark?0:1+random(resident)*7;continue;}
+      if(resident.portal)continue;
+      resident.arrived=false;resident.destinationId=null;resident.destinationKind=null;
+      resident.wait=dark?Math.min(resident.wait,resident.nightDelay):1+random(resident)*7;resident.activity=dark?'heading-home':'lingering';
     }}
     const elapsed=Math.min(dt,.5);routeBudget=RESIDENT_LIMITS.routeBudget;routeSearches=0;
     for(const resident of residents.values()){
       let remaining=elapsed,travelled=0;resident.moving=false;resident.idleTime+=elapsed;resident.nightDelay=Math.max(0,resident.nightDelay-elapsed);
-      if(dark&&resident.nightDelay===0&&resident.destinationId!==resident.houseId)setDestination(resident,destinations.get(resident.houseId));
-      if(!resident.edge)continue;
+      if(dark&&!resident.indoors&&!resident.portal&&resident.nightDelay===0&&resident.destinationId!==resident.houseId)setDestination(resident,destinations.get(resident.houseId));
       // A stopped resident remains at the node until their visit or route
       // request is ready; no zero-distance loops or abrupt sideways movement.
-      while(remaining>epsilon&&!(resident.activity==='resting'&&dark)){
+      while(remaining>epsilon){
+        if(resident.indoors&&dark)break;
         if(resident.wait>0){const pause=Math.min(resident.wait,remaining);resident.wait-=pause;remaining-=pause;if(remaining<epsilon)break;}
+        if(resident.indoors&&!beginLeaving(resident))break;
+        if(resident.portal){const result=advancePassage(resident,remaining);remaining=result.remaining;travelled+=result.travelled;continue;}
         const edge=resident.edge;if(!edge)break;
         const available=resident.direction>0?edge.length-resident.along:resident.along;
         if(available<=epsilon){
           const oldNode=resident.direction>0?edge.b:edge.a,node=graph.nodes.get(oldNode.id);
           if(!node){resident.edge=null;break;}
-          if(!leaveNode(resident,node)){if(resident.activity==='resting')break;continue;}
+          if(!leaveNode(resident,node))continue;
           resident.activity=dark?'heading-home':'walking';resident.lookHeading=null;continue;
         }
         const target=destinations.get(resident.destinationId),toward=resident.direction>0?edge.b:edge.a;
@@ -269,7 +324,7 @@ export function createSettlementResidentSimulation(world={}){
     // Conversations use small local bins and at most eight neighbours. They
     // turn people toward one another without adding actors, props or errands.
     const waiting=new Map();
-    for(const resident of residents.values())if(!dark&&!resident.moving&&resident.wait>.2&&resident.arrived){
+    for(const resident of residents.values())if(!dark&&!resident.indoors&&!resident.portal&&!resident.moving&&resident.wait>.2&&resident.arrived){
       resident.activity='lingering';
       const key=`${resident.cityId}:${Math.floor(resident.x/2)}:${Math.floor(resident.z/2)}`;
       if(!waiting.has(key))waiting.set(key,[]);if(waiting.get(key).length<8)waiting.get(key).push(resident);
@@ -285,9 +340,10 @@ export function createSettlementResidentSimulation(world={}){
     for(const resident of residents.values())activityCounts[resident.activity==='heading-home'?'walking':resident.activity]=(activityCounts[resident.activity==='heading-home'?'walking':resident.activity]??0)+1;
   }
   return {sync,update,get residents(){return residents;},get graph(){return graph;},get revision(){return revision;},
-    get stats(){return {night:dark,routeSearches,activities:{...activityCounts}};},
-    snapshot(){return [...residents.values()].map(({edge,randomState,route,lookHeading,...resident})=>({...resident,pathIds:edge?[...edge.pathIds]:[],edgeId:edge?.id??null}));},
-    dispose(){residents.clear();destinations.clear();byCity.clear();graph={nodes:new Map(),edges:new Map()};}};
+    get visibilityRevision(){return visibilityRevision;},
+    get stats(){return {night:dark,indoors:activityCounts.indoors,routeSearches,activities:{...activityCounts}};},
+    snapshot(){return [...residents.values()].map(({edge,randomState,route,lookHeading,portal,...resident})=>({...resident,transition:portal?.mode??null,pathIds:edge?[...edge.pathIds]:[],edgeId:edge?.id??null}));},
+    dispose(){residents.clear();destinations.clear();byCity.clear();homes.clear();graph={nodes:new Map(),edges:new Map()};}};
 }
 
 /** Two fixed-capacity instanced draws replace a scene hierarchy per citizen.
@@ -303,21 +359,23 @@ export function createSettlementResidents(parent,world){
   for(const mesh of [body,limbs]){mesh.count=0;mesh.frustumCulled=false;mesh.castShadow=mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);root.add(mesh);}
   for(let index=0;index<RESIDENT_LIMITS.visible*4;index++)limbs.setColorAt(index,index%2?palette.body.color:M.metal.color);
   const simulation=createSettlementResidentSimulation(world),pose=new THREE.Matrix4(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();
-  const selected=[],candidates=[];let selectionAge=Infinity,previousFocus=null,previousRadius=0,rendered=0;
+  const selected=[],candidates=[];let selectionAge=Infinity,previousFocus=null,previousRadius=0,rendered=0,visibilityRevision=-1;
   function select(focus,radius){candidates.length=0;
-    for(const resident of simulation.residents.values())if(resident.edge){const d=surfaceDistance(world,focus,resident);if(d<radius)candidates.push({resident,d});}
+    for(const resident of simulation.residents.values())if(resident.edge&&!resident.indoors){const d=surfaceDistance(world,focus,resident);if(d<radius)candidates.push({resident,d});}
     candidates.sort((a,b)=>a.d-b.d);selected.length=0;
     for(let i=0;i<Math.min(RESIDENT_LIMITS.visible,candidates.length);i++)selected.push(candidates[i].resident);
     previousFocus={x:focus.x,z:focus.z};previousRadius=radius;selectionAge=0;
   }
   function sync(snapshot){simulation.sync(snapshot);selectionAge=Infinity;}
-  function update(dt,{focus={x:0,z:0},mapBlend=0,walkingWeight=0,visible=true,reducedMotion=false,night=0,dayPhase}={}){
+  function update(dt,{focus={x:0,z:0},mapBlend=0,walkingWeight=0,visible=true,reducedMotion=false,night=0,dayPhase,unavailableHomes}={}){
     simulation.update(dt,{night,dayPhase});selectionAge+=dt;
     root.visible=visible&&mapBlend<.98;if(!root.visible){rendered=0;return;}
     const radius=walkingWeight>.5?RESIDENT_LIMITS.walkingRadius:RESIDENT_LIMITS.detailRadius;
-    if(selectionAge>=RESIDENT_LIMITS.selectionInterval||!previousFocus||previousRadius!==radius||surfaceDistance(world,focus,previousFocus)>3)select(focus,radius);
+    if(visibilityRevision!==simulation.visibilityRevision||selectionAge>=RESIDENT_LIMITS.selectionInterval||!previousFocus||previousRadius!==radius||surfaceDistance(world,focus,previousFocus)>3)select(focus,radius);
+    visibilityRevision=simulation.visibilityRevision;
     let index=0,limbIndex=0;
     for(const resident of selected){
+      if(resident.indoors||unavailableHomes?.has?.(resident.houseId))continue;
       rigidSurfacePoseMatrix(world,resident.x,resident.y+.012,resident.z,resident.heading,pose);body.setMatrixAt(index++,pose);
       const stride=resident.moving&&!reducedMotion?Math.sin(resident.phase)*.31:0;
       for(const side of [-1,1]){
