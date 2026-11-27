@@ -1,0 +1,1 @@
+export{n as createIslandWorld}from"./island-world-CRbg8zry.js";
