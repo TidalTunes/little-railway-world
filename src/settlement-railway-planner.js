@@ -1,6 +1,7 @@
-/** Geometry search lives off the render thread. Only the newest selection is
- * queued, and a result can enter the authority's cache only if its city and
- * infrastructure revision still matches the scene that was planned. */
+/** Lightweight geometry previews run synchronously; full terrain validation,
+ * scenery clearing, tunnels and access paths run here in the worker. Only the
+ * newest selection is queued, and its result enters the authority's cache only
+ * while the city, infrastructure and exact editing options still match. */
 export function createSettlementRailwayPlanner(world,railways,session,{getPlacements=()=>[],createWorker=()=>new Worker(new URL('./settlement-railway-worker.js',import.meta.url),{type:'module'})}={}){
   let worker=null,active=null,queued=null,nextId=0,disposed=false;
   function finish(result){
@@ -30,7 +31,8 @@ export function createSettlementRailwayPlanner(world,railways,session,{getPlacem
     request(from,to,options={}){
       if(disposed)return Promise.resolve({stale:true});
       return new Promise(resolve=>{
-        const route={waypoints:structuredClone(options.waypoints??[])};
+        const route={waypoints:structuredClone(options.waypoints??[]),attachments:structuredClone(options.attachments??{}),
+          ...(options.controlCount!==undefined?{controlCount:options.controlCount}:{})};
         const request={id:++nextId,from,to,options:route,key:railways.geometryKey(from,to,route),resolve};
         if(active){queued?.resolve({stale:true});queued=request;}else dispatch(request);
       });

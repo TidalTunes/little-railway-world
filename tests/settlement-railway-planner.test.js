@@ -136,11 +136,32 @@ test('successful geometry is reevaluated against the current wallet rather than 
 test('edited control points are copied, transported, and adopted only for their own geometry key',async t=>{
   const f=fixture(t),waypoints=[{x:16,z:7}],pending=f.planner.request('a','b',{waypoints}),worker=f.workers[0],message=plans(worker)[0];
   waypoints[0].z=99;
-  assert.deepEqual(message.options,{waypoints:[{x:16,z:7}]},'later pointer movement cannot mutate an in-flight plan');
+  assert.deepEqual(message.options,{waypoints:[{x:16,z:7}],attachments:{}},'later pointer movement cannot mutate an in-flight plan');
   worker.reply(message.id,{...route(message),waypoints:message.options.waypoints,handles:message.options.waypoints});
   const result=await pending;assert.deepEqual(result.result.waypoints,[{x:16,z:7}]);
   assert.deepEqual(f.adoptions[0][4],message.options);assert.deepEqual(f.evaluations[0][2],message.options);
   const next=f.planner.request('a','b',{waypoints}),edited=plans(worker).at(-1);
   worker.reply(edited.id,{...route(edited),waypoints:edited.options.waypoints});assert.deepEqual((await next).result.waypoints,waypoints);
   assert.notEqual(f.adoptions[0][3],f.adoptions[1][3],'each edit has its own authoritative geometry cache');
+});
+
+test('endpoint attachments are copied into worker requests and authority keys independently of interior edits',async t=>{
+  const f=fixture(t),attachments={from:{x:8,z:-5}},waypoints=[{x:16,z:7}],pending=f.planner.request('a','b',{waypoints,attachments});
+  const worker=f.workers[0],first=plans(worker)[0];attachments.from.z=-9;
+  assert.deepEqual(first.options.attachments,{from:{x:8,z:-5}});
+  worker.reply(first.id,{...route(first),waypoints:first.options.waypoints,attachments:first.options.attachments});
+  assert.deepEqual((await pending).result.attachments,{from:{x:8,z:-5}});
+  const next=f.planner.request('a','b',{waypoints,attachments}),second=plans(worker).at(-1);
+  worker.reply(second.id,{...route(second),waypoints:second.options.waypoints,attachments:second.options.attachments});await next;
+  assert.notEqual(f.adoptions[0][3],f.adoptions[1][3]);assert.deepEqual(f.evaluations[1][2].attachments,attachments);
+});
+
+test('a snapshotted control count travels with the draft and distinguishes authoritative cache entries',async t=>{
+  const f=fixture(t),options={controlCount:3},pending=f.planner.request('a','b',options),worker=f.workers[0],first=plans(worker)[0];
+  options.controlCount=4;assert.equal(first.options.controlCount,3);
+  worker.reply(first.id,{...route(first),waypointCount:3});assert.equal((await pending).result.waypointCount,3);
+  assert.equal(f.evaluations[0][2].controlCount,3);
+  const next=f.planner.request('a','b',options),second=plans(worker).at(-1);
+  worker.reply(second.id,{...route(second),waypointCount:4});assert.equal((await next).result.waypointCount,4);
+  assert.notEqual(f.adoptions[0][3],f.adoptions[1][3]);assert.equal(f.evaluations[1][2].controlCount,4);
 });

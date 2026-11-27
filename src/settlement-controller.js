@@ -7,9 +7,10 @@ import {createSettlementHud} from './settlement-hud.js';
 import {createSettlementResidents} from './settlement-residents.js';
 import {createCityLevelMarkers} from './city-level-markers.js';
 import {createSettlementIncomeEffects} from './settlement-income-effects.js';
-import {createSettlementRailways} from './settlement-railways.js';
+import {createSettlementRailways,railwayControlCount} from './settlement-railways.js';
 import {createSettlementRailwayArt} from './settlement-railway-art.js';
 import {createSettlementRailwayPlanner} from './settlement-railway-planner.js';
+import {createRailwayPreview} from './settlement-railway-preview.js';
 import {pickRailwayCity,pickRailwayHandle,railwayCityLabel} from './settlement-railway-input.js';
 import {surfaceDistance} from './world-surface.js';
 import {walkingBuildAim} from './walking-build-aim.js';
@@ -42,33 +43,45 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const railways=createSettlementRailways(world,{session,getPlacements:()=>detail.placements});
   const railPlanner=createSettlementRailwayPlanner(world,railways,session,{getPlacements:()=>detail.placements});
   const railwayArt=createSettlementRailwayArt(parent,mapParent,world);
+  const railPreviewFlow=createRailwayPreview(railways,railPlanner);
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
-  let railSource=null,railTarget=null,railPreview=null,railPreviewKey='',railClick=null,pendingRailBuild=false,railRevision=-1;
+  let railSource=null,railTarget=null,railPreview=null,railClick=null,pendingRailBuild=false,railRevision=-1;
   let railSnapshot=railways.snapshot(),railLines=world.lines??[];
   const committedRailLines=new Map();
-  let railPlanning=false,railPlanToken=0,railWallet=-1,railHover=null,railWaypoints=null,railDrag=null;
+  let railPlanning=false,railConfirmed=false,railHover=null,railWaypoints=null,railAttachments=null,railDrag=null;
+  let railControlPair='',railControlCount;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0;
   let revision=-1,sessionRevision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),-.8),intersection=new THREE.Vector3();
   const listeners=[];
   const focusCanvas=()=>canvas.focus({preventScroll:true});
+  function releaseRailDrag(){
+    const id=railDrag?.id;railDrag=null;
+    if(id!==undefined&&canvas.hasPointerCapture?.(id))canvas.releasePointerCapture(id);
+  }
   function selectTool(next){
     if(next==='rail'&&(walking||transitioning)||next==='house'&&(!walking||transitioning))return;
+    releaseRailDrag();
     tool=next;pointer=null;pendingBuild=false;pendingChop=false;previewKey='';message='';
-    railSource=railTarget=railPreview=railClick=null;railPreviewKey='';pendingRailBuild=false;press=null;focusCanvas();
-    railPlanToken++;railPlanning=false;railHover=null;railWaypoints=null;railDrag=null;
+    railSource=railTarget=railPreview=railClick=null;railPreviewFlow.clear();pendingRailBuild=false;press=null;focusCanvas();
+    railPlanning=railConfirmed=false;railHover=null;railWaypoints=railAttachments=null;railDrag=null;
+    railControlPair='';railControlCount=undefined;
   }
   const hud=createSettlementHud({parent:canvas.parentElement,playerColor:'#257d70',
     onTool:selectTool,onView:()=>{selectTool('axe');onView();},onDayNight:()=>{onDayNight();focusCanvas();},
     onChop:()=>{selectTool('axe');pendingChop=true;},
-    onBuild:()=>{pendingBuild=true;focusCanvas();},onRailBuild:()=>{pendingRailBuild=!railPlanning&&!!railPreview?.valid;focusCanvas();},onCancel:()=>selectTool('axe')});
+    onBuild:()=>{pendingBuild=true;focusCanvas();},onRailBuild:()=>{pendingRailBuild=railConfirmed&&!railPlanning&&!!railPreview?.valid;focusCanvas();},onCancel:()=>selectTool('axe')});
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
   const eventPointer=event=>{const box=canvas.getBoundingClientRect();return {x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};};
   function dragRail(event){
+    if(!railDrag.moved&&Math.hypot(event.clientX-railDrag.x,event.clientY-railDrag.y)<2)return;
+    railDrag.moved=true;
     pointer=eventPointer(event);ndc.set(pointer.x,pointer.y);ray.setFromCamera(ndc,camera);
     if(ray.ray.direction.y<-.01&&ray.ray.intersectPlane(groundPlane,intersection)){
-      railDrag.points[railDrag.index]={x:intersection.x,z:intersection.z};
-      railWaypoints=railDrag.points.map(point=>({...point}));
+      railDrag.points[railDrag.index]={...railDrag.points[railDrag.index],x:intersection.x,z:intersection.z};
+      railWaypoints=railDrag.points.filter(point=>point.kind==='bend').map(({x,z})=>({x,z}));
+      const from=railDrag.points.find(point=>point.kind==='from'),to=railDrag.points.find(point=>point.kind==='to');
+      railAttachments={from:{x:from.x,z:from.z},to:{x:to.x,z:to.z}};
     }
   }
   listen(canvas,'pointermove',event=>{
@@ -80,23 +93,24 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   listen(canvas,'pointerdown',event=>{
     if(walking||transitioning||tool!=='rail'||event.button!==0)return;
     pointer=eventPointer(event);
-    const handles=railPlanning&&railWaypoints?railWaypoints:railPreview?.handles??[],index=railTarget?pickRailwayHandle(world,handles,camera,pointer,canvas.getBoundingClientRect()):-1;
+    const handles=railPreview?.handles??[],index=railTarget?pickRailwayHandle(world,handles,camera,pointer,canvas.getBoundingClientRect()):-1;
     if(index>=0){
       event.preventDefault();event.stopImmediatePropagation();focusCanvas();
-      railDrag={id:event.pointerId,index,points:handles.map(({x,z})=>({x,z}))};
+      railDrag={id:event.pointerId,index,x:event.clientX,y:event.clientY,moved:false,points:handles.map(point=>({...point}))};
       canvas.setPointerCapture?.(event.pointerId);return;
     }
     if(press){press=null;return;}
     focusCanvas();press={id:event.pointerId,x:event.clientX,y:event.clientY,tool};
   },true);
   listen(canvas.ownerDocument.defaultView,'pointerup',event=>{
-    if(railDrag?.id===event.pointerId){dragRail(event);railDrag=null;if(canvas.hasPointerCapture?.(event.pointerId))canvas.releasePointerCapture(event.pointerId);return;}
+    if(railDrag?.id===event.pointerId){dragRail(event);releaseRailDrag();return;}
     if(press?.id!==event.pointerId)return;
     if(!press.moved&&Math.hypot(event.clientX-press.x,event.clientY-press.y)<5&&tool==='rail')railClick=eventPointer(event);
     press=null;
   });
-  listen(canvas,'pointercancel',()=>{press=null;railDrag=null;});
-  listen(canvas.ownerDocument.defaultView,'blur',()=>{press=null;railDrag=null;pendingBuild=false;pendingChop=false;pendingHit=null;pendingRailBuild=false;railClick=null;});
+  listen(canvas,'pointercancel',()=>{press=null;releaseRailDrag();});
+  listen(canvas,'lostpointercapture',event=>{if(railDrag?.id===event.pointerId)releaseRailDrag();});
+  listen(canvas.ownerDocument.defaultView,'blur',()=>{press=null;releaseRailDrag();pendingBuild=false;pendingChop=false;pendingHit=null;pendingRailBuild=false;railClick=null;});
   listen(canvas,'dblclick',event=>{if(tool==='rail'){event.preventDefault();event.stopImmediatePropagation();}},true);
   function synchronize(){
     if(railRevision!==railways.revision){
@@ -151,44 +165,35 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       const city=pickRailwayCity(world,cities,camera,railClick,box);railClick=null;
       if(city){
         if(!railSource){if(city.ownerId===game.ownerId){railSource=city.id;message='';}else notify('Choose your city first');}
-        else if(city.id===railSource){railSource=railTarget=railHover=null;railWaypoints=null;railPreview=null;railPreviewKey='';}
-        else{if(railTarget!==city.id)railWaypoints=null;railTarget=city.id;railHover=null;message='';}
+        else if(city.id===railSource){railSource=railTarget=railHover=null;railWaypoints=railAttachments=null;railPreview=null;railPreviewFlow.clear();}
+        else{if(railTarget!==city.id)railWaypoints=railAttachments=null;railTarget=city.id;railHover=null;message='';}
       }
     }
-    if(railSource&&!cities.some(city=>city.id===railSource)){railSource=railTarget=railHover=null;railWaypoints=null;}
-    if(railTarget&&!cities.some(city=>city.id===railTarget)){railTarget=null;railWaypoints=null;}
+    if(railSource&&!cities.some(city=>city.id===railSource)){railSource=railTarget=railHover=null;railWaypoints=railAttachments=null;}
+    if(railTarget&&!cities.some(city=>city.id===railTarget)){railTarget=null;railWaypoints=railAttachments=null;}
     if(railSource&&!railTarget&&!press){const hover=pickRailwayCity(world,cities,camera,pointer,box);railHover=hover?.id!==railSource?hover?.id??null:null;}
-    const destination=railTarget??railHover,options={waypoints:railWaypoints??undefined};
+    const destination=railTarget??railHover,pair=railSource&&destination?`${railSource}>${destination}`:'';
+    if(pair!==railControlPair){
+      railControlPair=pair;
+      railControlCount=pair?railwayControlCount(cities.find(city=>city.id===railSource),cities.find(city=>city.id===destination)):undefined;
+    }
+    const options={waypoints:railWaypoints??undefined,attachments:railAttachments??undefined,controlCount:railControlCount};
     if(railSource&&destination){
-      const key=railways.geometryKey(railSource,destination,options);
-      if(key!==railPreviewKey){
-        // Keep the existing curve and the dragged dots visible while the worker
-        // fits the latest edit. A new destination must not show the old route.
-        if(!railDrag&&(!railWaypoints||railPreview?.toCityId!==destination))railPreview=null;
-        railPreviewKey=key;railPlanning=true;const token=++railPlanToken;
-        railPlanner.request(railSource,destination,options).then(response=>{
-          if(disposed||token!==railPlanToken)return;
-          railPlanning=false;
-          if(response.stale){railPreviewKey='';return;}
-          railPreview=response.result??{valid:false,code:'planning-failed',reason:response.error,lines:[],stations:[]};railWallet=game.gold;
-        });
-      }else if(railPreview&&railWallet!==game.gold){
-        railWallet=game.gold;
-        if(railPreview.siteValid)railPreview={...railPreview,affordable:game.gold>=5,valid:game.gold>=5,code:game.gold>=5?'ready':'not-enough-gold',reason:game.gold>=5?'Ready':'Requires 5 gold'};
-      }
-    }else{railPreview=null;railPreviewKey='';if(railPlanning){railPlanToken++;railPlanning=false;}}
-    if(pendingRailBuild&&railSource&&railTarget&&!railPlanning&&!railDrag&&railPreview?.valid){
+      const state=railPreviewFlow.update(railSource,destination,options,{dragging:!!railDrag,gold:game.gold});
+      railPreview=state.result;railPlanning=state.checking;railConfirmed=state.confirmed;
+    }else{railPreviewFlow.clear();railPreview=null;railPlanning=railConfirmed=false;}
+    if(pendingRailBuild&&railSource&&railTarget&&railConfirmed&&!railPlanning&&!railDrag&&railPreview?.valid){
       const result=railways.build(railSource,railTarget,{...options,requireCached:true});
       if(result.ok){
         for(const id of result.clearedTreeIds??[])if(reducedMotion?.matches||!detail.fellTree(id))detail.removeTree(id);
         detail.clearScenery?.(result.clearedPlacements??result.clearedPlacementIds??[],{animate:!reducedMotion?.matches});
-        synchronize();notify('−5 gold');railSource=railTarget=railHover=railPreview=null;railWaypoints=null;railPreviewKey='';
-      }else{railPreview=result;if(result.code==='world-changed')railPreviewKey='';notify(result.reason??'Choose another route');}
+        synchronize();notify('−5 gold');railSource=railTarget=railHover=railPreview=null;railWaypoints=railAttachments=null;railPreviewFlow.clear();railConfirmed=false;
+      }else{railPreview=result;if(result.code==='world-changed')railPreviewFlow.clear();notify(result.reason??'Choose another route');}
     }
     pendingRailBuild=false;
-    railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:destination,visible:true,editable:!!railTarget,handles:railDrag?.points??(railPlanning&&railWaypoints?railWaypoints:railPreview?.handles)??[],activeHandle:railDrag?.index??-1});
+    railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:destination,visible:true,editable:!!railTarget,handles:railDrag?.points??railPreview?.handles??[],activeHandle:railDrag?.index??-1});
     return {stage:railPlanning?'planning':railTarget&&railPreview?'preview':railSource?'destination':'source',hasCity,cost:5,hovering:!!railHover,siteValid:!!railPreview?.siteValid,
-      canBuild:!!railTarget&&!railDrag&&!railPlanning&&!!railPreview?.valid,reason:railPreview?.reason??message,
+      canBuild:!!railTarget&&railConfirmed&&!railDrag&&!railPlanning&&!!railPreview?.valid,reason:railPreview?.reason??message,
       sourceLabel:railwayCityLabel(cities.find(city=>city.id===railSource),game.ownerId),targetLabel:railwayCityLabel(cities.find(city=>city.id===destination),game.ownerId)};
   }
   function develop(player){
@@ -208,7 +213,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       const key=event.key.toLowerCase();
       if(key==='t'){if(!event.repeat&&!walking&&!transitioning)selectTool(tool==='rail'?'axe':'rail');return true;}
       if(tool==='rail'&&['escape','enter','e'].includes(key)){
-        if(!event.repeat){if(key==='enter')pendingRailBuild=!railPlanning&&!!railPreview?.valid;else selectTool('axe');}return true;
+        if(!event.repeat){if(key==='enter')pendingRailBuild=railConfirmed&&!railPlanning&&!!railPreview?.valid;else selectTool('axe');}return true;
       }
       if(key==='b'){if(!event.repeat)selectTool(tool==='house'?'axe':'house');return true;}
       if(tool==='house'&&['escape','enter','e'].includes(key)){
@@ -305,6 +310,6 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;railPlanner.dispose();for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
+    dispose(){disposed=true;releaseRailDrag();railPreviewFlow.dispose();railPlanner.dispose();for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
   };
 }

@@ -26,7 +26,7 @@ export function settlementHudRailway(railway,{gold=0,ready=true}={}){
   let status,statusKind='info';
   if(!ready)status='Preparing…';
   else if(!hasCity)status='3 homes to start';
-  else if(stage==='planning')status='Tracing route…';
+  else if(stage==='planning')status='Checking route…';
   else if(stage==='destination'&&railway?.hovering&&railway?.siteValid)status='Click to shape route';
   else if(!affordable&&showConfirm){status=`${cost-count(gold)} gold short`;statusKind='error';}
   else if(canBuild){status='Drag dots to shape the line';statusKind='success';}

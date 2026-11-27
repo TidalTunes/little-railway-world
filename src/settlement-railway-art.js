@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {station,person} from './assets.js';
 import {buildRailways} from './railway.js';
-import {consolidate,ribbon} from './geometry.js';
+import {consolidate} from './geometry.js';
 import {bakeMaterialColors} from './color-batches.js';
 import {createPlayerPalette,playerColors} from './player-palette.js';
 import {FARM_VILLAGE_PLAYER} from './farm-villages.js';
@@ -13,7 +13,9 @@ import {C,M} from './palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {applyMapNetworkVisibility,mapNetworkVisibility} from './map-symbols.js';
 
-const GOOD=new THREE.Color('#66d9bc'),BAD=new THREE.Color('#f06b66');
+const GOOD=new THREE.Color('#41ffcf'),BAD=new THREE.Color('#ff665b');
+const HANDLE_CAPACITY=14,ENDPOINT_INK=new THREE.Color('#123f39'),HANDLE_PAPER=new THREE.Color('#f4fff3');
+const previewReady=result=>!!result?.valid||!!result?.provisional&&result.siteValid!==false;
 const unique=items=>[...new Map((items??[]).map(item=>[item.id,item])).values()];
 const pointsFor=line=>{const count=Math.max(2,Math.ceil(line.length/.5)+1);return Array.from({length:count},(_,i)=>sampleLine(line,line.length*i/(count-1)));};
 
@@ -43,8 +45,9 @@ export function buildJoinedSettlementTracks(parent,world,lines){
   return {ballast,rails};
 }
 
-/** Only committed network revisions rebuild meshes. Ghosts share the exact
- * proposed alignment; neither camera changes nor hover renders resample it. */
+/** Committed revisions rebuild meshes; live edits only upload the used portions
+ * of pooled buffers. Four narrow, unlit ribbons create glow without a fullscreen
+ * pass. Their minimum pixel width keeps a route visible on any ground color. */
 export function createSettlementRailwayArt(parent,mapParent,world){
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='settlement-railways';mapRoot.name='settlement-map-railways';parent.add(root);mapParent.add(mapRoot);
   const network=new THREE.Group(),mapNetwork=new THREE.Group(),ghost=new THREE.Group(),mapGhost=new THREE.Group();
@@ -63,20 +66,110 @@ export function createSettlementRailwayArt(parent,mapParent,world){
   };
   const mapRim=makeMapMaterial('railway-map-paper',C.trim),mapInk=makeMapMaterial('railway-map-ink',C.window);
   const mapPathMaterial=new THREE.MeshBasicMaterial({color:C.sand,depthWrite:false,side:THREE.DoubleSide});
-  const ghostMaterial=new THREE.MeshBasicMaterial({color:GOOD,transparent:true,opacity:.45,depthWrite:false,depthTest:false,side:THREE.DoubleSide,toneMapped:false});
-  const ghostEdgeMaterial=new THREE.LineBasicMaterial({color:GOOD,transparent:true,opacity:.90,depthWrite:false,depthTest:false,toneMapped:false});
-  const blockedGuideMaterial=new THREE.LineDashedMaterial({color:BAD,dashSize:.65,gapSize:.5,transparent:true,opacity:.9,depthWrite:false,depthTest:false,toneMapped:false});
+  const previewViewport={value:800};
+  const makePreviewMaterial=(name,width,pixels,opacity)=>{
+    const material=new THREE.MeshBasicMaterial({name,color:GOOD,transparent:true,opacity,depthWrite:false,depthTest:false,side:THREE.DoubleSide,toneMapped:false,fog:false});material.forceSinglePass=true;
+    material.onBeforeCompile=shader=>{
+      shader.uniforms.previewViewport=previewViewport;shader.uniforms.previewHalfWidth={value:width/2};shader.uniforms.previewPixels={value:pixels};
+      shader.vertexShader='attribute vec3 previewOffset; attribute float previewSide; varying float vPreviewSide; uniform float previewViewport; uniform float previewHalfWidth; uniform float previewPixels;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`vec4 previewClip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        float previewUnit = 2.0 * abs(previewClip.w) / (previewViewport * abs(projectionMatrix[1][1]));
+        vec3 transformed = position + previewOffset * max(previewHalfWidth, previewPixels * previewUnit);
+        vPreviewSide = previewSide;`);
+      shader.fragmentShader='varying float vPreviewSide;\n'+shader.fragmentShader;
+      shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\n diffuseColor.a *= 1.0 - smoothstep(0.18, 1.0, abs(vPreviewSide));');
+    };
+    material.customProgramCacheKey=()=>`railway-preview-glow-v1:${width}:${pixels}`;return material;
+  };
+  const glowMaterials=[makePreviewMaterial('railway-preview-outer-glow',6.4,13,.16),makePreviewMaterial('railway-preview-inner-glow',3.8,8.5,.27),
+    makePreviewMaterial('railway-preview-body',1.8,4.2,.48),makePreviewMaterial('railway-preview-core',.48,1.9,1)];
+  const ghostMaterial=new THREE.MeshBasicMaterial({color:GOOD,transparent:true,opacity:.32,depthWrite:false,depthTest:false,side:THREE.DoubleSide,toneMapped:false,fog:false});ghostMaterial.forceSinglePass=true;
+  const ghostEdgeMaterial=new THREE.LineBasicMaterial({color:GOOD,transparent:true,opacity:.90,depthWrite:false,depthTest:false,toneMapped:false,fog:false});
+  const blockedGuideMaterial=new THREE.LineDashedMaterial({color:BAD,dashSize:.65,gapSize:.5,transparent:true,opacity:.9,depthWrite:false,depthTest:false,toneMapped:false,fog:false});
   const haloGeometry=new THREE.RingGeometry(.90,1,48);haloGeometry.rotateX(-Math.PI/2);
   const haloMaterial=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.85,depthWrite:false,side:THREE.DoubleSide,toneMapped:false});
-  const stats={lines:0,stations:0,detailBatches:0,mapBatches:0,rebuilds:0};
+  const stats={lines:0,stations:0,detailBatches:0,mapBatches:0,rebuilds:0,previewBufferAllocations:0,previewUpdates:0};
   let halos=null,mapHalos=null,haloCapacity=0,disposed=false,revision=null,previewResult=null,previewKey='',previewVisible=false;
-  let handlePoints=[],handleIndex=-1,handlesVisible=false;
-  const dotGeometry=new THREE.CircleGeometry(1,20),dotRim=new THREE.MeshBasicMaterial({color:'#164c48',depthTest:false,depthWrite:false,toneMapped:false}),
-    dotFill=new THREE.MeshBasicMaterial({color:'#f4f3da',depthTest:false,depthWrite:false,toneMapped:false});
-  const handleBatches=[root,mapRoot].map(parent=>[dotRim,dotFill].map((material,index)=>{
-    const batch=new THREE.InstancedMesh(dotGeometry,material,12);batch.name=index?'railway-handle-centres':'railway-handle-rims';batch.count=0;batch.frustumCulled=false;batch.renderOrder=20+index;parent.add(batch);return batch;
+  let handlePoints=[],handleCount=0,handleIndex=-1,handlesVisible=false;
+  const dotGeometry=new THREE.CircleGeometry(1,24),dotMaterial=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,depthTest:false,depthWrite:false,toneMapped:false,fog:false});
+  const handleBatches=[root,mapRoot].map(parent=>['railway-handle-rims','railway-handle-centres','railway-handle-pins'].map((name,index)=>{
+    const batch=new THREE.InstancedMesh(dotGeometry,dotMaterial,HANDLE_CAPACITY);batch.name=name;batch.count=0;batch.frustumCulled=false;batch.renderOrder=20+index;parent.add(batch);return batch;
   }));
   const pose=new THREE.Matrix4(),scale=new THREE.Vector3(),center=new THREE.Vector3(),corner=new THREE.Vector3(),view=new THREE.Vector3();
+  const seenLines=new Set(),seenStations=new Set(),previewLines=[],fallbackSamples=new WeakMap(),guideSamples=[],activeGuidePoints=[];
+  const stationGeometry=new THREE.BoxGeometry(6.4,.21,2.4);stationGeometry.translate(0,.105,0);
+  const stationEdges=new THREE.EdgesGeometry(stationGeometry);
+  function dynamicBuffer(size,ribbon=true){
+    const geometry=new THREE.BufferGeometry(),attributes=ribbon?{position:3,previewOffset:3,previewSide:1}:{position:3,lineDistance:1};
+    for(const [name,stride]of Object.entries(attributes))geometry.setAttribute(name,new THREE.BufferAttribute(new Float32Array(size*stride),stride).setUsage(THREE.DynamicDrawUsage));
+    geometry.setDrawRange(0,0);stats.previewBufferAllocations++;return geometry;
+  }
+  function makePreviewPool(group,map){
+    const pool={group,map,capacity:8192,geometry:dynamicBuffer(8192),meshes:[],stations:[],guideCapacity:1024,guideGeometry:dynamicBuffer(1024,false)};
+    for(let i=0;i<glowMaterials.length;i++){
+      const mesh=new THREE.Mesh(pool.geometry,glowMaterials[i]);mesh.name=i===3?'railway-route-preview':glowMaterials[i].name;mesh.frustumCulled=false;mesh.renderOrder=11+i;mesh.visible=false;pool.meshes.push(mesh);group.add(mesh);
+    }
+    pool.guide=new THREE.Line(pool.guideGeometry,blockedGuideMaterial);pool.guide.name='blocked-railway-guide';pool.guide.renderOrder=15;pool.guide.frustumCulled=false;pool.guide.visible=false;group.add(pool.guide);
+    return pool;
+  }
+  const previewPools=[makePreviewPool(ghost,false),makePreviewPool(mapGhost,true)];
+  function reservePreview(pool,count,guide=false){
+    const capacityKey=guide?'guideCapacity':'capacity',geometryKey=guide?'guideGeometry':'geometry';
+    if(count<=pool[capacityKey])return;
+    pool[capacityKey]=2**Math.ceil(Math.log2(count));const old=pool[geometryKey];pool[geometryKey]=dynamicBuffer(pool[capacityKey],!guide);
+    if(guide)pool.guide.geometry=pool[geometryKey];else for(const mesh of pool.meshes)mesh.geometry=pool[geometryKey];old.dispose();
+  }
+  function uploadPreview(geometry,count){
+    geometry.setDrawRange(0,count);geometry.boundingBox=null;geometry.boundingSphere=null;
+    for(const attribute of Object.values(geometry.attributes)){attribute.clearUpdateRanges();attribute.addUpdateRange(0,count*attribute.itemSize);attribute.needsUpdate=true;}
+  }
+  function writePreviewVertex(pool,index,point,nx,nz,side){
+    const height=pool.map?.81:(point.y??0)+.06,attributes=pool.geometry.attributes;
+    surfacePoint(world,point.x,height,point.z,center);surfacePoint(world,point.x+nx,height,point.z+nz,corner);corner.sub(center);
+    attributes.position.setXYZ(index,center.x,center.y,center.z);attributes.previewOffset.setXYZ(index,corner.x*side,corner.y*side,corner.z*side);attributes.previewSide.setX(index,side);
+  }
+  function updateRoutes(){
+    let vertexCount=0;for(const points of previewLines)vertexCount+=(points.length-1)*6;
+    for(const pool of previewPools){
+      reservePreview(pool,vertexCount);let index=0;
+      for(const points of previewLines)for(let i=1;i<points.length;i++){
+        const a=points[i-1],b=points[i],previous=points[Math.max(0,i-2)],next=points[Math.min(points.length-1,i+1)];
+        const aLength=Math.hypot(b.x-previous.x,b.z-previous.z)||1,bLength=Math.hypot(next.x-a.x,next.z-a.z)||1;
+        const anx=a.tangent?.z??(b.z-previous.z)/aLength,anz=a.tangent?-a.tangent.x:-(b.x-previous.x)/aLength;
+        const bnx=b.tangent?.z??(next.z-a.z)/bLength,bnz=b.tangent?-b.tangent.x:-(next.x-a.x)/bLength;
+        writePreviewVertex(pool,index++,a,anx,anz,-1);writePreviewVertex(pool,index++,b,bnx,bnz,-1);writePreviewVertex(pool,index++,a,anx,anz,1);
+        writePreviewVertex(pool,index++,a,anx,anz,1);writePreviewVertex(pool,index++,b,bnx,bnz,-1);writePreviewVertex(pool,index++,b,bnx,bnz,1);
+      }
+      uploadPreview(pool.geometry,vertexCount);for(const mesh of pool.meshes)mesh.visible=vertexCount>0;
+    }
+  }
+  function updateGuide(points,count){
+    for(const pool of previewPools){
+      reservePreview(pool,count,true);const attributes=pool.guideGeometry.attributes;let distance=0;
+      for(let i=0;i<count;i++){
+        surfacePoint(world,points[i].x,.84,points[i].z,center);
+        if(i)distance+=Math.hypot(center.x-attributes.position.getX(i-1),center.y-attributes.position.getY(i-1),center.z-attributes.position.getZ(i-1));
+        attributes.position.setXYZ(i,center.x,center.y,center.z);attributes.lineDistance.setX(i,distance);
+      }
+      uploadPreview(pool.guideGeometry,count);pool.guide.visible=count>1;
+    }
+  }
+  function updateStations(stations=[]){
+    seenStations.clear();let index=0;
+    for(const item of stations){
+      if(seenStations.has(item.id))continue;seenStations.add(item.id);
+      for(const pool of previewPools){
+        let platform=pool.stations[index];
+        if(!platform){
+          platform=new THREE.Mesh(stationGeometry,ghostMaterial);platform.name='railway-station-preview';platform.renderOrder=16;platform.matrixAutoUpdate=false;
+          const outline=new THREE.LineSegments(stationEdges,ghostEdgeMaterial);outline.renderOrder=17;platform.add(outline);pool.stations.push(platform);pool.group.add(platform);
+        }
+        platform.visible=true;rigidSurfacePoseMatrix(world,item.x,pool.map?.81:item.y??0,item.z,item.rotation??0,platform.matrix);platform.matrixWorldNeedsUpdate=true;
+      }
+      index++;
+    }
+    for(const pool of previewPools)for(let i=index;i<pool.stations.length;i++)pool.stations[i].visible=false;
+  }
   function clear(group,{materials=false}={}){
     const geometries=new Set();group.traverse(mesh=>{if(mesh.isMesh||mesh.isLine)geometries.add(mesh.geometry);});
     for(const geometry of geometries)geometry.dispose();group.clear();
@@ -148,7 +241,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     if(!halos)return;
     halos.count=mapHalos.count=cities.length;
     cities.forEach((city,index)=>{
-      const selected=city.id===sourceCityId||city.id===targetCityId,color=city.id===targetCityId&&result&&!result.valid?BAD:selected?GOOD:playerColors(players.get(city.ownerId)).body;
+      const selected=city.id===sourceCityId||city.id===targetCityId,color=city.id===targetCityId&&result&&!previewReady(result)?BAD:selected?GOOD:playerColors(players.get(city.ownerId)).body;
       const radius=Math.max(3.4,Math.min(6.2,city.radius??3.4))*(selected?1.10:1);
       rigidSurfacePoseMatrix(world,city.x,(city.y??0)+.13,city.z,0,pose);pose.scale(scale.set(radius,1,radius));halos.setMatrixAt(index,pose);halos.setColorAt(index,color);
       rigidSurfacePoseMatrix(world,city.x,.82,city.z,0,pose);pose.scale(scale.set(radius,1,radius));mapHalos.setMatrixAt(index,pose);mapHalos.setColorAt(index,color);
@@ -157,64 +250,74 @@ export function createSettlementRailwayArt(parent,mapParent,world){
   }
   function preview(result,{cities=[],sourceCityId=null,targetCityId=null,visible=false,editable=false,handles=result?.handles??[],activeHandle=-1}={}){
     if(disposed)return;
-    handlePoints=handles.slice(0,12);handleIndex=activeHandle;handlesVisible=visible&&editable;
-    for(const layers of handleBatches)for(const batch of layers)batch.count=handlesVisible?handlePoints.length:0;
+    handlePoints=handles;handleCount=Math.min(HANDLE_CAPACITY,handles.length);handleIndex=activeHandle;handlesVisible=visible&&editable;
+    const color=previewReady(result)?GOOD:BAD;
+    for(const layers of handleBatches){
+      for(const batch of layers)batch.count=handlesVisible?handleCount:0;
+      for(let i=0;i<handleCount;i++){
+        const kind=handles[i].kind??handles[i].role,endpoint=kind==='from'||kind==='to';
+        layers[0].setColorAt(i,endpoint?HANDLE_PAPER:ENDPOINT_INK);layers[1].setColorAt(i,endpoint?color:HANDLE_PAPER);layers[2].setColorAt(i,endpoint?ENDPOINT_INK:color);
+      }
+      for(const batch of layers)if(batch.instanceColor)batch.instanceColor.needsUpdate=true;
+    }
     previewVisible=visible;ghost.visible=mapGhost.visible=visible&&!!result;
-    const key=`${sourceCityId}:${targetCityId}:${result?.valid}:${cities.map(city=>`${city.id},${city.x},${city.z},${city.radius}`).join(';')}`;
+    const key=`${sourceCityId}:${targetCityId}:${result?.valid}:${result?.siteValid}:${!!result?.provisional}:${cities.map(city=>`${city.id},${city.x},${city.z},${city.radius}`).join(';')}`;
     if(key!==previewKey){refreshHalos(cities,sourceCityId,targetCityId,result);previewKey=key;}
     if(halos)halos.visible=mapHalos.visible=visible;
-    if(result===previewResult)return;previewResult=result;clear(ghost);clear(mapGhost);
-    ghostMaterial.color.copy(result?.valid?GOOD:BAD);ghostEdgeMaterial.color.copy(ghostMaterial.color);
-    if(!result)return;
-    const lines=unique(result.lines).filter(line=>line.length>0);
-    if(!lines.length&&!result.valid){
-      const source=cities.find(city=>city.id===(sourceCityId??result.fromCityId)),target=cities.find(city=>city.id===(targetCityId??result.toCityId));
+    if(result===previewResult&&!result?.provisional)return;previewResult=result;stats.previewUpdates++;
+    ghostMaterial.color.copy(color);ghostEdgeMaterial.color.copy(color);blockedGuideMaterial.color.copy(color).lerp(HANDLE_PAPER,.6);for(const material of glowMaterials)material.color.copy(color);
+    previewLines.length=0;seenLines.clear();
+    for(const line of result?.lines??[]){
+      if(seenLines.has(line.id)||!(line.length>0))continue;seenLines.add(line.id);
+      let points=line.points;
+      if(!points?.length){points=fallbackSamples.get(line);if(!points){points=pointsFor(line);fallbackSamples.set(line,points);}}
+      if(points.length>1)previewLines.push(points);
+    }
+    let guideCount=0;
+    if(result&&!previewLines.length&&!result.valid){
+      const source=result.handles?.find(handle=>(handle.kind??handle.role)==='from')??result.attachments?.from??cities.find(city=>city.id===(sourceCityId??result.fromCityId));
+      const target=result.handles?.find(handle=>(handle.kind??handle.role)==='to')??result.attachments?.to??cities.find(city=>city.id===(targetCityId??result.toCityId));
       if(source&&target){
-        const guidePoints=[source,...result.waypoints??[],target],samples=[];
-        for(let i=1;i<guidePoints.length;i++){
-          const a=guidePoints[i-1],b=guidePoints[i],count=Math.max(2,Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/2)+1);
-          for(let j=i===1?0:1;j<count;j++){const t=j/(count-1);samples.push({x:THREE.MathUtils.lerp(a.x,b.x,t),z:THREE.MathUtils.lerp(a.z,b.z,t)});}
-        }
-        for(const [group,map]of [[ghost,false],[mapGhost,true]]){
-          const points=samples.map(point=>surfacePoint(world,point.x,.84,point.z,new THREE.Vector3()));
-          const guide=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),blockedGuideMaterial);guide.name='blocked-railway-guide';guide.renderOrder=12;guide.computeLineDistances();group.add(guide);
+        const waypoints=result.waypoints??[];
+        for(let i=0;i<=waypoints.length;i++){
+          const a=i?waypoints[i-1]:source,b=i<waypoints.length?waypoints[i]:target,count=Math.max(2,Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/2)+1);
+          for(let j=i?1:0;j<count;j++){
+            const t=j/(count-1),point=guideSamples[guideCount]??(guideSamples[guideCount]={x:0,y:.78,z:0});point.x=THREE.MathUtils.lerp(a.x,b.x,t);point.z=THREE.MathUtils.lerp(a.z,b.z,t);activeGuidePoints[guideCount]=point;guideCount++;
+          }
         }
       }
     }
-    for(const line of lines){
-      const points=pointsFor(line),raised=points.map(point=>({...point,y:(point.y??0)+.06}));
-      const strip=ribbon(ghost,raised,1.78,ghostMaterial);strip.name='railway-route-preview';strip.castShadow=strip.receiveShadow=false;strip.renderOrder=11;
-      if(surfaceFor(world)){const positions=strip.geometry.attributes.position;for(let i=0;i<positions.count;i++){surfacePoint(world,positions.getX(i),positions.getY(i),positions.getZ(i),center);positions.setXYZ(i,center.x,center.y,center.z);}positions.needsUpdate=true;strip.geometry.computeBoundingSphere();}
-      mapStrip(points,1.15,.81,ghostMaterial,mapGhost);
-    }
-    for(const item of unique(result.stations))for(const [target,height]of [[ghost,item.y??0],[mapGhost,.81]]){
-      const geometry=new THREE.BoxGeometry(6.4,.21,2.4);geometry.translate(0,.105,0);
-      const platform=new THREE.Mesh(geometry,ghostMaterial);platform.name='railway-station-preview';platform.renderOrder=12;
-      const outline=new THREE.LineSegments(new THREE.EdgesGeometry(geometry),ghostEdgeMaterial);platform.add(outline);
-      rigidSurfacePoseMatrix(world,item.x,height,item.z,item.rotation??0,pose);platform.applyMatrix4(pose);target.add(platform);
-    }
+    // Even a curve that cannot be fitted has a visible, editable requested
+    // corridor. Reuse the same glow buffers beneath its dashed centre, so a
+    // dragged endpoint never leaves the red feedback behind at the city badge.
+    activeGuidePoints.length=guideCount;if(guideCount>1)previewLines.push(activeGuidePoints);
+    updateRoutes();updateStations(result?.stations);
+    updateGuide(guideSamples,guideCount);
   }
   return{root,mapRoot,sync,preview,stats,get revision(){return revision;},get meshes(){return network.children.filter(mesh=>mesh.isMesh&&mesh.material.userData.sceneStyle!=='window');},
     update({mapBlend=0,camera,viewportHeight=800,zoom=1}={}){
       if(disposed)return;root.visible=mapBlend<.999;mapRoot.visible=mapBlend>.001;
-      visibility.value=mapNetworkVisibility(zoom);
+      visibility.value=mapNetworkVisibility(zoom);previewViewport.value=Math.max(1,viewportHeight);
       if(camera){camera.updateMatrixWorld(true);view.set(0,0,0).applyMatrix4(camera.matrixWorldInverse);const e=camera.projectionMatrix.elements,w=e[3]*view.x+e[7]*view.y+e[11]*view.z+e[15];widthScale.value=Math.max(1,2*Math.abs(w)/(Math.max(1,viewportHeight)*Math.abs(e[5]))*3/.42);}
       if(camera&&handlesVisible){const e=camera.projectionMatrix.elements;
-        handlePoints.forEach((handle,index)=>{
+        for(let index=0;index<handleCount;index++){
+          const handle=handlePoints[index],kind=handle.kind??handle.role,endpoint=kind==='from'||kind==='to';
           surfacePoint(world,handle.x,.8,handle.z,center);view.copy(center).applyMatrix4(camera.matrixWorldInverse);
           const w=e[3]*view.x+e[7]*view.y+e[11]*view.z+e[15],unit=2*Math.abs(w)/(Math.max(1,viewportHeight)*Math.abs(e[5]));
           for(const layers of handleBatches)layers.forEach((batch,layer)=>{
-            const radius=unit*(layer?5.8:8.2)*(index===handleIndex?1.22:1);pose.compose(center,camera.quaternion,scale.setScalar(radius));batch.setMatrixAt(index,pose);
+            const pixels=endpoint?(layer===0?12.2:layer===1?9.2:3.1):(layer===0?9.6:layer===1?7:2.1);
+            const radius=unit*pixels*(index===handleIndex?1.22:1);pose.compose(center,camera.quaternion,scale.setScalar(radius));batch.setMatrixAt(index,pose);
           });
-        });for(const layers of handleBatches)for(const batch of layers)batch.instanceMatrix.needsUpdate=true;
+        }for(const layers of handleBatches)for(const batch of layers)batch.instanceMatrix.needsUpdate=true;
       }
       ghost.visible=mapGhost.visible=previewVisible&&!!previewResult;if(halos)halos.visible=mapHalos.visible=previewVisible;
     },
     dispose(){
-      if(disposed)return;disposed=true;clear(network,{materials:true});clear(mapNetwork);clear(ghost);clear(mapGhost);
+      if(disposed)return;disposed=true;clear(network,{materials:true});clear(mapNetwork);
+      for(const pool of previewPools){pool.geometry.dispose();pool.guideGeometry.dispose();pool.group.clear();}stationGeometry.dispose();stationEdges.dispose();
       for(const batch of [halos,mapHalos])batch?.dispose();haloGeometry.dispose();
-      for(const layers of handleBatches)for(const batch of layers)batch.dispose();dotGeometry.dispose();dotRim.dispose();dotFill.dispose();
-      for(const material of [mapRim,mapInk,mapPathMaterial,ghostMaterial,ghostEdgeMaterial,blockedGuideMaterial,haloMaterial])material.dispose();
+      for(const layers of handleBatches)for(const batch of layers)batch.dispose();dotGeometry.dispose();dotMaterial.dispose();
+      for(const material of [mapRim,mapInk,mapPathMaterial,ghostMaterial,ghostEdgeMaterial,blockedGuideMaterial,haloMaterial,...glowMaterials])material.dispose();
       root.removeFromParent();mapRoot.removeFromParent();root.clear();mapRoot.clear();
     },
   };

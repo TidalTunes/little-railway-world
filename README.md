@@ -18,7 +18,7 @@ The continental stress preset opens as a map with 256 cities, 287 links, and 2,0
 
 Trains follow continuous circuits through stations, with each carriage sampled along the track. Straight city approaches and tangent-connected circular bends keep movement smooth. The deterministic planner accepts authored players, city levels, connections, rivers, mountains, and biome sites. `?layout=classic` retains the earlier eight-city generator; `?seed=68&cities=12` generates a classic twelve-city layout. `?layout=crossroads` loads the seven-city crossing preset.
 
-In overview, **T** plans a railway from a formed player city to another city for **5 gold**. Select your city, hover a destination to preview a direct feasible route, then click to select it. Drag the evenly spaced dots to reshape the route; **Enter** builds the current valid preview and **Escape** cancels. Both towns receive stations and access paths. Later lines can connect at either station end or join established approaches with matching tangents. Curves retain an eight-unit minimum radius. Water crossings receive bridges, mountains receive supported tunnels or open cuts, and intersected trees, rocks, farm estates and other scenery are cleared without granting timber. Buildings remain protected. Planning runs in a worker and charges only on confirmation.
+In overview, **T** plans a railway from a formed player city to another city for **5 gold**. Select your city and hover a destination: a glowing cyan curve appears immediately. Click to select the destination, then drag the interior dots to reshape the curve or the larger end handles to change its station attachments. The number of interior dots comes from the initial straight-line distance between cities and stays fixed for that pair, including while the cities grow. Unbuilt stations can move to nearby clear ground; existing stations keep their location and offer their ends or established approaches. Curves retain an eight-unit minimum radius. The visible curve follows each edit immediately, while a worker checks terrain, protected buildings and station access after a drag finishes. **Enter** builds only the current checked, valid preview; **Escape** cancels. Both towns receive stations and access paths. Water crossings receive bridges, mountains receive supported tunnels or open cuts, and intersected trees, rocks, farm estates and other scenery are cleared without granting timber. Gold is charged only on confirmation.
 
 This is a settlement and world-exploration prototype. Multiplayer and a world-editor UI are still to come; the local rivals currently stand in for other players.
 
@@ -60,7 +60,7 @@ The canvas receives keyboard focus on startup. Click it again if focus has moved
 | E or click / tap | Chop a nearby tree in third person; click confirms while building. |
 | B | Select or cancel house placement, only in third person. |
 | T | Plan a railway in overview. |
-| Enter | Confirm a valid house or selected railway preview. |
+| Enter | Confirm a valid house or a selected railway whose checks have passed. |
 | Tab | Release the captured mouse and move focus to controls. |
 | Arrow keys | Look around in third person; orbit or pan in strategy views. Panning releases a followed train. |
 | F | Follow the visible train nearest the view centre. |
@@ -87,6 +87,7 @@ Controls use colored icons and keycaps, with names on hover or focus and short p
 | `src/world-model.js` | Deterministic layout, shared city approaches, transitions, infrastructure, stations, scenery reservations, and validation. |
 | `src/development.js` / `src/player-palette.js` | Player color normalization, city development rules, and shared owner palettes. |
 | `src/alignments.js` | Exact straight and circular-arc tracks with continuous tangents and a minimum turning radius. |
+| `src/settlement-railways.js` / `src/settlement-railway-preview.js` / `src/settlement-railway-planner.js` / `src/settlement-railway-art.js` | Mutable railway construction, immediate editable curves, authoritative worker checks and pooled preview artwork. |
 | `src/biomes.js` | Broad seeded regions, authored sites, protected coastal bays, and complete-footprint lookup. |
 | `src/terrain-colors.js` / `src/globe-land-colors.js` / `src/ocean-colors.js` | Shared land ecology, spherical ocean color, coastal shelves, and blended shores. |
 | `src/landscape-field.js` / `src/nature-assets.js` | Continuous seeded landscape districts and bounded meadow, scrub, dune, rock and ice details. |

@@ -7,7 +7,7 @@ import {planSettlementPath} from './settlement-paths.js';
 
 export const SETTLEMENT_RAILWAY=Object.freeze({cost:5,minRadius:8,halfWidth:1.12,
   railY:.42,spineLength:14,stationOffset:3,stationWidth:6.4,stationDepth:2.4,
-  sampleSpacing:.4,maxNodes:4200,latticeStep:3.141592653589793,stationOptions:7});
+  sampleSpacing:.4,stationOptions:7});
 const TAU=Math.PI*2,dist=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z),copy=v=>structuredClone(v);
 const finite=p=>Number.isFinite(p?.x)&&Number.isFinite(p?.z);
 const railTerrain=new Set(['water','ocean','shore','ground','mountain']);
@@ -16,10 +16,18 @@ const PROTECTED=new Set(['house','station','civic','landmark','apartment','tower
 const RECTANGLES=new Set(['house','farm','station','civic']);
 const angleDelta=(a,b)=>Math.atan2(Math.sin(a-b),Math.cos(a-b));
 const placementId=item=>item.kind==='tree'?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
-const routeOptions=options=>({waypoints:(options?.waypoints===undefined?[]:Array.isArray(options.waypoints)?options.waypoints:[null]).map(p=>({x:p?.x,z:p?.z}))});
-function routeHandles(alignment){
-  const intervals=Math.max(2,Math.min(13,Math.ceil(alignment.length/28)));
-  return Array.from({length:intervals-1},(_,i)=>{const distance=alignment.length*(i+1)/intervals,p=sampleAlignment(alignment,distance);return{x:p.x,z:p.z,distance};});
+const routeOptions=options=>({waypoints:(options?.waypoints===undefined?[]:Array.isArray(options.waypoints)?options.waypoints:[null]).map(p=>({x:p?.x,z:p?.z})),
+  attachments:Object.fromEntries(['from','to'].filter(key=>options?.attachments?.[key]!==undefined).map(key=>[key,{x:options.attachments[key]?.x,z:options.attachments[key]?.z}])),
+  ...(options?.controlCount!==undefined?{controlCount:options.controlCount}:{})});
+const validControlCount=count=>Number.isInteger(count)&&count>=1&&count<=12;
+export const railwayControlCount=(from,to)=>Math.max(1,Math.min(12,Math.ceil(dist(from,to)/28)-1));
+const waypointCount=(from,to,controlCount)=>validControlCount(controlCount)?controlCount:railwayControlCount(from,to);
+function routeHandles(from,to,alignment,{waypoints=[],attachments={},controlCount}={},start,end){
+  const count=waypointCount(from,to,controlCount),point=(p,kind,index)=>({x:p.x,z:p.z,id:kind==='bend'?`bend:${index}`:kind,kind,role:kind==='bend'?'waypoint':kind,...(kind==='bend'?{index}:{}),...(Number.isFinite(p.distance)?{distance:p.distance}:{})});
+  const first=start??(alignment?sampleAlignment(alignment,0):attachments.from??from),last=end??(alignment?sampleAlignment(alignment,alignment.length):attachments.to??to);
+  const interiors=Array.from({length:count},(_,i)=>waypoints[i]??(alignment?sampleAlignment(alignment,alignment.length*(i+1)/(count+1)):
+    {x:first.x+(last.x-first.x)*(i+1)/(count+1),z:first.z+(last.z-first.z)*(i+1)/(count+1)}));
+  return [point(first,'from'),...interiors.map((p,i)=>point(p,'bend',i)),point(last,'to')];
 }
 function selfIntersects(alignment){
   const count=Math.max(2,Math.ceil(alignment.length/1.5)),points=Array.from({length:count+1},(_,i)=>sampleAlignment(alignment,alignment.length*i/count));
@@ -68,19 +76,6 @@ function boxSamples(item,visit){
     if(!visit({x:item.x+x*c+z*s,z:item.z-x*s+z*c}))return false;
   }return true;
 }
-class Heap{
-  items=[];
-  push(item){let i=this.items.length;this.items.push(item);while(i){const p=(i-1)>>1;if(this.items[p].f<=item.f)break;this.items[i]=this.items[p];i=p;}this.items[i]=item;}
-  pop(){const root=this.items[0],last=this.items.pop();if(this.items.length){let i=0;while(i*2+1<this.items.length){let c=i*2+1;if(c+1<this.items.length&&this.items[c+1].f<this.items[c].f)c++;if(this.items[c].f>=last.f)break;this.items[i]=this.items[c];i=c;}this.items[i]=last;}return root;}
-}
-function primitive(p,turn){
-  const length=SETTLEMENT_RAILWAY.latticeStep,radius=SETTLEMENT_RAILWAY.minRadius;
-  if(!turn)return straightSegment(p,{x:p.x+Math.cos(p.heading)*length,z:p.z+Math.sin(p.heading)*length},SETTLEMENT_RAILWAY.railY);
-  const center={x:p.x-Math.sin(p.heading)*turn*radius,z:p.z+Math.cos(p.heading)*turn*radius};
-  const startAngle=p.heading-turn*Math.PI/2,sweep=turn*length/radius;
-  return {type:'arc',center,radius,startAngle,sweep,length,curvature:turn/radius,
-    start:{x:p.x,y:SETTLEMENT_RAILWAY.railY,z:p.z},end:{x:center.x+Math.cos(startAngle+sweep)*radius,y:SETTLEMENT_RAILWAY.railY,z:center.z+Math.sin(startAngle+sweep)*radius}};
-}
 function acceptable(alignment,allowed){
   if(alignment.segments.some(s=>s.type==='arc'&&Math.abs(s.sweep)>Math.PI+1e-6))return false;
   const count=Math.ceil(alignment.length/SETTLEMENT_RAILWAY.sampleSpacing);
@@ -91,35 +86,13 @@ function direct(start,end,allowed){
   return alignmentCandidates(start,end,{radius:SETTLEMENT_RAILWAY.minRadius,y:SETTLEMENT_RAILWAY.railY})
     .find(route=>route.length<dist(start,end)*1.65+18&&acceptable(route,allowed))??null;
 }
-/** Heading-aware A*: every edge is already a feasible rail arc. No post-hoc
- * smoothing can cut across a house or tighten a mountain detour. */
-function planRoute(start,end,allowed,{maxNodes=SETTLEMENT_RAILWAY.maxNodes}={}){
-  const immediate=direct(start,end,allowed);if(immediate)return immediate;
-  const heap=new Heap(),visited=new Map();let expanded=0;
-  const key=p=>`${Math.round(p.x/1.5)}:${Math.round(p.z/1.5)}:${Math.round(((p.heading%TAU+TAU)%TAU)/TAU*16)%16}`;
-  const first={...start,g:0,f:dist(start,end),parent:null,part:null};heap.push(first);visited.set(key(first),0);
-  while(heap.items.length&&expanded++<maxNodes){
-    const node=heap.pop();if(node.g>visited.get(key(node))+.001)continue;
-    if(dist(node,end)<30&&expanded%3===0){
-      const tail=direct(node,end,allowed);
-      if(tail){const parts=[tail];for(let n=node;n?.part;n=n.parent)parts.unshift(n.part);return combineAlignments(parts,SETTLEMENT_RAILWAY.minRadius);}
-    }
-    for(const turn of [0,-1,1]){
-      const part=combineAlignments([primitive(node,turn)],SETTLEMENT_RAILWAY.minRadius),pose=sampleAlignment(part,part.length);
-      if(!acceptable(part,allowed))continue;
-      const g=node.g+part.length*(turn?1.045:1),k=key(pose);
-      if(g>Math.max(95,dist(start,end)*2.6)||g>=(visited.get(k)??Infinity)-.001)continue;
-      visited.set(k,g);heap.push({...pose,g,f:g+dist(pose,end)*1.035,parent:node,part});
-    }
-  }return null;
-}
-
 /** Local authoritative infrastructure. Cities/accounts remain owned by their
  * games, while stations and corridors are one shared, persistent rail graph. */
 export function createSettlementRailways(world,{session,getPlacements=()=>[],surfaceAt=(x,z)=>worldSurface(world,x,z),onBuild,initialState,sceneryCatalog}={}){
   if(!session?.player)throw new TypeError('Railways require a settlement session');
   const stations=[],lines=[],connections=[],paths=[],reservations=[],clearedPlacementIds=new Set(initialState?.clearedPlacementIds??[]);
-  let revision=0,catalog=sceneryCatalog??null,cached=null;
+  let revision=0,catalog=sceneryCatalog??null,cached=null,geometryCache=null,occupiedCache=null;
+  const stationCache=new Map();
   if(initialState){
     for(const [target,key]of [[stations,'stations'],[lines,'lines'],[connections,'connections'],[paths,'paths'],[reservations,'reservations']])target.push(...copy(initialState[key]??[]));
     revision=initialState.revision??0;
@@ -172,51 +145,74 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     }
     return cities.map(city=>({...city,playerOwned:city.ownerId===session.player.ownerId,stationId:stations.find(station=>station.cityId===city.id)?.id??null}));
   }
-  function obstacles(placements){return [...session.buildings,...world.gameplay?.farmVillages?.houses??[],...world.gameplay?.farmVillages?.buildings??[],
-    ...stations,...placements.filter(item=>PROTECTED.has(item.kind))];}
+  function obstacles(){
+    const items=[...session.buildings,...world.gameplay?.farmVillages?.houses??[],...world.gameplay?.farmVillages?.buildings??[],
+      ...stations,...(world.placements??[]).filter(item=>PROTECTED.has(item.kind)),...getPlacements().filter(item=>PROTECTED.has(item.kind))];
+    const key=items.map(item=>`${item.id}:${item.x}:${item.z}:${item.rotation??0}:${item.width??0}:${item.depth??0}`).join('|');
+    if(occupiedCache?.key!==key){occupiedCache={key,items,blocked:spatial(items)};stationCache.clear();}
+    return occupiedCache;
+  }
   const dry=p=>{const ground=surfaceAt(p.x,p.z);return ground&&['ground','mountain'].includes(ground.type)&&Math.abs(ground.height)<.14;};
-  function allowedWith(occupied,extraStations=[],joinPoints=[]){
-    const blocked=spatial([...occupied,...extraStations]),railBlocked=trackObstacles();
+  function allowedWith(occupied,extraStations=[],joinPoints=[],terrain=true){
+    const blocked=occupied.blocked??spatial(occupied),extraBlocked=spatial(extraStations),railBlocked=trackObstacles();
     return p=>{
-      const ground=surfaceAt(p.x,p.z);
+      if(blocked(p,SETTLEMENT_RAILWAY.halfWidth+.2)||extraBlocked(p,SETTLEMENT_RAILWAY.halfWidth+.2))return false;
+      if(terrain){const ground=surfaceAt(p.x,p.z);
       if(!ground||!railTerrain.has(ground.type))return false;
-      if(blocked(p,SETTLEMENT_RAILWAY.halfWidth+.2))return false;
       // Check the physical corridor, not just its centreline, at every sample.
       for(const side of [-1,1]){const q={x:p.x+(p.tangent?.z??0)*side*SETTLEMENT_RAILWAY.halfWidth,z:p.z-(p.tangent?.x??1)*side*SETTLEMENT_RAILWAY.halfWidth},s=surfaceAt(q.x,q.z);
-        if(!s||!railTerrain.has(s.type))return false;}
+        if(!s||!railTerrain.has(s.type))return false;}}
       // A switch may fan out of a shared station throat, but unrelated tracks
       // cannot cross on the level or accidentally lie on top of one another.
       if(!joinPoints.some(point=>dist(point,p)<12)&&railBlocked(p,.001))return false;
       return true;
     };
   }
-  function stationOptions(city,other,occupied){
+  function stationOptions(city,other,occupied,attachment){
     const existing=stations.find(station=>station.cityId===city.id);if(existing)return [existing];
-    const blocked=spatial(occupied),homes=[...session.buildings,...world.gameplay?.farmVillages?.houses??[]].filter(item=>item.cityId===city.id&&item.kind==='house');
+    const blocked=occupied.blocked,homes=[...session.buildings,...world.gameplay?.farmVillages?.houses??[]].filter(item=>item.cityId===city.id&&item.kind==='house');
     const radius=Math.max(3,...homes.map(home=>dist(home,city)+1.6)),bearing=Math.atan2(other.z-city.z,other.x-city.x),options=[];
-    for(const extra of [3.4,6.4,9.4,12.4,16.4,20.4])for(let i=0;i<24;i++){
-      const a=bearing+i/24*TAU,center={x:city.x+Math.cos(a)*(radius+extra),z:city.z+Math.sin(a)*(radius+extra)};
-      for(const heading of [bearing,bearing-Math.PI/6,bearing+Math.PI/6,a+Math.PI/2])for(const side of [-1,1]){
+    const make=(center,heading,side)=>{
         const normal={x:-Math.sin(heading),z:Math.cos(heading)},station={id:`rail-station:${city.id}`,kind:'station',cityId:city.id,ownerId:city.ownerId,
           x:center.x+normal.x*SETTLEMENT_RAILWAY.stationOffset*side,y:0,z:center.z+normal.z*SETTLEMENT_RAILWAY.stationOffset*side,
           rotation:Math.atan2(-normal.x*side,-normal.z*side),width:6.4,depth:2.4,radius:Math.hypot(3.2,1.2),
           platform:{width:2.4,length:6.4},lineId:`rail-spine:${city.id}`,distance:7,center,heading,side,cityHouseIds:[...city.houseIds??homes.map(home=>home.id)]};
-        if(!boxSamples({...station,width:7,depth:3},point=>dry(point)&&!blocked(point,.22)))continue;
-        const allowed=allowedWith(occupied,[station]);
+        return {...station,score:dist(city,station)*1.8+dist(center,other)*.35+Math.abs(angleDelta(heading,bearing))*2};
+    };
+    const fits=station=>{
+        if(!boxSamples({...station,width:7,depth:3},point=>!blocked(point,.22)))return false;
+        // Five probes locate the draft on level land. The worker checks the
+        // full station footprint later, without selecting a different site.
+        const c=Math.cos(station.rotation),s=Math.sin(station.rotation);
+        if(![[0,0],[-3.5,-1.5],[-3.5,1.5],[3.5,-1.5],[3.5,1.5]].every(([x,z])=>dry({x:station.x+x*c+z*s,z:station.z-x*s+z*c})))return false;
+        const allowed=allowedWith(occupied,[station],[],false),{center,heading}=station;
         const start={x:center.x-Math.cos(heading)*7,z:center.z-Math.sin(heading)*7},end={x:center.x+Math.cos(heading)*7,z:center.z+Math.sin(heading)*7};
-        if(!acceptable(combineAlignments([straightSegment(start,end,SETTLEMENT_RAILWAY.railY)]),allowed))continue;
-        options.push({...station,score:dist(city,station)*1.8+dist(center,other)*.35+Math.abs(angleDelta(heading,bearing))*2});
+        return acceptable(combineAlignments([straightSegment(start,end,SETTLEMENT_RAILWAY.railY)]),allowed);
+    };
+    const cacheKey=`${city.id}:${city.x}:${city.z}:${other.x}:${other.z}:${radius}:${revision}`;
+    let selected=stationCache.get(cacheKey);
+    if(!selected){
+      for(const extra of [3.4,6.4,9.4,12.4,16.4,20.4])for(let i=0;i<16;i++){
+        const a=bearing+i/16*TAU,center={x:city.x+Math.cos(a)*(radius+extra),z:city.z+Math.sin(a)*(radius+extra)};
+        for(const heading of [bearing,bearing-Math.PI/6,bearing+Math.PI/6])for(const side of [-1,1])options.push(make(center,heading,side));
       }
+      selected=[];
+      for(const option of options.sort((a,b)=>a.score-b.score)){
+        if(selected.some(other=>dist(option,other)<2.5&&Math.abs(Math.sin(option.heading-other.heading))<.3)||!fits(option))continue;
+        selected.push(option);if(selected.length===SETTLEMENT_RAILWAY.stationOptions)break;
+      }
+      if(stationCache.size>64)stationCache.clear();stationCache.set(cacheKey,selected);
     }
-    const selected=[];
-    for(const option of options.sort((a,b)=>a.score-b.score)){
-      if(selected.some(other=>dist(option,other)<2.5&&Math.abs(Math.sin(option.heading-other.heading))<.3))continue;
-      selected.push(option);if(selected.length===SETTLEMENT_RAILWAY.stationOptions)break;
-    }return selected;
+    if(!attachment)return selected;
+    const exact=selected.filter(station=>[-1,1].some(side=>dist(port(station,side),attachment)<1e-5));
+    if(exact.length)return exact;
+    if(dist(attachment,city)>radius+27.4)return [];
+    const center={x:attachment.x-Math.cos(bearing)*7,z:attachment.z-Math.sin(bearing)*7};
+    return [-1,1].map(side=>make(center,bearing,side)).sort((a,b)=>dist(a,city)-dist(b,city)).filter(fits).slice(0,1);
   }
   function port(station,side,outgoing=true){return {x:station.center.x+Math.cos(station.heading)*7*side,z:station.center.z+Math.sin(station.heading)*7*side,
     heading:station.heading+(side<0?Math.PI:0)+(outgoing?0:Math.PI)};}
-  function ports(station,other,outgoing){
+  function ports(station,other,outgoing,attachment){
     const ends=[port(station,-1,outgoing),port(station,1,outgoing)],junctions=[];
     if(stations.some(item=>item.id===station.id))for(const line of lines){
       if(line.id===station.lineId||!line.stationIds.includes(station.id))continue;
@@ -231,18 +227,21 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     const score=p=>dist(p,other)+Math.abs(angleDelta(p.heading+(outgoing?0:Math.PI),Math.atan2(other.z-p.z,other.x-p.x)))*8;
     // Even a busy station always exposes both physical ends. Junction search
     // must never crowd the back port out of the bounded candidate budget.
+    if(attachment){const choices=[...ends,...junctions],nearest=Math.min(...choices.map(p=>dist(p,attachment)));
+      return choices.filter(p=>dist(p,attachment)<nearest+1e-5).sort((a,b)=>score(a)-score(b));}
     return [...ends,...junctions.sort((a,b)=>score(a)-score(b)).slice(0,8)].sort((a,b)=>score(a)-score(b));
   }
-  function makeLine(id,alignment,from,to,stationIds=[]){
+  function makeLine(id,alignment,from,to,stationIds=[],metadata=true){
     const sampled=sampleAlignmentPoints(alignment,.35),bridges=[];let start=null;
+    const line={id,from,to,ownerId:session.player.ownerId,color:session.player.ownerId,closed:false,alignment,...sampled,
+      bridges,tunnels:[],cuts:[],stationIds,stops:[]};
+    if(!metadata)return line;
     for(let i=0;i<sampled.points.length;i++){
       const p=sampled.points[i],wet=['water','ocean','shore'].includes(surfaceAt(p.x,p.z)?.type)||riverBankDistance(world,p.x,p.z)<2.2;
       if(wet&&start===null)start=Math.max(0,sampled.distances[i]-.6);
       if(start!==null&&(!wet||i===sampled.points.length-1)){const end=Math.min(alignment.length,sampled.distances[i]+.6);
         bridges.push({start,end,entry:sampleAlignment(alignment,start),exit:sampleAlignment(alignment,end)});start=null;}
     }
-    const line={id,from,to,ownerId:session.player.ownerId,color:session.player.ownerId,closed:false,alignment,...sampled,
-      bridges,tunnels:[],cuts:[],stationIds,stops:[]};
     for(const mountain of world.mountains??[]){
       if(!line.points.some(p=>dist(p,mountain)<mountain.radius+CLEARANCES.cuttingHalfWidth+1))continue;
       const cuts=intervalsFor(line,p=>mountainFootprintDistance(mountain,p.x,p.z)-CLEARANCES.cuttingHalfWidth);
@@ -262,37 +261,56 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     }
     line.cuts.sort((a,b)=>a.start-b.start);line.tunnels.sort((a,b)=>a.start-b.start);return line;
   }
-  function makeSpine(station){return makeLine(station.lineId,combineAlignments([straightSegment(port(station,-1),port(station,1),SETTLEMENT_RAILWAY.railY)]),station.cityId,station.cityId,[station.id]);}
-  function findPlan(from,to,placements,{waypoints=[]}={}){
-    const occupied=obstacles(placements),a=stationOptions(from,waypoints[0]??to,occupied),b=stationOptions(to,waypoints.at(-1)??from,occupied);
-    if(!a.length||!b.length)return {code:'station-blocked',reason:'No clear station site near this city',blockedCityId:!a.length?from.id:to.id};
+  function makeSpine(station,metadata=true){return makeLine(station.lineId,combineAlignments([straightSegment(port(station,-1),port(station,1),SETTLEMENT_RAILWAY.railY)]),station.cityId,station.cityId,[station.id],metadata);}
+  function findGeometry(from,to,occupied,options){
+    const {waypoints=[],attachments={}}=options,a=stationOptions(from,to,occupied,attachments.from),b=stationOptions(to,from,occupied,attachments.to);
+    const blocked=(code,reason,extra={})=>({code,reason,lines:[],stations:[],handles:routeHandles(from,to,null,options),waypoints:copy(waypoints),attachments:copy(attachments),waypointCount:waypointCount(from,to,options.controlCount),...extra});
+    if(!a.length||!b.length)return blocked('station-blocked','Keep the platform near this city on clear level land',{blockedCityId:!a.length?from.id:to.id});
     const attempts=[];
     for(const sa of a)for(const sb of b){
       if(dist(sa,sb)<sa.radius+sb.radius+1)continue;
       if(!boxSamples(sa,p=>pointDistance(sb,p)>.3)||!boxSamples(sb,p=>pointDistance(sa,p)>.3))continue;
-      for(const start of ports(sa,waypoints[0]??sb.center,true))for(const end of ports(sb,waypoints.at(-1)??sa.center,false)){
+      for(const start of ports(sa,waypoints[0]??sb.center,true,attachments.from))for(const end of ports(sb,waypoints.at(-1)??sa.center,false,attachments.to)){
         const points=[start,...waypoints,end],length=points.slice(1).reduce((sum,p,i)=>sum+dist(points[i],p),0);
         const score=length+Math.abs(angleDelta(start.heading,Math.atan2(points[1].z-start.z,points[1].x-start.x)))*7+(sa.score??0)+(sb.score??0);
         attempts.push({sa,sb,start,end,score});
       }
     }
     attempts.sort((a,b)=>a.score-b.score);let chosen=null;
-    for(const attempt of attempts.slice(0,160)){
-      attempt.allowed=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end]);
+    for(const attempt of attempts.slice(0,24)){
+      attempt.allowed=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end],false);
       let route;
       if(waypoints.length){try{route=createAlignment(attempt.start,attempt.end,{radius:SETTLEMENT_RAILWAY.minRadius,y:SETTLEMENT_RAILWAY.railY,waypoints,isAllowed:attempt.allowed});}catch{continue;}}
       else route=direct(attempt.start,attempt.end,attempt.allowed);
       const score=route?route.length+dist(attempt.sa,from)+dist(attempt.sb,to):Infinity;
-      if(route&&acceptable(route,attempt.allowed)&&!selfIntersects(route)&&(!chosen||score<chosen.finalScore)){chosen={...attempt,route,finalScore:score};}
+      if(route&&(!chosen||score<chosen.finalScore)&&acceptable(route,attempt.allowed)&&!selfIntersects(route)){chosen={...attempt,route,finalScore:score};}
     }
-    if(!chosen&&!waypoints.length)for(const attempt of attempts.slice(0,5)){
-      attempt.allowed??=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end]);
-      const route=planRoute(attempt.start,attempt.end,attempt.allowed);if(route&&!selfIntersects(route)){chosen={...attempt,route};break;}
+    if(!chosen&&!waypoints.length)for(const attempt of attempts.slice(0,3)){
+      attempt.allowed??=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end],false);
+      const dx=attempt.end.x-attempt.start.x,dz=attempt.end.z-attempt.start.z,length=Math.hypot(dx,dz);
+      // A small deterministic set of bypasses replaces an unbounded search on
+      // the input thread. Invalid drafts stay editable instead of stalling.
+      for(const offset of [12,-12,24,-24]){let route;
+        try{route=createAlignment(attempt.start,attempt.end,{radius:SETTLEMENT_RAILWAY.minRadius,y:SETTLEMENT_RAILWAY.railY,
+          waypoints:[{x:(attempt.start.x+attempt.end.x)/2-dz/length*offset,z:(attempt.start.z+attempt.end.z)/2+dx/length*offset}],isAllowed:attempt.allowed});}catch{continue;}
+        if(acceptable(route,attempt.allowed)&&!selfIntersects(route)){chosen={...attempt,route};break;}
+      }if(chosen)break;
     }
-    if(!chosen)return {code:'route-blocked',reason:waypoints.length?'Give the curve more room around buildings':'No clear railway route between these cities',waypoints,handles:copy(waypoints)};
+    if(!chosen)return blocked('route-blocked',waypoints.length?'Give the curve more room around buildings':'No clear railway route between these cities');
     const newStations=[chosen.sa,chosen.sb].filter(station=>!stations.some(existing=>existing.id===station.id));
-    const branch=makeLine(`rail-link:${keyFor(from.id,to.id)}`,chosen.route,from.id,to.id,[chosen.sa.id,chosen.sb.id]);
-    const newLines=[...newStations.map(makeSpine),branch],clearedTreeIds=[],clearedPlacements=[];
+    const branch=makeLine(`rail-link:${keyFor(from.id,to.id)}`,chosen.route,from.id,to.id,[chosen.sa.id,chosen.sb.id],false);
+    return {code:'ready',reason:'Connect these cities',lines:[...newStations.map(station=>makeSpine(station,false)),branch],stations:newStations,
+      fromStationId:chosen.sa.id,toStationId:chosen.sb.id,fromJunction:chosen.start.junction??null,toJunction:chosen.end.junction??null,
+      handles:routeHandles(from,to,chosen.route,options,chosen.start,chosen.end),waypoints:copy(waypoints),attachments:copy(attachments),waypointCount:waypointCount(from,to,options.controlCount)};
+  }
+  function findPlan(geometry,placements,occupied){
+    if(geometry.code!=='ready')return geometry;
+    const newStations=geometry.stations,branch=geometry.lines.at(-1),start=sampleAlignment(branch.alignment,0),end=sampleAlignment(branch.alignment,branch.length);
+    const allowed=allowedWith([...occupied.items,...placements.filter(item=>PROTECTED.has(item.kind))],newStations,[start,end]);
+    if(newStations.some(station=>!boxSamples({...station,width:7,depth:3},dry))||geometry.lines.some(line=>!acceptable(line.alignment,allowed))){
+      return {...geometry,code:'route-blocked',reason:'Keep the line inside the world and platforms on clear level land'};
+    }
+    const newLines=geometry.lines.map(line=>makeLine(line.id,line.alignment,line.from,line.to,line.stationIds)),clearedTreeIds=[],clearedPlacements=[];
     for(const item of placements){
       if(PROTECTED.has(item.kind)||session.shared.removedTreeIds.has(placementId(item))||clearedPlacementIds.has(placementId(item)))continue;
       const intersectsLine=newLines.some(line=>line.points.some(point=>pointDistance(item,point)<SETTLEMENT_RAILWAY.halfWidth+.25));
@@ -308,36 +326,42 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
         // The path router treats civic lots as rectangles; stations have the
         // same rectangular footprint, rather than a large circular exclusion.
         const removedScenery=new Set(clearedPlacements.map(placementId));
-        const path=planSettlementPath(world,{...station,kind:'civic',doorOffset:1.25},home,{placements:[...occupied,...placements.filter(item=>!removedScenery.has(placementId(item)))],removedTreeIds:removed,surfaceAt,maxNodes:900});
+        const path=planSettlementPath(world,{...station,kind:'civic',doorOffset:1.25},home,{placements:[...occupied.items,...placements.filter(item=>!removedScenery.has(placementId(item)))],removedTreeIds:removed,surfaceAt,maxNodes:900});
         if(path){newPaths.push({...path,id:`rail-access:${station.cityId}`,cityId:station.cityId,ownerId:station.ownerId});break;}
       }
     }
-    return {code:'ready',reason:'Connect these cities',lines:newLines,stations:newStations,paths:newPaths,
-      fromStationId:chosen.sa.id,toStationId:chosen.sb.id,fromJunction:chosen.start.junction??null,toJunction:chosen.end.junction??null,
-      clearedTreeIds,clearedPlacements,clearedPlacementIds:clearedPlacements.map(placementId),handles:routeHandles(chosen.route),waypoints:copy(waypoints)};
+    return {...geometry,lines:newLines,paths:newPaths,clearedTreeIds,clearedPlacements,clearedPlacementIds:clearedPlacements.map(placementId)};
   }
-  function evaluate(fromCityId,toCityId,options={}){
+  function resultFor(fromCityId,toCityId,options={},provisional=false){
     const route=routeOptions(options);
     const cities=allCities(),from=cities.find(city=>city.id===fromCityId),to=cities.find(city=>city.id===toCityId);
-    const base={fromCityId,toCityId,cost:SETTLEMENT_RAILWAY.cost,affordable:session.player.gold>=SETTLEMENT_RAILWAY.cost,lines:[],stations:[],paths:[],clearedTreeIds:[],clearedPlacementIds:[],clearedPlacements:[],handles:[],waypoints:route.waypoints};
+    const base={fromCityId,toCityId,cost:SETTLEMENT_RAILWAY.cost,affordable:session.player.gold>=SETTLEMENT_RAILWAY.cost,provisional,
+      lines:[],stations:[],paths:[],clearedTreeIds:[],clearedPlacementIds:[],clearedPlacements:[],handles:[],waypoints:route.waypoints,attachments:route.attachments};
     const fail=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(!from||!to||from===to)return fail('invalid-city','Choose two different cities');
     if(!from.playerOwned&&!to.playerOwned)return fail('not-your-city','One end must be your city');
     if(connections.some(connection=>connection.key===keyFor(from.id,to.id)))return fail('already-connected','These cities already have a railway');
-    if(route.waypoints.length>32||route.waypoints.some(p=>!finite(p)))return fail('invalid-waypoints','Choose a valid curve');
+    base.waypointCount=waypointCount(from,to,route.controlCount);base.handles=routeHandles(from,to,null,route);
+    if(route.controlCount!==undefined&&!validControlCount(route.controlCount)||route.waypoints.length&&route.waypoints.length!==base.waypointCount||route.waypoints.some(p=>!finite(p))||Object.values(route.attachments).some(p=>!finite(p)))return fail('invalid-waypoints','Keep the route control points and choose a valid curve');
     // Timber rewards and the day clock do not change rail feasibility. Only
     // occupied buildings / existing rail geometry invalidate an expensive plan.
     const cacheKey=geometryKey(from.id,to.id,route);
-    if(cached?.key!==cacheKey){cached={key:cacheKey,plan:findPlan(from,to,scenery(),route)};}
-    const plan=cached.plan;
+    if(!provisional&&cached?.key===cacheKey){const plan=cached.plan;
+      return plan.code==='ready'?{...base,...copy(plan),siteValid:true,valid:base.affordable,code:base.affordable?'ready':'not-enough-gold',reason:base.affordable?plan.reason:'A railway costs 5 gold'}:
+        {...base,...copy(plan),siteValid:false,valid:false};}
+    const occupied=obstacles();
+    if(geometryCache?.key!==cacheKey)geometryCache={key:cacheKey,plan:findGeometry(from,to,occupied,route)};
+    const plan=provisional?geometryCache.plan:findPlan(geometryCache.plan,scenery(),occupied);
+    if(!provisional)cached={key:cacheKey,plan};
     if(plan.code!=='ready')return {...base,...plan,valid:false,siteValid:false};
     return {...base,...copy(plan),siteValid:true,valid:base.affordable,code:base.affordable?'ready':'not-enough-gold',reason:base.affordable?plan.reason:'A railway costs 5 gold'};
   }
-  function geometryKey(fromCityId,toCityId,options={}){allCities();return `${fromCityId}>${toCityId}:${revision}:${session.buildings.map(item=>item.id).join('|')}:${JSON.stringify(routeOptions(options).waypoints)}`;}
+  const preview=(from,to,options={})=>resultFor(from,to,options,true),evaluate=(from,to,options={})=>resultFor(from,to,options,false);
+  function geometryKey(fromCityId,toCityId,options={}){const cities=allCities();return `${fromCityId}>${toCityId}:${revision}:${cities.map(city=>`${city.id}:${city.x}:${city.z}:${city.houseCount}`).join('|')}:${obstacles().key}:${JSON.stringify(routeOptions(options))}`;}
   function adoptPreview(fromCityId,toCityId,result,key,options={}){
-    if(key!==geometryKey(fromCityId,toCityId,options)||result?.fromCityId!==fromCityId||result?.toCityId!==toCityId)return false;
+    if(result?.provisional||key!==geometryKey(fromCityId,toCityId,options)||result?.fromCityId!==fromCityId||result?.toCityId!==toCityId)return false;
     const plan={code:result.siteValid?'ready':result.code,reason:result.siteValid?'Connect these cities':result.reason};
-    for(const field of ['lines','stations','paths','fromStationId','toStationId','fromJunction','toJunction','clearedTreeIds','clearedPlacements','clearedPlacementIds','handles','waypoints','blockedCityId'])if(field in result)plan[field]=copy(result[field]);
+    for(const field of ['lines','stations','paths','fromStationId','toStationId','fromJunction','toJunction','clearedTreeIds','clearedPlacements','clearedPlacementIds','handles','waypoints','attachments','waypointCount','blockedCityId'])if(field in result)plan[field]=copy(result[field]);
     cached={key,plan};return true;
   }
   function build(fromCityId,toCityId,{requireCached=false,...options}={}){
@@ -356,6 +380,6 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     for(const line of result.lines)reservations.push({id:line.id,kind:'rail-corridor',width:SETTLEMENT_RAILWAY.halfWidth*2+.3,points:line.points});
     revision++;cached=null;const built={ok:true,...result,connection:copy(connection),totalGold:payment.totalGold,revision};onBuild?.(built);return built;
   }
-  return {evaluate,build,geometryKey,adoptPreview,get sceneryCatalog(){return catalog;},get revision(){return revision;},get cities(){return allCities();},get stations(){return copy(stations);},get lines(){return copy(lines);},get paths(){return copy(paths);},get reservations(){return copy(reservations);},
+  return {preview,evaluate,build,geometryKey,adoptPreview,get sceneryCatalog(){return catalog;},get revision(){return revision;},get cities(){return allCities();},get stations(){return copy(stations);},get lines(){return copy(lines);},get paths(){return copy(paths);},get reservations(){return copy(reservations);},
     snapshot(){const cities=allCities();return {revision,cities,stations:copy(stations),lines:copy(lines),paths:copy(paths),connections:copy(connections),reservations:copy(reservations),clearedPlacementIds:[...clearedPlacementIds]};}};
 }
