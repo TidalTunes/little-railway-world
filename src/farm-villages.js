@@ -31,13 +31,19 @@ const villageLayouts=[
   {homes:[[-4.6,-6.2],[4.1,-2.9],[-4.5,1.3]],civic:[4.2,2.3]},
   {homes:[[-4.6,-3.9],[-.3,-7.6],[4.5,-4.5]],civic:[4.4,1.1]},
 ];
+const tradingLayouts=[
+  {homes:[[-4.3,-12.8],[4.2,-12.2],[-4.5,-7.2],[4.4,-7.4],[-4.2,-1.5],[4.3,-2.0]],civic:[-4.3,3.0]},
+  {homes:[[-4.1,-9.8],[4.1,-9.3],[-4.3,-5.2],[4.3,-4.8],[-4.1,-.6],[4.2,-.2]],civic:[-4.3,4.3]},
+  {homes:[[-4.6,-12.2],[.1,-15.1],[4.5,-11.8],[-4.6,-6.7],[4.5,-6.4],[-4.3,-1.1]],civic:[4.4,.7]},
+];
 
 function villageAt(world,region,center,bearing,index){
   const random=randomFor(`${world.seed}:${region.id}:village-layout`),cityId=`farm-village:${region.id}`;
-  const variation=Math.floor(randomFor(`${world.seed}:village-variety`)()*15),layoutIndex=(variation+index)%villageLayouts.length,layout=villageLayouts[layoutIndex];
+  const trading=world.gameplay.economy==='loops',layouts=trading?tradingLayouts:villageLayouts;
+  const variation=Math.floor(randomFor(`${world.seed}:village-variety`)()*15),layoutIndex=(variation+index)%layouts.length,layout=layouts[layoutIndex];
   const cos=Math.cos(bearing),sin=Math.sin(bearing),at=(x,z)=>({x:center.x+x*cos+z*sin,y:0,z:center.z-x*sin+z*cos});
   const jitter=()=>random()*.44-.22;
-  const lanes=[[-.4+jitter(),-5.2],[.35+jitter(),-1],[-.55+jitter(),7.7],[.4+jitter(),12.5]];
+  const lanes=[...(trading?[[.2+jitter(),-12.4],[-.3+jitter(),-8.0]]:[]),[-.4+jitter(),-5.2],[.35+jitter(),-1],[-.55+jitter(),7.7],[.4+jitter(),12.5]];
   const junctions=lanes.map(([x,z],i)=>({id:`${cityId}:lane:${i}`,...at(x,z)}));
   const frontages=[];
   const facing=(position,target)=>Math.atan2(target.x-position.x,target.z-position.z);
@@ -63,16 +69,17 @@ function villageAt(world,region,center,bearing,index){
   const families=[['wheat','pasture','fallow'],['pasture','wheat','orchard'],['vegetables','wheat','pasture']];
   const family=families[Math.floor(random()*families.length)],farms=[],destinations=[];
   for(const [i,side]of [-1,1].entries()){
-    const width=10.6+random()*2.2,depth=9.5+random()*2.6,z=10.5+random()*1.8;
+    const width=(trading?8.4:10.6)+random()*2.2,depth=(trading?8:9.5)+random()*(trading?1.4:2.6),z=(trading?12.6:10.5)+random()*1.8;
     const farm=createFarmEstate({id:`${cityId}:farm:${i+1}`,districtId:`${cityId}:farm:${i+1}`,clusterId:cityId,
       ...at(side*(width/2+2.9),z),width,depth,rotation:bearing+(random()-.5)*.11,family,seed:`${world.seed}:${cityId}:farm:${i}`});
-    const stop={...junctions[i+2],id:`${cityId}:field-gate:${i+1}`,cityId,kind:'farm',farmId:farm.id,lookX:farm.x,lookZ:farm.z};
-    junctions[i+2]=stop;farms.push(farm);destinations.push(stop);
+    const junctionIndex=junctions.length-2+i;
+    const stop={...junctions[junctionIndex],id:`${cityId}:field-gate:${i+1}`,cityId,kind:'farm',farmId:farm.id,lookX:farm.x,lookZ:farm.z};
+    junctions[junctionIndex]=stop;farms.push(farm);destinations.push(stop);
   }
   for(let i=1;i<junctions.length;i++)path(`lane-${i}`,junctions[i-1],junctions[i],[junctions[i-1],junctions[i]]);
-  const cityCenter=houses.reduce((sum,home)=>({x:sum.x+home.x/3,z:sum.z+home.z/3}),{x:0,z:0});
+  const cityCenter=houses.reduce((sum,home)=>({x:sum.x+home.x/houses.length,z:sum.z+home.z/houses.length}),{x:0,z:0});
   const radius=Math.max(...houses.map(home=>distance(home,cityCenter)+home.radius));
-  const city={id:cityId,...cityCenter,ownerId:FARM_VILLAGE_OWNER,level:1,houseCount:3,houseIds:houses.map(home=>home.id),radius,bot:true,layout:layoutIndex};
+  const city={id:cityId,...cityCenter,ownerId:FARM_VILLAGE_OWNER,level:trading?2:1,houseCount:houses.length,houseIds:houses.map(home=>home.id),radius,bot:true,layout:layoutIndex};
   return {houses,buildings:[civic],paths,cities:[city],farms,destinations};
 }
 

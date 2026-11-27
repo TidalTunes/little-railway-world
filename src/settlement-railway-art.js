@@ -130,6 +130,34 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     cityOutline:circleBatch(parent,cityCircleOutline,2,8),cities:circleBatch(parent,cityCircleInk,2,9),
     rangeOutline:circleBatch(parent,rangeCircleOutline,1,6),range:circleBatch(parent,rangeCircleInk,1,7),
   }));
+  const directed=world.gameplay?.economy==='loops';
+  const arrowGeometry=new THREE.BufferGeometry();arrowGeometry.setAttribute('position',new THREE.Float32BufferAttribute([0,0,.85,-.58,0,-.55,0,0,-.18,0,0,.85,0,0,-.18,.58,0,-.55],3));arrowGeometry.computeVertexNormals();
+  const arrowMaterial=new THREE.MeshBasicMaterial({name:'railway-direction-arrows',color:'#f4e6b0',depthWrite:false,side:THREE.DoubleSide,toneMapped:false,fog:false});
+  const previewArrowMaterial=arrowMaterial.clone();previewArrowMaterial.depthTest=false;previewArrowMaterial.name='railway-preview-direction-arrows';
+  for(const [material,pixels] of [[arrowMaterial,4.2],[previewArrowMaterial,4.8]]){
+    material.onBeforeCompile=shader=>{shader.uniforms.arrowViewport=previewViewport;shader.uniforms.arrowPixels={value:pixels};
+      shader.vertexShader='uniform float arrowViewport; uniform float arrowPixels;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`vec4 arrowCenter = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        float arrowUnit = 2.0 * abs(arrowCenter.w) / (arrowViewport * abs(projectionMatrix[1][1]));
+        vec3 transformed = position * max(1.0, arrowPixels * arrowUnit);`);};
+    material.customProgramCacheKey=()=>`railway-direction-v1:${pixels}`;
+  }
+  applyMapNetworkVisibility(arrowMaterial,visibility);
+  function arrowPool(parent,preview=false,capacity=2048){const batch=new THREE.InstancedMesh(arrowGeometry,preview?previewArrowMaterial:arrowMaterial,capacity);batch.name=preview?'railway-preview-direction-arrows':'railway-direction-arrows';batch.count=0;batch.frustumCulled=false;batch.renderOrder=preview?18:11;parent.add(batch);return batch;}
+  const builtArrows=[arrowPool(root),arrowPool(mapRoot)],draftArrows=[arrowPool(ghost,true),arrowPool(mapGhost,true)];
+  function updateArrows(batches,lines){
+    const capacity=directed?(lines??[]).filter(line=>line.length>0&&!line.previewOnly).reduce((sum,line)=>sum+Math.max(1,Math.floor(line.length/12)),0):0;
+    for(let layer=0;layer<batches.length;layer++){let batch=batches[layer];let index=0;
+      if(capacity>batch.instanceMatrix.count){const previous=batch;batch=arrowPool(previous.parent,previous.material===previewArrowMaterial,2**Math.ceil(Math.log2(capacity)));batches[layer]=batch;previous.removeFromParent();previous.dispose();}
+      if(directed)for(const line of lines??[]){if(!(line.length>0)||line.previewOnly)continue;
+        const count=Math.max(1,Math.floor(line.length/12));for(let i=0;i<count;i++){
+          const p=sampleLine(line,line.length*(i+.5)/count),heading=Math.atan2(p.tangent?.z??0,p.tangent?.x??1);
+          rigidSurfacePoseMatrix(world,p.x,layer?.86:(p.y??.42)+.12,p.z,Math.PI/2-heading,pose);batch.setMatrixAt(index++,pose);
+        }
+      }
+      batch.count=index;batch.visible=index>0;batch.instanceMatrix.needsUpdate=true;batch.boundingSphere=null;
+    }
+  }
   const stats={lines:0,stations:0,detailBatches:0,mapBatches:0,rebuilds:0,previewBufferAllocations:0,previewUpdates:0};
   let disposed=false,revision=null,previewResult=null,previewKey='',previewVisible=false;
   let handlePoints=[],handleCount=0,handleIndex=-1,handlesVisible=false;
@@ -274,6 +302,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     for(const line of lines){const points=pointsFor(line);mapStrip(points,.84,.73,mapRim);mapStrip(points,.42,.74,mapInk);}
     if(mapNetwork.children.length)consolidate(mapNetwork);
     for(const mesh of mapNetwork.children){mesh.name='railway-map-stroke';mesh.renderOrder=10;mesh.castShadow=mesh.receiveShadow=false;}
+    updateArrows(builtArrows,lines);
     stats.lines=lines.length;stats.stations=stations.length;stats.detailBatches=network.children.length;stats.mapBatches=mapNetwork.children.length;stats.rebuilds++;
     revision=snapshot.revision??(revision??0)+1;network.updateMatrixWorld(true);return true;
   }
@@ -351,7 +380,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     // connects the snapped endpoints and the dashed centre remains editable.
     activeGuidePoints.length=guideCount;if(guideCount>1)previewLines.push(activeGuidePoints);
     updateRoutes();updateRoutes(invalidLines,'invalid');updateStations(outOfRange?[]:result?.stations);
-    updateGuide(guideSamples,guideCount);
+    updateGuide(guideSamples,guideCount);updateArrows(draftArrows,outOfRange?[]:result?.lines);
   }
   return{root,mapRoot,sync,preview,stats,get revision(){return revision;},get meshes(){return network.children.filter(mesh=>mesh.isMesh&&mesh.material.userData.sceneStyle!=='window');},
     update({mapBlend=0,camera,viewportHeight=800,zoom=1}={}){
@@ -372,7 +401,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
       ghost.visible=mapGhost.visible=previewVisible&&!!previewResult&&previewResult.code!=='out-of-range';showCircles();
     },
     dispose(){
-      if(disposed)return;disposed=true;clear(network,{materials:true});clear(mapNetwork);
+      if(disposed)return;disposed=true;for(const batch of [...builtArrows,...draftArrows])batch.dispose();arrowGeometry.dispose();arrowMaterial.dispose();previewArrowMaterial.dispose();clear(network,{materials:true});clear(mapNetwork);
       for(const pool of previewPools){pool.geometry.dispose();pool.invalidGeometry.dispose();pool.guideGeometry.dispose();pool.group.clear();}stationGeometry.dispose();stationEdges.dispose();
       for(const pool of circlePools)for(const batch of Object.values(pool))batch.dispose();circleGeometry.dispose();
       for(const layers of handleBatches)for(const batch of layers)batch.dispose();dotGeometry.dispose();dotMaterial.dispose();

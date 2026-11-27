@@ -7,6 +7,7 @@ import {applySceneStyle} from './scene-style.js';
 import {rigidSurfacePoseMatrix} from './world-surface.js';
 
 export const TREE_FALL_DURATION=.78;
+export const TREE_REGROW_DURATION=1.2;
 export const treeVariant=p=>({pine:Math.floor((p.scale??1)*7)%3,round:3,gold:4,light:5,broadleaf:6,acacia:7,birch:8}[p.variant]??0);
 export const treeId=p=>p.id??`tree:${p.x}:${p.y??0}:${p.z}`;
 
@@ -18,7 +19,7 @@ function installTreeRaycast(mesh,entries){
   const scratch=new THREE.Mesh(mesh.geometry,mesh.material),hits=[],candidates=new Set();
   mesh.geometry.computeBoundingBox();
   for(let index=0;index<entries.length;index++){
-    mesh.getMatrixAt(index,instance);bounds.copy(mesh.geometry.boundingBox).applyMatrix4(instance);
+    instance.copy(entries[index].base).scale(new THREE.Vector3().setScalar(entries[index].placement.scale??1));bounds.copy(mesh.geometry.boundingBox).applyMatrix4(instance);
     for(let x=Math.floor(bounds.min.x/cellSize);x<=Math.floor(bounds.max.x/cellSize);x++)
       for(let y=Math.floor(bounds.min.y/cellSize);y<=Math.floor(bounds.max.y/cellSize);y++)
         for(let z=Math.floor(bounds.min.z/cellSize);z<=Math.floor(bounds.max.z/cellSize);z++){
@@ -51,7 +52,7 @@ function installTreeRaycast(mesh,entries){
 /** One template per species, one instanced draw per species in each resident
  * cell. All geometry comes from the same tree art as the unchanged art world. */
 export function createMutableTrees(world,{onChange=()=>{}}={}){
-  const templates=new Map(),chunks=new Map(),records=new Map(),removed=new Set(),falling=new Set();
+  const templates=new Map(),chunks=new Map(),records=new Map(),removed=new Set(),falling=new Set(),growing=new Set();
   const matrix=new THREE.Matrix4(),rotation=new THREE.Matrix4(),scale=new THREE.Vector3(),axis=new THREE.Vector3();
   let revision=0,disposed=false;
   function templateFor(variant){
@@ -70,9 +71,9 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
     const byVariant=new Map(),meshes=[],materials=[],entries=[],bounds=new THREE.Box3();
     const depth=createDetailDepthMaterial(reveal);let bytes=0,triangles=0;
     for(const placement of placements){
-      const id=treeId(placement);if(removed.has(id)||records.has(id))continue;
+      const id=treeId(placement);if(records.has(id))continue;
       const variant=treeVariant(placement);if(!byVariant.has(variant))byVariant.set(variant,[]);
-      byVariant.get(variant).push({id,placement,active:true,elapsed:0});
+      byVariant.get(variant).push({id,placement,active:!removed.has(id),elapsed:0});
     }
     for(const [variant,items]of byVariant){
       const template=templateFor(variant),material=applyDetailReveal(template.material.clone(),reveal);
@@ -90,6 +91,7 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
       }
       mesh.computeBoundingBox();mesh.boundingBox.expandByScalar(padding);
       mesh.boundingSphere=mesh.boundingBox.getBoundingSphere(new THREE.Sphere());bounds.union(mesh.boundingBox);
+      for(const entry of items)if(!entry.active)mesh.setMatrixAt(entry.index,matrix.copy(entry.base).scale(scale.setScalar(0)));
       installTreeRaycast(mesh,items);
       bytes+=mesh.instanceMatrix.array.byteLength;
       triangles+=(template.geometry.index?.count??template.geometry.attributes.position.count)/3*items.length;
@@ -98,7 +100,7 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
   }
   function removeChunk(key){
     const chunk=chunks.get(key);if(!chunk)return;
-    for(const entry of chunk.entries){records.delete(entry.id);falling.delete(entry);}
+    for(const entry of chunk.entries){records.delete(entry.id);falling.delete(entry);growing.delete(entry);}
     for(const mesh of chunk.meshes)mesh.dispose();
     chunk.materials.forEach(material=>material.dispose());chunk.depth.dispose();chunk.root.removeFromParent();chunks.delete(key);
   }
@@ -107,7 +109,7 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
   }
   function fellTree(id,{direction={x:1,z:0}}={}){
     const entry=records.get(id);if(disposed||!entry?.active)return false;
-    deactivate(entry);entry.elapsed=0;
+    deactivate(entry);growing.delete(entry);entry.elapsed=0;
     // Express the requested direction in the tree's original tangent frame.
     // Its authored yaw stays in base; the pivot is always the trunk root.
     const length=Math.hypot(direction.x??0,direction.z??0)||1,dx=(direction.x??0)/length,dz=(direction.z??0)/length;
@@ -120,13 +122,24 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
     if(disposed||removed.has(id))return false;
     const entry=records.get(id);removed.add(id);
     if(entry){
-      entry.active=false;falling.delete(entry);entry.mesh.setMatrixAt(entry.index,matrix.copy(entry.base).scale(scale.setScalar(0)));
+      entry.active=false;falling.delete(entry);growing.delete(entry);entry.mesh.setMatrixAt(entry.index,matrix.copy(entry.base).scale(scale.setScalar(0)));
+      entry.mesh.instanceMatrix.addUpdateRange(entry.index*16,16);entry.mesh.instanceMatrix.needsUpdate=true;
+    }
+    changed();return true;
+  }
+  function restoreTree(id,{animate=true}={}){
+    if(disposed||!removed.delete(id))return false;
+    const entry=records.get(id);
+    if(entry){
+      falling.delete(entry);entry.active=true;entry.elapsed=0;
+      if(animate)growing.add(entry);else growing.delete(entry);
+      entry.mesh.setMatrixAt(entry.index,matrix.copy(entry.base).scale(scale.setScalar((entry.placement.scale??1)*(animate?.12:1))));
       entry.mesh.instanceMatrix.addUpdateRange(entry.index*16,16);entry.mesh.instanceMatrix.needsUpdate=true;
     }
     changed();return true;
   }
   function update(dt){
-    if(disposed||!falling.size)return;
+    if(disposed||!falling.size&&!growing.size)return;
     const dirty=new Set();
     for(const entry of falling){
       entry.elapsed=Math.min(TREE_FALL_DURATION,entry.elapsed+Math.max(0,dt));
@@ -136,15 +149,22 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
       entry.mesh.setMatrixAt(entry.index,matrix);entry.mesh.instanceMatrix.addUpdateRange(entry.index*16,16);dirty.add(entry.mesh);
       if(entry.elapsed>=TREE_FALL_DURATION)falling.delete(entry);
     }
+    for(const entry of growing){
+      entry.elapsed=Math.min(TREE_REGROW_DURATION,entry.elapsed+Math.max(0,dt));
+      const progress=THREE.MathUtils.smoothstep(entry.elapsed,0,TREE_REGROW_DURATION);
+      matrix.copy(entry.base).scale(scale.setScalar((entry.placement.scale??1)*(.12+.88*progress)));
+      entry.mesh.setMatrixAt(entry.index,matrix);entry.mesh.instanceMatrix.addUpdateRange(entry.index*16,16);dirty.add(entry.mesh);
+      if(entry.elapsed>=TREE_REGROW_DURATION)growing.delete(entry);
+    }
     for(const mesh of dirty)mesh.instanceMatrix.needsUpdate=true;
   }
   function dispose(){
     if(disposed)return;disposed=true;
     for(const key of [...chunks.keys()])removeChunk(key);
     for(const template of templates.values()){template.geometry.dispose();template.material.dispose();}
-    templates.clear();removed.clear();records.clear();falling.clear();
+    templates.clear();removed.clear();records.clear();falling.clear();growing.clear();
   }
-  return {addChunk,removeChunk,fellTree,removeTree,update,dispose,removed,
+  return {addChunk,removeChunk,fellTree,removeTree,restoreTree,update,dispose,removed,
     get revision(){return revision;},get activeFalls(){return falling.size;},get templateCount(){return templates.size;},
     get meshes(){return [...chunks.values()].flatMap(chunk=>chunk.meshes);}};
 }

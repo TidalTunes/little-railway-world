@@ -10,7 +10,7 @@ import {createSettlementEconomy} from '../src/settlement-economy.js';
 import {createEconomicBots} from '../src/economic-bots.js';
 
 test('island bot economies form, trade and grow under ordinary costs with conserved resources',()=>{
-  const world=generateWorld(createSettlementWorld(),{detail:'network'});world.gameplay.economy=true;
+  const world=generateWorld(createSettlementWorld({economy:true}),{detail:'network'});
   preparePlayerBotScenery(world,generateWorldRegion);
   const bots=[];let infrastructure={revision:0,buildings:[],paths:[],corridors:[]};
   const session=createSettlementSession(world,{getActors:()=>bots.map(bot=>bot.position),getInfrastructure:()=>infrastructure});

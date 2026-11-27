@@ -1,3 +1,4 @@
+import {createLoopBots} from './loop-bots.js';
 export const ECONOMIC_BOT_PROFILES=Object.freeze({
   merchant:Object.freeze({industry:'lumber',targetHouses:6,markets:['farm','workshop','lumber'],goldReserve:2}),
   industrialist:Object.freeze({industry:'workshop',targetHouses:9,markets:['lumber','farm','workshop'],goldReserve:2}),
@@ -9,7 +10,9 @@ const finite=point=>Number.isFinite(point?.x)&&Number.isFinite(point?.z);
 /** Economic decisions issue the same paid commands as a player. Travellers
  * still walk/chop/build in player-bots; this coordinator only sets their work
  * policy and buys useful infrastructure, at a bounded cadence. */
-export function createEconomicBots(world,{session,bots,railways,economy,onRailBuild=()=>{},planRoute}={}){
+export function createEconomicBots(world,options={}){
+  if(world.gameplay?.economy==='loops')return createLoopBots(world,options);
+  const {session,bots,railways,economy,onRailBuild=()=>{},planRoute}=options;
   const entries=(Array.isArray(bots)?bots:bots?.entries??[]).map((entry,index)=>{
     const bot=entry.bot??entry,game=entry.game??bot.game,config=entry.config??bot.config??{};
     const name=ECONOMIC_BOT_PROFILES[config.economicProfile??config.profile]?config.economicProfile??config.profile:names[index%names.length];

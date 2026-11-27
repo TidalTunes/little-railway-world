@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import {createMutableTrees,TREE_FALL_DURATION} from '../src/mutable-trees.js';
+import {createMutableTrees,TREE_FALL_DURATION,TREE_REGROW_DURATION} from '../src/mutable-trees.js';
 import {createWorldRenderer,compileDetailPacket} from '../src/world-renderer.js';
 import {rigidSurfacePoseMatrix} from '../src/world-surface.js';
 import {tree} from '../src/assets.js';
@@ -63,7 +63,8 @@ test('resident slots share templates, but releases dispose per-chunk resources a
   for(const chunk of [first,second]){chunk.materials[0].addEventListener('dispose',()=>materials++);chunk.meshes[0].addEventListener('dispose',()=>instances++);chunk.depth.addEventListener('dispose',()=>depths++);}
   manager.fellTree('one');manager.removeChunk('first');assert.equal(geometries,0);assert.equal(materials,1);assert.equal(instances,1);assert.equal(depths,1);
   assert.equal(manager.activeFalls,0);assert.ok(manager.removed.has('one'));
-  const reloaded=manager.addChunk('first',parent,[placement('one',24)]);assert.equal(reloaded.meshes.length,0);
+  const reloaded=manager.addChunk('first',parent,[placement('one',24)]);assert.equal(reloaded.meshes.length,1);
+  const hidden=new THREE.Matrix4();reloaded.meshes[0].getMatrixAt(0,hidden);assert.equal(new THREE.Vector3().setFromMatrixScale(hidden).length(),0);
   assert.equal(manager.removeTree('unloaded-save-tree'),true);assert.equal(manager.removeTree('unloaded-save-tree'),false);
   manager.dispose();manager.dispose();assert.equal(geometries,1);assert.equal(materials,2);assert.equal(instances,2);assert.equal(depths,2);
   assert.equal(parent.children.length,0);assert.equal(manager.meshes.length,0);
@@ -98,6 +99,31 @@ test('world renderer removes collisions and life records immediately and keeps a
   renderer.updateVisibility(camera,{reducedMotion:true});assert.equal(renderer.lifePlacements.length,0);
   renderer.updateTrees(TREE_FALL_DURATION);
   await load(216);assert.equal(renderer.stats.loadedChunks,1);assert.ok(renderer.getCollisionPlacements().every(p=>p.id==='tree-192'));
-  await load(24);assert.equal(renderer.getCollisionPlacements().length,0);assert.equal(renderer.getTerrainMeshes().length,0);
-  assert.ok(renderer.removedTreeIds.has('tree-0'));renderer.dispose();assert.equal(parent.children.length,0);
+  await load(24);assert.equal(renderer.getCollisionPlacements().length,0);assert.equal(renderer.getTerrainMeshes().length,1);
+  assert.ok(renderer.removedTreeIds.has('tree-0'));
+  assert.equal(renderer.restoreTree('tree-0',{animate:false}),true);assert.equal(renderer.getCollisionPlacements().length,1);
+  renderer.updateVisibility(camera,{reducedMotion:true});assert.equal(renderer.lifePlacements.length,1);
+  await load(216);await load(24);assert.equal(renderer.getCollisionPlacements().length,1,'restored state survives another cache eviction');
+  renderer.dispose();assert.equal(parent.children.length,0);
+});
+
+
+test('regrowth restores the original slot, collision ray index, and exact tree pose after a loaded removal',()=>{
+  const manager=createMutableTrees(flat),parent=new THREE.Group(),p=placement('regrow',0),chunk=manager.addChunk('near',parent,[p]);
+  manager.removeTree(p.id);manager.restoreTree(p.id);manager.update(TREE_REGROW_DURATION);parent.updateMatrixWorld(true);
+  assert.equal(manager.removed.has(p.id),false);assert.equal(manager.restoreTree(p.id),false);
+  const actual=new THREE.Matrix4();chunk.meshes[0].getMatrixAt(0,actual);
+  const expected=rigidSurfacePoseMatrix(flat,p.x,p.y,p.z,p.rotation).scale(new THREE.Vector3().setScalar(p.scale));
+  actual.elements.forEach((n,i)=>close(n,expected.elements[i]));
+  const ray=new THREE.Raycaster(new THREE.Vector3(0,.55,26),new THREE.Vector3(0,0,-1),0,4);
+  assert.ok(ray.intersectObject(chunk.meshes[0]).length>0);manager.dispose();
+});
+
+test('regrowth restores an inactive slot in a newly loaded chunk and persists when that chunk is evicted again',()=>{
+  const manager=createMutableTrees(flat),parent=new THREE.Group(),p=placement('saved');manager.removeTree(p.id);
+  const chunk=manager.addChunk('near',parent,[p]);manager.restoreTree(p.id,{animate:false});parent.updateMatrixWorld(true);
+  const ray=new THREE.Raycaster(new THREE.Vector3(24,.55,26),new THREE.Vector3(0,0,-1),0,4);
+  assert.ok(ray.intersectObject(chunk.meshes[0]).length>0,'restored roots are present in the original spatial ray index');
+  manager.removeChunk('near');const next=manager.addChunk('near',parent,[p]),matrix=new THREE.Matrix4();next.meshes[0].getMatrixAt(0,matrix);
+  assert.ok(new THREE.Vector3().setFromMatrixScale(matrix).length()>1);manager.dispose();
 });

@@ -49,7 +49,7 @@ test('render integration keeps each owner’s city, resident network and nightti
   for(const entry of bots.entries){assert.equal(entry.residents.stats.indoors,0);assert.equal(entry.residents.stats.visible,3);}
 });
 
-test('bot chops animate loaded trees and permanently suppress unloaded trees on later hydration',t=>{
+test('bot chops animate loaded trees and keep unloaded trees hidden until explicit regrowth',t=>{
   for(const loaded of [false,true]){
     const tree={id:`bot-tree-${loaded}`,kind:'tree',variant:'round',x:0,y:0,z:6,scale:1};
     const {bots,session,trees,treeRoot,calls}=fixture(t,{tree,loaded,count:1});
@@ -58,7 +58,9 @@ test('bot chops animate loaded trees and permanently suppress unloaded trees on 
     assert.deepEqual(calls,loaded?[['fall',tree.id]]:[['fall',tree.id],['remove',tree.id]]);
     assert.equal(trees.activeFalls,loaded?1:0);
     trees.update(1);assert.equal(trees.activeFalls,0);
-    const chunk=trees.addChunk('reloaded',treeRoot,[tree]);assert.equal(chunk.entries.length,0,'offscreen harvests never respawn as the camera arrives');
+    const chunk=trees.addChunk('reloaded',treeRoot,[tree]);
+    assert.ok(chunk.entries.every(entry=>!entry.active),'offscreen harvests stay inactive as the camera arrives');
+    const matrix=new THREE.Matrix4();for(const entry of chunk.entries){entry.mesh.getMatrixAt(entry.index,matrix);assert.equal(matrix.determinant(),0,'retained regrowth slots render no tree');}
   }
 });
 

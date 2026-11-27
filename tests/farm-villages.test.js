@@ -7,7 +7,7 @@ import {fitsBiome} from '../src/biomes.js';
 import {farmFootprintsOverlap} from '../src/farm-footprints.js';
 import {sampleSettlementPath,settlementDoor} from '../src/settlement-paths.js';
 
-const network=seed=>generateWorld(createSettlementWorld({seed}),{detail:'network'});
+const network=seed=>generateWorld(createSettlementWorld({seed,economy:true}),{detail:'network'});
 const base=network('first-settlement-v1'),villages=base.gameplay.farmVillages;
 
 test('three seeded gray level-one hamlets remain separate from player ownership and railway cities',()=>{
@@ -92,10 +92,10 @@ test('village reservations protect the entire layout from procedural scenery acr
 });
 
 test('generation handles missing reservations and skips unsupported curved worlds',()=>{
-  const config=createSettlementWorld();delete config.gameplay.reservations;
+  const config=createSettlementWorld({economy:true});delete config.gameplay.reservations;
   assert.equal(generateWorld(config,{detail:'network'}).gameplay.farmVillages.cities.length,3);
   assert.deepEqual(createFarmVillages({...base,surface:{type:'sphere'}}).cities,[]);
   assert.deepEqual(createFarmVillages(base,{count:0}).cities,[]);
-  const authored=createSettlementWorld(),again={...authored,gameplay:structuredClone(base.gameplay)};
+  const authored=createSettlementWorld({economy:true}),again={...authored,gameplay:structuredClone(base.gameplay)};
   assert.deepEqual(generateWorld(again,{detail:'network'}).gameplay.farmVillages,villages,'recompiling a world removes previous generated reservations');
 });

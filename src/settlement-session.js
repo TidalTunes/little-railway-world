@@ -5,8 +5,8 @@ import {createSettlementGame} from './settlement-game.js';
  * Commands are synchronous, so a second axe hit cannot claim the same tree. */
 export function createSettlementSession(world,{getActors=()=>[],getInfrastructure=()=>null,surfaceAt}={}){
   const games=[],removedTreeIds=new Set();
-  let cachedRevision=-1,buildings=[],paths=[],reservedPaths=[],clearedPlacementIds=new Set();
-  const revision=()=>games.reduce((sum,game)=>sum+(game.spatialRevision??game.revision),0)+(getInfrastructure()?.revision??0);
+  let treeRevision=0,cachedRevision=-1,buildings=[],paths=[],reservedPaths=[],clearedPlacementIds=new Set();
+  const revision=()=>treeRevision+games.reduce((sum,game)=>sum+(game.spatialRevision??game.revision),0)+(getInfrastructure()?.revision??0);
   function refresh(){
     const next=revision();if(next===cachedRevision)return;
     const infrastructure=getInfrastructure();
@@ -14,7 +14,7 @@ export function createSettlementSession(world,{getActors=()=>[],getInfrastructur
     paths=[...games.flatMap(game=>game.paths),...infrastructure?.paths??[]];
     reservedPaths=[...paths,...infrastructure?.corridors??[]];clearedPlacementIds=new Set(infrastructure?.clearedPlacementIds??[]);cachedRevision=next;
   }
-  const shared={removedTreeIds,getActors,
+  const shared={removedTreeIds,getActors,touchTrees(){treeRevision++;},
     isSceneryRemoved(item){refresh();return clearedPlacementIds.has(typeof item==='string'?item:item.id??`${item.kind}:${item.x}:${item.z}`);},
     getSceneryRevision(){return getInfrastructure()?.revision??0;},
     getBuildings(){refresh();return buildings;},getPaths(){refresh();return reservedPaths;}};

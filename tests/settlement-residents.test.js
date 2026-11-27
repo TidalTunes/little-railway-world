@@ -379,10 +379,10 @@ test('a neutral owner override colors village residents gray without changing pl
   gray.dispose();player.dispose();
 });
 
-test('all nine villagers in the generated island visit its six farm endpoints and return indoors continuously',()=>{
+test('all villagers in the generated island visit its farm endpoints and return indoors continuously',()=>{
   const island=generateWorld(createSettlementWorld(),{detail:'network'}),villages=island.gameplay.farmVillages;
   const simulation=createSettlementResidentSimulation(island);simulation.sync(villages);
-  assert.equal(simulation.residents.size,9);
+  assert.equal(simulation.residents.size,villages.houses.length);
   const visitors=new Set(),fields=new Set(),dt=.1,ownPaths=new Map(villages.cities.map(city=>[city.id,villages.paths.filter(path=>path.cityId===city.id)]));
   function advance(dayPhase){
     const previous=simulation.snapshot();simulation.update(dt,{dayPhase});
@@ -398,9 +398,9 @@ test('all nine villagers in the generated island visit its six farm endpoints an
     }
   }
   for(let frame=0;frame<300/dt;frame++)advance('day');
-  assert.equal(visitors.size,9);assert.equal(fields.size,6);
+  assert.equal(visitors.size,villages.houses.length);assert.equal(fields.size,villages.destinations.length);
   for(let frame=0;frame<120/dt;frame++)advance('night');
-  assert.equal(simulation.stats.indoors,9);
+  assert.equal(simulation.stats.indoors,villages.houses.length);
   for(const resident of simulation.snapshot()){
     const home=villages.houses.find(house=>house.id===resident.houseId);
     assert.equal(resident.destinationId,home.id);assert.ok(Math.hypot(resident.x-home.x,resident.z-home.z)<.21);

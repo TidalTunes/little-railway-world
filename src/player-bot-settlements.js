@@ -7,14 +7,14 @@ import {createCityLevelMarkers} from './city-level-markers.js';
 /** CPU settlers continue outside the camera's detail cache. Only their small
  * actors animate every frame; houses, streets and resident networks rebuild
  * when construction changes their owner’s layout. */
-export function createPlayerBotSettlements({world,session,parent,mapParent,markerParent,markerMapParent,detail,reducedMotion}){
+export function createPlayerBotSettlements({world,session,parent,mapParent,markerParent,markerMapParent,detail,reducedMotion,getExtraPlacements=()=>[],getExtraRevision=()=>0}){
   const village=world.gameplay.farmVillages;
   const permanent=[...world.gameplay.botScenery??[],...village?.houses??[],...village?.buildings??[]];
   let scenery=[],sceneryRevision=-1,meshRevision=-1,meshes=[];
-  const spatialRevision=()=>session.spatialRevision??session.revision;
+  const spatialRevision=()=>`${session.spatialRevision??session.revision}:${getExtraRevision()}`;
   function getPlacements(){
     if(sceneryRevision!==spatialRevision()){
-      scenery=[...permanent.filter(item=>!session.shared.isSceneryRemoved?.(item)),...session.buildings];sceneryRevision=spatialRevision();
+      scenery=[...permanent.filter(item=>!session.shared.isSceneryRemoved?.(item)),...session.buildings,...getExtraPlacements()];sceneryRevision=spatialRevision();
     }
     return scenery;
   }
@@ -39,7 +39,7 @@ export function createPlayerBotSettlements({world,session,parent,mapParent,marke
       const snapshot=entry.game.snapshot();
       if(entry.houseCount!==snapshot.houses.length||entry.buildingCount!==snapshot.buildings.length){
         entry.art.sync(snapshot.houses,snapshot.paths,snapshot.buildings,{animate:entry.revision>=0,reducedMotion:reducedMotion?.matches});
-        entry.residents.sync(snapshot);entry.levels.sync(snapshot.cities);
+        if(world.gameplay.economy!=='loops')entry.residents.sync(snapshot);entry.levels.sync(snapshot.cities);
         entry.houseCount=snapshot.houses.length;entry.buildingCount=snapshot.buildings.length;meshRevision=-1;
       }
       entry.snapshot=snapshot;entry.revision=revision;
@@ -59,7 +59,7 @@ export function createPlayerBotSettlements({world,session,parent,mapParent,marke
       synchronize();
       for(const entry of entries){
         entry.art.update({mapBlend,dt:uiDt,reducedMotion:reducedMotion?.matches,night});
-        entry.residents.update(dt,{focus,mapBlend,walkingWeight,visible:true,reducedMotion:reducedMotion?.matches,night,dayPhase,
+        if(world.gameplay.economy!=='loops')entry.residents.update(dt,{focus,mapBlend,walkingWeight,visible:true,reducedMotion:reducedMotion?.matches,night,dayPhase,
           unavailableHomes:entry.art.construction.activeIds});
         entry.levels.update({camera,mapBlend,walkingWeight,viewportHeight});
         entry.actor.update(entry.bot.snapshot(),{dt,camera,mapBlend,walkingWeight,focus,viewportHeight,reducedMotion:reducedMotion?.matches});

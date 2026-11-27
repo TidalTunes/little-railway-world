@@ -8,7 +8,10 @@ import {applySceneStyle} from './scene-style.js';
 import {surfaceFor,rigidSurfacePoseMatrix,surfacePoint} from './world-surface.js';
 
 export const TRADE_TRAIN_LIMITS=Object.freeze({visible:2048,spacing:2.6});
-const CARGO_COLORS={timber:C.soilLight,grain:C.wheat,tools:C.blue};
+const CARGO_COLORS={timber:C.soilLight,grain:C.wheat,metal:C.rail,tools:C.blue};
+// Old saves retain timber/grain names; both economies share the same pooled
+// log and food geometry rather than creating duplicate alias batches.
+const CARGO_KIND={wood:'timber',food:'grain',metal:'metal',timber:'timber',grain:'grain',tools:'tools'};
 const finitePose=p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.z)&&Number.isFinite(p.angle);
 
 function wagon(palette){
@@ -34,6 +37,11 @@ function freight(kind){
   }else if(kind==='grain'){
     for(const x of [-.23,.23])for(const z of [-.58,0,.58]){
       ico(root,x,.84,z,.23,.31,.28,'wheat',1);cylinder(root,x,1.12,z,.055,.075,.08,'soilLight',5);
+    }
+  }else if(kind==='metal'){
+    // Short trapezoid ingots stack directly on the deck and one another.
+    for(const [y,rows] of [[.68,[-.56,0,.56]],[.92,[-.28,.28]]])for(const x of [-.215,.215])for(const z of rows){
+      const ingot=cylinder(root,x,y,z,.18,.23,.24,'rail',4);ingot.rotation.y=Math.PI/4;ingot.scale.z=1.45;
     }
   }else{
     for(const z of [-.49,.49]){
@@ -150,7 +158,7 @@ export function createTradeTrains(parent,mapParent,world={}){
       sphere.center.applyMatrix4(parent.matrixWorld);
       if(camera&&!frustum.intersectsSphere(sphere)||stats.visible>=TRADE_TRAIN_LIMITS.visible)continue;
       stats.visible++;
-      const cargo=state.resource??(typeof state.cargo==='string'?state.cargo:state.cargo?.resource);
+      const resource=state.resource??(typeof state.cargo==='string'?state.cargo:state.cargo?.resource),cargo=CARGO_KIND[resource];
       const livery=owners.get(state.ownerId)??neutral,loaded=hasWagon&&state.amount>0&&cargoBatches.has(cargo);
       if(root.visible){
         insert(livery.loco,state.id,poseMatrix(locomotive));stats.detailInstances++;

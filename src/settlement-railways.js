@@ -116,7 +116,9 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   if(!session?.player)throw new TypeError('Railways require a settlement session');
   const configuredDistance=world.gameplay?.railwayMaxDistance,maxConnectionDistance=configuredDistance===undefined?SETTLEMENT_RAILWAY.maxConnectionDistance:configuredDistance;
   if(!Number.isFinite(maxConnectionDistance)||maxConnectionDistance<=0)throw new TypeError('Railway maximum connection distance must be positive and finite');
-  const economic=!!world.gameplay?.economy,accounts=[session.player,...session.bots.map(bot=>bot.game)];
+  const directed=world.gameplay?.economy==='loops',economic=!!world.gameplay?.economy,accounts=[session.player,...session.bots.map(bot=>bot.game)];
+  const connectionKey=(a,b)=>directed?`${a}>${b}`:keyFor(a,b);
+  let synchronizing=false,stationSyncKey=null;
   let account=session.player;
   const asAccount=(options,work)=>{const previous=account;account=accounts.find(game=>game.ownerId===(options?.ownerId??session.player.ownerId))??session.player;try{return work();}finally{account=previous;}};
   const stations=[],lines=[],connections=[],paths=[],reservations=[],clearedPlacementIds=new Set(initialState?.clearedPlacementIds??[]);
@@ -163,16 +165,35 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
       [station.id,parent.has(station.lineId)?trees.get(root(station.lineId)):null])),switches:new Map()};
     return networkCache;
   }
+  // A player's building jurisdiction ends at the next city's station. Rail
+  // branches remain usable, but a connected empire does not grant a global
+  // right to build from every remote platform.
+  function directLines(stationId){
+    const start=stations.find(station=>station.id===stationId);if(!start)return new Set();
+    const adjacency=new Map(lines.map(line=>[line.id,new Set()]));
+    const link=(a,b)=>{if(adjacency.has(a)&&adjacency.has(b)){adjacency.get(a).add(b);adjacency.get(b).add(a);}};
+    for(const connection of connections){const branch=connection.lineId??connection.id.replace(/^connection:/,'rail-link:');
+      link(branch,connection.fromJunction?.lineId??stations.find(s=>s.id===connection.fromStationId)?.lineId);
+      link(branch,connection.toJunction?.lineId??stations.find(s=>s.id===connection.toStationId)?.lineId);
+    }
+    const barriers=new Set(stations.filter(s=>s.id!==start.id).map(s=>s.lineId)),found=new Set([start.lineId]),queue=[start.lineId];
+    for(let i=0;i<queue.length;i++)for(const next of adjacency.get(queue[i])??[])if(!found.has(next)&&!barriers.has(next)){found.add(next);queue.push(next);}
+    return found;
+  }
+  function ownedLines(ownerId=account.ownerId){const result=new Set();for(const station of stations)if(station.ownerId===ownerId)for(const id of directLines(station.id))result.add(id);return result;}
   function canExtend(city,ownerId=session.player.ownerId){
     if(typeof city==='string')city=allCities().find(item=>item.id===city);
     if(!city)return false;if(city.ownerId===ownerId)return true;if(!economic)return false;
     const station=stations.find(item=>item.cityId===city.id);if(!station)return false;
+    if(directed){const permitted=ownedLines(ownerId);return connections.some(connection=>(connection.fromStationId===station.id||connection.toStationId===station.id)&&permitted.has(connection.lineId??connection.id.replace(/^connection:/,'rail-link:')));}
     const components=network().components,component=components.get(station.lineId);
     return component!==undefined&&stations.some(item=>item.ownerId===ownerId&&components.get(item.lineId)===component);
   }
   function nearestTrack(station,point){
     let best=null;
+    const direct=directed?directLines(station.id):null;
     network().stationTrees.get(station.id)?.nearest(point.x,point.z,({line,segment})=>{
+      if(direct&&!direct.has(line.id))return Infinity;
       const distance=projectSegment(segment,point),sample=sampleAlignment(line.alignment,distance),error=dist(sample,point);
       if(!best||error<best.error-1e-8||Math.abs(error-best.error)<1e-8&&(line.id<best.line.id||line.id===best.line.id&&distance<best.distance))best={line,distance,sample,error};
       return error;
@@ -225,7 +246,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
       for(const line of lines){line.from=aliases.get(line.from)??line.from;line.to=aliases.get(line.to)??line.to;}
       for(const path of paths)path.cityId=aliases.get(path.cityId)??path.cityId;
       for(const reservation of reservations)if(reservation.cityId)reservation.cityId=aliases.get(reservation.cityId)??reservation.cityId;
-      for(const connection of connections){connection.from=aliases.get(connection.from)??connection.from;connection.to=aliases.get(connection.to)??connection.to;connection.key=keyFor(connection.from,connection.to);}
+      for(const connection of connections){connection.from=aliases.get(connection.from)??connection.from;connection.to=aliases.get(connection.to)??connection.to;connection.key=connectionKey(connection.from,connection.to);}
       revision++;cached=null;
     }
     const cityById=new Map(cities.map(city=>[city.id,city])),radii=new Map(),stationByCity=new Map(stations.map(station=>[station.cityId,station.id]));
@@ -265,6 +286,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   }
   function stationOptions(city,other,occupied,attachment){
     const existing=stations.find(station=>station.cityId===city.id);if(existing)return [existing];
+    if(directed&&!synchronizing)return [];
     const blocked=occupied.blocked,homes=[...session.buildings,...world.gameplay?.farmVillages?.houses??[]].filter(item=>item.cityId===city.id&&item.kind==='house');
     const cityExtent=Math.max(3,...homes.map(home=>dist(home,city)+1.6)),orbitRadius=Math.max(10,cityExtent+5),bearing=Math.atan2(other.z-city.z,other.x-city.x);
     const endpointOffset=Math.atan2(7,orbitRadius);
@@ -321,8 +343,8 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   function port(station,side,outgoing=true){return {x:station.center.x+Math.cos(station.heading)*7*side,z:station.center.z+Math.sin(station.heading)*7*side,
     heading:station.heading+(side<0?Math.PI:0)+(outgoing?0:Math.PI),stationLineId:station.lineId};}
   function ports(station,other,outgoing,attachment){
-    if(!stations.some(item=>item.id===station.id)&&station.attachmentSide)return [port(station,station.attachmentSide,outgoing)];
-    const ends=[port(station,-1,outgoing),port(station,1,outgoing)],junctions=[];
+    if(!directed&&!stations.some(item=>item.id===station.id)&&station.attachmentSide)return [port(station,station.attachmentSide,outgoing)];
+    const ends=directed?[port(station,outgoing?1:-1,outgoing)]:[port(station,-1,outgoing),port(station,1,outgoing)],junctions=[];
     const score=p=>dist(p,other)+Math.abs(angleDelta(p.heading+(outgoing?0:Math.PI),Math.atan2(other.z-p.z,other.x-p.x)))*8;
     if(attachment){
       const nearest=nearestTrack(station,attachment),endDistance=Math.min(...ends.map(p=>dist(p,attachment)));
@@ -330,9 +352,9 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
       // projects onto an exact primitive, never a sampled or fixed switch dot.
       if(!nearest||endDistance<=nearest.error+1e-5)return ends.filter(p=>dist(p,attachment)<endDistance+1e-5).sort((a,b)=>score(a)-score(b));
       const {line,distance,sample:p}=nearest,junction={lineId:line.id,distance,x:p.x,z:p.z,heading:p.heading};
-      return [0,Math.PI].map(direction=>({...p,heading:p.heading+direction,junction})).sort((a,b)=>score(a)-score(b));
+      return (directed?[0]:[0,Math.PI]).map(direction=>({...p,heading:p.heading+direction,junction})).sort((a,b)=>score(a)-score(b));
     }
-    if(stations.some(item=>item.id===station.id))for(const line of lines){
+    if(!directed&&stations.some(item=>item.id===station.id))for(const line of lines){
       if(line.id===station.lineId||(!economic&&line.ownerId!==account.ownerId)||!(line.stationIds??[]).includes(station.id))continue;
       // A later railway can share an established approach and peel away at a
       // tangent switch. The existing bed is never duplicated or overwritten.
@@ -348,7 +370,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   }
   function makeLine(id,alignment,from,to,stationIds=[],metadata=true){
     const sampled=sampleAlignmentPoints(alignment,.35),bridges=[];let start=null;
-    const line={id,from,to,ownerId:account.ownerId,color:account.ownerId,closed:false,alignment,...sampled,
+    const line={id,from,to,ownerId:account.ownerId,color:account.ownerId,directed,closed:false,alignment,...sampled,
       bridges,tunnels:[],cuts:[],stationIds,stops:[]};
     if(!metadata)return line;
     for(let i=0;i<sampled.points.length;i++){
@@ -379,7 +401,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   function makeSpine(station,metadata=true){return makeLine(station.lineId,combineAlignments([straightSegment(port(station,-1),port(station,1),SETTLEMENT_RAILWAY.railY)]),station.cityId,station.cityId,[station.id],metadata);}
   function guideLine(from,to,points){
     const distances=[0];for(let i=1;i<points.length;i++)distances.push(distances.at(-1)+dist(points[i-1],points[i]));
-    return {id:`rail-link:${keyFor(from.id,to.id)}`,from:from.id,to:to.id,ownerId:account.ownerId,color:account.ownerId,
+    return {id:`rail-link:${connectionKey(from.id,to.id)}`,from:from.id,to:to.id,ownerId:account.ownerId,color:account.ownerId,
       points,distances,length:distances.at(-1),previewOnly:true,closed:false,bridges:[],tunnels:[],cuts:[],stops:[]};
   }
   function failedDraft(from,to,attempt,options){
@@ -484,7 +506,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
       return result;
     }
     const newStations=[chosen.sa,chosen.sb].filter(station=>!stations.some(existing=>existing.id===station.id));
-    const branch=makeLine(`rail-link:${keyFor(from.id,to.id)}`,chosen.route,from.id,to.id,[chosen.sa.id,chosen.sb.id],false);
+    const branch=makeLine(`rail-link:${connectionKey(from.id,to.id)}`,chosen.route,from.id,to.id,[chosen.sa.id,chosen.sb.id],false);
     return {code:'ready',reason:'Connect these cities',lines:[...newStations.map(station=>makeSpine(station,false)),branch],stations:newStations,
       fromStationId:chosen.sa.id,toStationId:chosen.sb.id,fromJunction:chosen.start.junction??null,toJunction:chosen.end.junction??null,
       handles:routeHandles(from,to,chosen.route,options,chosen.start,chosen.end),waypoints:copy(waypoints),attachments:copy(attachments),waypointCount:waypointCount(from,to,options.controlCount),invalidBends:[]};
@@ -531,8 +553,11 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     if(options.ownerId!==undefined&&!accounts.some(game=>game.ownerId===options.ownerId))return fail('invalid-owner','Choose a valid railway owner');
     if(!from||!to||from===to)return fail('invalid-city','Choose two different cities');
     if(!from.playerOwned&&!to.playerOwned&&!(economic&&(canExtend(from,account.ownerId)||canExtend(to,account.ownerId))))return fail('not-your-city','Start from your city or connected network');
+    if(directed&&(!from.stationId||!to.stationId))return fail('station-required','Stations unlock at city level 2');
+    if(directed&&!from.playerOwned&&!to.playerOwned&&!route.attachments.from&&!route.attachments.to)return fail('outside-jurisdiction','Connect to your station or its approach before another city');
     if(base.distance>maxConnectionDistance)return fail('out-of-range','Outside connection range');
-    if(connections.some(connection=>connection.key===keyFor(from.id,to.id)))return fail('already-connected','These cities already have a railway');
+    if(directed&&!cities.some(city=>city.ownerId===account.ownerId&&city.stationId&&dist(city,from)<=maxConnectionDistance&&dist(city,to)<=maxConnectionDistance))return fail('out-of-range','Outside your city’s connection range');
+    if(connections.some(connection=>connection.key===connectionKey(from.id,to.id)))return fail('already-connected','These cities already have a railway');
     base.waypointCount=waypointCount(from,to,route.controlCount);base.handles=routeHandles(from,to,null,route);
     if(route.controlCount!==undefined&&!validControlCount(route.controlCount)||route.waypoints.length&&route.waypoints.length!==base.waypointCount||route.waypoints.some(p=>!finite(p))||Object.values(route.attachments).some(p=>!finite(p)))return fail('invalid-waypoints','Keep the route control points and choose a valid curve');
     // Timber rewards and the day clock do not change rail feasibility. Only
@@ -544,8 +569,11 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     const occupied=obstacles();
     if(geometryCache?.key!==cacheKey)geometryCache={key:cacheKey,plan:findGeometry(from,to,occupied,route)};
     const plan=provisional?geometryCache.plan:findPlan(geometryCache.plan,scenery(),occupied);
+    if(plan.code!=='ready'){if(!provisional)cached={key:cacheKey,plan};return {...base,...copy(plan),valid:false,siteValid:false};}
+    if(directed){const allowed=ownedLines(),fromLine=plan.fromJunction?.lineId??stations.find(s=>s.id===plan.fromStationId)?.lineId,toLine=plan.toJunction?.lineId??stations.find(s=>s.id===plan.toStationId)?.lineId;
+      if(!allowed.has(fromLine)&&!allowed.has(toLine))return {...base,...copy(plan),valid:false,siteValid:false,code:'outside-jurisdiction',reason:'Connect to your station or its approach before another city'};
+    }
     if(!provisional)cached={key:cacheKey,plan};
-    if(plan.code!=='ready')return {...base,...copy(plan),valid:false,siteValid:false};
     return {...base,...copy(plan),siteValid:true,valid:base.affordable,code:base.affordable?'ready':'not-enough-gold',reason:base.affordable?plan.reason:`A railway costs ${cost} gold`};
   }
   const preview=(from,to,options={})=>asAccount(options,()=>resultFor(from,to,options,true)),evaluate=(from,to,options={})=>asAccount(options,()=>resultFor(from,to,options,false));
@@ -567,8 +595,8 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
       return {ok:false,...result,valid:false,code:'player-blocked',reason:'Move away from the new platform'};
     }
     const payment=account.spendGold(result.cost);if(!payment.ok)return {ok:false,...result,...payment};
-    const connection={id:`connection:${keyFor(fromCityId,toCityId)}`,key:keyFor(fromCityId,toCityId),from:fromCityId,to:toCityId,
-      fromStationId:result.fromStationId,toStationId:result.toStationId,fromJunction:result.fromJunction,toJunction:result.toJunction,ownerId:account.ownerId,cost:result.cost};
+    const connection={id:`connection:${connectionKey(fromCityId,toCityId)}`,key:connectionKey(fromCityId,toCityId),from:fromCityId,to:toCityId,
+      lineId:result.lines.at(-1).id,directed,fromStationId:result.fromStationId,toStationId:result.toStationId,fromJunction:result.fromJunction,toJunction:result.toJunction,ownerId:account.ownerId,cost:result.cost};
     stations.push(...result.stations);lines.push(...result.lines);paths.push(...result.paths);connections.push(connection);
     for(const id of result.clearedTreeIds)session.shared.removedTreeIds.add(id);
     for(const id of result.clearedPlacementIds)clearedPlacementIds.add(id);
@@ -577,6 +605,32 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     revision++;cached=null;const built={ok:true,...result,connection:copy(connection),totalGold:payment.totalGold,revision};onBuild?.(built);return built;
   }
   const build=(from,to,options={})=>asAccount(options,()=>buildAs(from,to,options));
-  return {preview,evaluate,build,canExtend,geometryKey,adoptPreview,get maxConnectionDistance(){return maxConnectionDistance;},get sceneryCatalog(){return catalog;},get revision(){return revision;},get cities(){return allCities();},get stations(){return copy(stations);},get lines(){return copy(lines);},get paths(){return copy(paths);},get reservations(){return copy(reservations);},
+  function synchronizeStations(){
+    if(!directed)return {ok:true,changed:false,stations:[],lines:[],paths:[],clearedTreeIds:[],clearedPlacements:[],clearedPlacementIds:[]};
+    const added={ok:true,changed:false,stations:[],lines:[],paths:[],clearedTreeIds:[],clearedPlacements:[],clearedPlacementIds:[]};
+    // Wallet changes do not retry site searches. Production may change an
+    // account every few seconds; only spatial revisions or city growth matter.
+    const syncKey=()=>`${session.spatialRevision??session.revision??0}:${revision}:`+[...session.player.cities,...session.bots.flatMap(bot=>bot.game.cities),...world.gameplay?.farmVillages?.cities??[]].map(city=>`${city.id}:${city.x}:${city.z}:${city.level}:${city.houseCount}`).join('|');
+    const key=syncKey();if(key===stationSyncKey)return added;stationSyncKey=key;
+    const eligible=allCities().filter(city=>city.level>=2&&city.houseCount>=6&&!stations.some(station=>station.cityId===city.id));
+    if(!eligible.length)return added;
+    const previous=account;synchronizing=true;
+    try{for(const city of eligible){
+      account=accounts.find(game=>game.ownerId===city.ownerId)??{ownerId:city.ownerId};
+      let hash=2166136261;for(const character of `${world.seed}:${city.id}:station`)hash=Math.imul(hash^character.charCodeAt(0),16777619)>>>0;
+      const bearing=hash/4294967296*TAU,other={x:city.x+Math.cos(bearing)*100,z:city.z+Math.sin(bearing)*100},occupied=obstacles();
+      const station=stationOptions(city,other,occupied)[0];if(!station)continue;
+      const result=findPlan({code:'ready',stations:[station],lines:[makeSpine(station,false)],fromStationId:station.id,toStationId:station.id},scenery(),occupied);
+      if(result.code!=='ready')continue;
+      stations.push(station);lines.push(...result.lines);paths.push(...result.paths);reservations.push({...station});
+      for(const line of result.lines)reservations.push({id:line.id,kind:'rail-corridor',width:SETTLEMENT_RAILWAY.halfWidth*2+.3,points:line.points});
+      for(const id of result.clearedTreeIds)session.shared.removedTreeIds.add(id);
+      for(const id of result.clearedPlacementIds)clearedPlacementIds.add(id);
+      for(const key of ['stations','lines','paths','clearedTreeIds','clearedPlacements','clearedPlacementIds'])added[key].push(...result[key]??[]);
+      revision++;cached=geometryCache=null;added.changed=true;
+    }}finally{account=previous;synchronizing=false;}
+    stationSyncKey=syncKey();added.revision=revision;return added;
+  }
+  return {preview,evaluate,build,canExtend,synchronizeStations,geometryKey,adoptPreview,get maxConnectionDistance(){return maxConnectionDistance;},get sceneryCatalog(){return catalog;},get revision(){return revision;},get cities(){return allCities();},get stations(){return copy(stations);},get lines(){return copy(lines);},get paths(){return copy(paths);},get reservations(){return copy(reservations);},
     snapshot(){const cities=allCities();return {revision,cities,stations:copy(stations),lines:copy(lines),paths:copy(paths),connections:copy(connections),reservations:copy(reservations),clearedPlacementIds:[...clearedPlacementIds]};}};
 }

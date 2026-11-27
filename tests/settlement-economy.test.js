@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSettlementEconomy,ECONOMY} from '../src/settlement-economy.js';
 import {combineAlignments,straightSegment} from '../src/alignments.js';
-import {simulateStrategy} from '../scripts/simulate-economy.mjs';
+import {simulateStrategy} from '../scripts/simulate-legacy-economy.mjs';
 
 function fixture({cities=[{id:'a',ownerId:'teal',x:0,industry:'lumber'},{id:'b',ownerId:'coral',x:100,industry:'farm'}],connected=true,gold=12}={}){
   const records=cities.map(city=>({...city,z:city.z??0,level:city.level??1,houseCount:city.houseCount??3,

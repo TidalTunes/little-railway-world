@@ -1,83 +1,75 @@
 import {fileURLToPath} from 'node:url';
 import {createSettlementEconomy} from '../src/settlement-economy.js';
-import {combineAlignments,straightSegment} from '../src/alignments.js';
+import {createSettlementRailways} from '../src/settlement-railways.js';
+import {createResourceWork} from '../src/resource-work.js';
 
-/** Small reproducible economic benchmarks use the actual production, routing,
- * reservations, wallets and cargo authority. Construction here is a scripted
- * valid-site action: this measures incentives, not navigation or placement. */
-export function simulateStrategy({strategy='merchant',scenario='near',seconds=900,tuning={},deposits=true}={}){
-  const presets={near:{distance:35,farm:2,workshop:1},distant:{distance:125,farm:2,workshop:1},scarceFood:{distance:80,farm:1,workshop:3}};
-  const setup=presets[scenario];if(!setup)throw new TypeError('Unknown scenario');
-  const policy={merchant:{industry:'lumber',target:6},industrialist:{industry:'workshop',target:9},agrarian:{industry:'farm',target:15},adaptive:{industry:'workshop',target:9}}[strategy];
-  if(!policy)throw new TypeError('Unknown strategy');
-  const specifications=[{id:'player',x:0,level:1,industry:policy.industry},
-    {id:'farmer',x:setup.distance,level:setup.farm,industry:'farm'},
-    {id:'artisan',x:setup.distance+30,level:setup.workshop,industry:'workshop'},
-    {id:'forester',x:setup.distance+60,level:1,industry:'lumber'}];
-  const games=specifications.map(spec=>{
-    const homes=spec.level*3,city={id:spec.id,ownerId:spec.id,x:spec.x,z:0,level:spec.level,houseCount:homes,houseIds:Array.from({length:homes},(_,i)=>`${spec.id}:${i}`)};
-    return {ownerId:spec.id,revision:0,logs:12,gold:12,cities:[city],houses:city.houseIds.map((id,i)=>({id,cityId:city.id,x:city.x+(i%3)*2,z:Math.floor(i/3)*2})),
-      spendGold(amount){if(this.gold<amount)return{ok:false};this.gold-=amount;this.revision++;return{ok:true};},
-      creditGold(amount){this.gold+=amount;this.revision++;return{ok:true};},
-      spendLogs(amount){if(this.logs<amount)return{ok:false};this.logs-=amount;this.revision++;return{ok:true};},
-      addLogs(amount){this.logs+=amount;this.revision++;}};
-  });
-  const session={player:games[0],bots:games.slice(1).map(game=>({game})),get revision(){return games.reduce((sum,game)=>sum+game.revision,0);}};
-  const main={id:'market-line',alignment:combineAlignments([straightSegment({x:setup.distance,z:0},{x:setup.distance+60,z:0})])};
-  const infrastructure={revision:0,lines:[main],connections:[],stations:specifications.slice(1).map(spec=>({id:`station:${spec.id}`,cityId:spec.id,lineId:main.id,distance:spec.x-setup.distance}))};
-  const railways={get revision(){return infrastructure.revision;},snapshot(){return structuredClone(infrastructure);}};
-  const economy=createSettlementEconomy({gameplay:{}},{session,railways,tuning});
-  for(const spec of specifications)economy.setIndustry(spec.id,spec.industry,spec.id);
-  let connected=false,railCost=0,harvests=0,firstDelivery=null,firstGrowth=null,foodPulses=0,toolsPulses=0;
-  const timeline=[],trades={};
-  for(let second=0;second<seconds;second++){
-    // Equal manual effort: eight satisfying chops spread over the opening two
-    // minutes. There is no unlimited harvest or policy-specific windfall.
-    if(second%15===0&&second<120){games[0].addLogs(5);harvests++;}
-    const city=games[0].cities[0],cost=8+Math.ceil(setup.distance/50);
-    if(deposits&&strategy!=='agrarian'&&second%15===0){
-      const depot=economy.city(city.id),amount=Math.min(Math.max(0,games[0].logs-8),depot.capacity-depot.stock.timber-depot.incoming.timber);
-      if(amount>0)economy.depositTimber('player',city,amount);
-    }
-    if(strategy==='adaptive'&&city.houseCount>=9)economy.setIndustry('player','farm','player');
-    if(!connected&&second>=20&&games[0].gold>=cost){
-      games[0].spendGold(cost);railCost+=cost;connected=true;
-      const access={id:'player-access',alignment:combineAlignments([straightSegment({x:0,z:0},{x:setup.distance,z:0})])};
-      infrastructure.lines.push(access);infrastructure.stations.push({id:'station:player',cityId:'player',lineId:access.id,distance:0});
-      infrastructure.connections.push({lineId:access.id,fromStationId:'station:player',toJunction:{lineId:main.id,distance:0}});infrastructure.revision++;
-    }
-    // One house decision every twelve seconds, using the real atomic cost.
-    if(second%12===0&&city.houseCount<policy.target){
-      const paid=economy.spendConstruction('player',city,{timber:8,tools:2});
-      if(paid.ok){
-        const id=`player:${city.houseCount}`,home={id,cityId:'player',x:(city.houseCount%5)*2,z:Math.floor(city.houseCount/5)*2};
-        games[0].houses.push(home);city.houseIds.push(id);city.houseCount++;city.level=Math.min(5,Math.floor(city.houseCount/3));games[0].revision++;
-        firstGrowth??=second;
-      }
-    }
-    economy.update(1);
-    for(const event of economy.drainEvents()){
-      if(event.type==='delivery'){const key=`${event.fromCityId}>${event.toCityId}:${event.resource}`;trades[key]=(trades[key]??0)+event.quantity;}
-      if(event.type==='delivery'&&event.toCityId==='player')firstDelivery??=second+1;
-      if(event.type==='income'&&event.cityId==='player'){foodPulses+=Number(event.fed);toolsPulses+=Number(event.boosted);}
-    }
-    if((second+1)%300===0){const current=economy.city('player');timeline.push({minute:(second+1)/60,gold:games[0].gold,houses:city.houseCount,stock:current.stock});}
+/** Bounded CPU experiments for the new rules. Already-formed six-home towns
+ * use actual directed track planning, physical NPC work, station stops,
+ * purchases and loop transport. No renderer, passive production or fake cargo. */
+export function simulateStrategy({strategy='food-loop',scenario='near',seconds=900,seed='loop-benchmark-7'}={}){
+  const size={near:1,distant:1.55}[scenario];if(!size)throw new TypeError('Unknown scenario');
+  const itinerary={'food-loop':['home','farm','home'],'metal-loop':['home','mine','home'],'mixed-loop':['home','mine','farm','home']}[strategy];
+  if(!itinerary)throw new TypeError('Unknown strategy');
+  const records=[{id:'home',ownerId:'teal',x:0,z:0,biome:'forest'},
+    {id:'farm',ownerId:'gray',x:65*size,z:20*size,biome:'farmland'},
+    {id:'mine',ownerId:'coral',x:45*size,z:-60*size,biome:'desert'}].map(city=>({...city,level:2,houseCount:6,radius:6}));
+  const houses=records.flatMap(city=>[[-4,-2],[0,-2],[4,-2],[-4,3],[0,3],[4,3]].map(([x,z],index)=>({
+    id:`${city.id}:home:${index}`,kind:'house',ownerId:city.ownerId,cityId:city.id,x:city.x+x,y:0,z:city.z+z,rotation:0,width:2.2,depth:2.2,
+  })));
+  for(const city of records)city.houseIds=houses.filter(home=>home.cityId===city.id).map(home=>home.id);
+  const games=records.filter(city=>city.id!=='farm').map(city=>({ownerId:city.ownerId,logs:12,gold:60,spatialRevision:0,
+    cities:[city],houses:houses.filter(home=>home.cityId===city.id),
+    spendGold(amount){if(this.gold<amount)return {ok:false};this.gold-=amount;return {ok:true};},
+    creditGold(amount){this.gold+=amount;return {ok:true};},
+    spendLogs(amount){if(this.logs<amount)return {ok:false};this.logs-=amount;return {ok:true};},
+    addLogs(amount){this.logs+=amount;return {ok:true};},
+  }));
+  const trees=Array.from({length:12},(_,i)=>({id:`tree:${i}`,kind:'tree',x:Math.sin(i*Math.PI/6)*12,z:Math.cos(i*Math.PI/6)*12,y:0,scale:.75,radius:.64,variant:3}));
+  const world={seed,rivers:[],gameplay:{economy:'loops',ownerId:'teal',starterHouse:{...houses[0],biome:'forest'},
+    playerBots:[{ownerId:'coral',starterHouse:{...houses.find(home=>home.cityId==='mine'),biome:'desert'}}],guaranteedTrees:trees,
+    farmVillages:{ownerId:'gray',cities:[records[1]],houses:houses.filter(home=>home.cityId==='farm'),buildings:[],paths:[],
+      destinations:[{id:'farm-gate',cityId:'farm',x:records[1].x,z:records[1].z+12,lookX:records[1].x+4,lookZ:records[1].z+12,kind:'farm'}]}}};
+  let spatial=0,railways;const removed=new Set(),cleared=new Set();
+  const session={player:games[0],bots:[{game:games[1]}],get spatialRevision(){return spatial+(railways?.revision??0);},
+    get buildings(){return [...houses,...railways?.stations??[]];},
+    shared:{removedTreeIds:removed,touchTrees(){spatial++;},isSceneryRemoved:item=>cleared.has(typeof item==='string'?item:item?.id),getPaths:()=>railways?.snapshot().paths??[]}};
+  railways=createSettlementRailways(world,{session,surfaceAt:()=>({type:'ground',height:0}),sceneryCatalog:trees});
+  railways.synchronizeStations();
+  const costs={playerRails:0,otherRails:0};
+  for(let i=1;i<itinerary.length;i++){
+    const from=itinerary[i-1],to=itinerary[i],ownerId=from==='mine'&&to==='farm'?'coral':'teal';
+    const result=railways.build(from,to,{ownerId});if(!result.ok)throw new Error(`${from} → ${to}: ${result.reason??result.code}`);
+    costs[ownerId==='teal'?'playerRails':'otherRails']+=result.cost;
   }
-  const state=economy.snapshot(),city=economy.city('player'),wallet=games[0];
-  return {scenario,strategy,gold:wallet.gold,houses:wallet.houses.length,level:city.level,stock:city.stock,backpack:wallet.logs,
-    wealth:wallet.gold+wallet.logs+city.stock.timber+city.stock.grain+city.stock.tools*3,railCost,harvests,firstDelivery,firstGrowth,
-    fedPercent:Math.round(foodPulses/Math.max(1,Math.floor(seconds/20))*100),boostedPercent:Math.round(toolsPulses/Math.max(1,Math.floor(seconds/20))*100),
-    deliveries:state.stats.deliveries,units:state.stats.unitsDelivered,timeline,markets:state.cities,trades};
+  for(const id of railways.snapshot().clearedPlacementIds??[])cleared.add(id);
+  const economy=createSettlementEconomy(world,{session,railways});
+  const selected=economy.loops('home').find(loop=>loop.cityIds.length===new Set(itinerary).size);
+  if(!selected)throw new Error('No complete physical loop in benchmark');
+  const purchase=economy.buyTrain('home',selected.id,'teal');if(!purchase.ok)throw new Error(purchase.reason??purchase.code);
+  const work=createResourceWork(world,{session,surfaceAt:()=>({type:'ground',height:0}),getPlacements:()=>trees.filter(tree=>!cleared.has(tree.id))});
+  const timeline=[],production={wood:0,metal:0,food:0,gold:0};let firstDelivery=null;
+  const dt=.25;
+  for(let frame=0;frame<seconds/dt;frame++){
+    const elapsed=frame*dt;
+    work.update(dt,{dayPhase:Math.floor(elapsed/300)%2?'night':'day'});
+    for(const event of work.drainEvents())if(event.type==='production'){
+      const result=economy.creditProduction(event.ownerId,event.resource,event.amount,event.id);
+      if(!result.ok)throw new Error(`Rejected physical work: ${result.code}`);production[event.resource]+=event.amount;
+    }
+    economy.update(dt);
+    for(const event of economy.drainEvents())if(event.type==='delivery'&&event.ownerId==='teal')firstDelivery??=elapsed+dt;
+    if((frame+1)%(300/dt)===0)timeline.push({minute:(elapsed+dt)/60,...economy.resourcesAt('teal'),laps:economy.snapshot().stats.laps});
+  }
+  const state=economy.snapshot(),wallet=economy.resourcesAt('teal');work.dispose();
+  return {scenario,strategy,cityCount:selected.cityIds.length,length:Math.round(selected.length),...costs,trainCost:purchase.cost,
+    gold:wallet.gold,wood:wallet.wood,metal:wallet.metal,food:wallet.food,laps:state.stats.laps,firstDelivery,
+    workerReturns:state.stats.productionEvents,workerProduction:production,delivered:state.stats.delivered,timeline};
 }
-
-export function runEconomyBenchmarks({seconds=900,tuning={}}={}){
-  return ['near','distant','scarceFood'].flatMap(scenario=>['merchant','industrialist','agrarian','adaptive'].map(strategy=>simulateStrategy({strategy,scenario,seconds,tuning})));
+export function runEconomyBenchmarks({seconds=900}={}){
+  return ['near','distant'].flatMap(scenario=>['food-loop','metal-loop','mixed-loop'].map(strategy=>simulateStrategy({strategy,scenario,seconds})));
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
-  const seconds=process.argv.includes('--long')?1800:900;
-  const results=process.argv.includes('--compare')?
-    [{balance:'initial',tuning:{farmOutput:6,toolPrice:3,prosperity:'legacy'}},{balance:'current',tuning:{}}]
-      .flatMap(({balance,tuning})=>runEconomyBenchmarks({seconds,tuning}).map(result=>({balance,...result}))):runEconomyBenchmarks({seconds});
+  const results=runEconomyBenchmarks({seconds:process.argv.includes('--long')?1800:900});
   if(process.argv.includes('--json'))process.stdout.write(`${JSON.stringify(results,null,2)}\n`);
-  else console.table(results.map(({balance,scenario,strategy,gold,houses,wealth,fedPercent,firstDelivery,firstGrowth,deliveries})=>({...balance?{balance}:{},scenario,strategy,gold,houses,wealth,fedPercent,firstDelivery,firstGrowth,deliveries})));
+  else console.table(results.map(({scenario,strategy,cityCount,length,playerRails,trainCost,gold,wood,metal,food,laps,firstDelivery})=>({scenario,strategy,cityCount,length,playerRails,trainCost,gold,wood,metal,food,laps,firstDelivery})));
 }

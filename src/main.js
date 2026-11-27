@@ -264,7 +264,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Build a trading town. WASD moves, Shift runs, Space jumps. E or click chops nearby trees for timber. B aims a house, click or Enter builds, Escape cancels. Three nearby homes form a city. Choose lumber, farming or tools with 1, 2 or 3. Later homes need tools. G stores carried timber in a nearby town. Fed homes earn gold every twenty seconds; spare tools increase their income. V switches to overview; select towns to inspect their depots. T plans a railway: choose your city, choose a partner, drag dots to shape the route, Enter confirms. Trains automatically trade available goods and carry payments. Tab releases the mouse for controls. Day and night each last five minutes.');
+    if(settlement)canvas.setAttribute('aria-label','Build a railway town. WASD moves, Shift runs, Space jumps. E or click chops trees for wood. B aims a house; click or Enter builds for eight wood. Three nearby homes form a city; six unlock a one-way station. Residents gather wood in forests, metal in deserts, and gold on plains. Gray villages produce food. V switches to overview. T plans a railway: choose your city, choose a partner, drag dots, R reverses direction, Enter builds. Complete an outward and return loop, then buy a train in the route panel. Each visit creates ten resources and pays the city owner three gold; cargo arrives home after a full loop. Tab releases the mouse for controls. Day and night each last five minutes.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
@@ -429,7 +429,7 @@ window.__railway={
 window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),
-  inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot(),railway:settlement.railways.snapshot(),economy:settlement.economy?.snapshot(),strategies:settlement.economicBots?.snapshot()}:null,
+  inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot(),railway:settlement.railways.snapshot(),economy:settlement.economy?.snapshot(),workers:settlement.resourceWork?.snapshot(),strategies:settlement.economicBots?.snapshot()}:null,
   generateWorld,validateWorld,createStressWorld,
 });
 const parameters=new URLSearchParams(location.search);

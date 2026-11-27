@@ -939,6 +939,8 @@ export function generateWorld(input = {}, options = {}) {
   }
   if(world.gameplay&&Object.hasOwn(world.gameplay,'playerBotCount')){
     world.gameplay.playerBots=createPlayerBotStarts(world,{count:world.gameplay.playerBotCount});
+    world.gameplay.guaranteedTrees=[...(world.gameplay.guaranteedTrees??[]).filter(tree=>!tree.id?.startsWith('bot:')),
+      ...world.gameplay.playerBots.flatMap(bot=>bot.guaranteedTrees??[])];
     world.gameplay.reservations.push(...playerBotReservations(world.gameplay.playerBots));
     delete world.gameplay.botScenery;
   }

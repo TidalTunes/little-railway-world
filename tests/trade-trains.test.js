@@ -94,3 +94,17 @@ test('disposing freight releases owned resources once without disposing shared a
   art.dispose();art.dispose();M.metal.removeEventListener('dispose',onShared);
   assert.equal(parent.children.length,0);assert.equal(mapParent.children.length,0);assert.equal(sharedDisposals,0);for(const resource of resources)assert.equal(counts.get(resource),1);
 });
+
+
+test('wood, metal and food loop freight renders distinct loads and map cargo colors',t=>{
+  const {art}=fixture(t),resources=['wood','metal','food'];
+  art.update(resources.map((resource,i)=>train(i,{resource,cargo:{[resource]:10},amount:10,x:i*10})),{mapBlend:.5});
+  for(const kind of ['timber','metal','grain'])assert.equal(art.root.getObjectByName(`trade-cargo:${kind}`).count,1);
+  assert.equal(art.stats.detailInstances,9);assert.equal(art.mapRoot.getObjectByName('trade-map-cargo').count,3);
+  const colors=[];for(let i=0;i<3;i++){const color=new THREE.Color();art.mapRoot.getObjectByName('trade-map-cargo').getColorAt(i,color);colors.push(color.getHexString());}
+  assert.equal(new Set(colors).size,3);
+  const metal=art.root.getObjectByName('trade-cargo:metal'),bounds=new THREE.Box3().setFromBufferAttribute(metal.geometry.attributes.position);
+  assert.ok(bounds.min.y>=.55&&bounds.max.y<1.2,'ingots sit on the wagon deck and stack below its silhouette budget');
+  assert.ok(bounds.max.x<.46&&bounds.min.x>-.46);assert.ok(bounds.max.z<1.02&&bounds.min.z> -1.02);
+  const geometry=metal.geometry;art.update([train(5,{resource:'metal',amount:20})]);assert.equal(art.root.getObjectByName('trade-cargo:metal').geometry,geometry);
+});

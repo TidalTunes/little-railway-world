@@ -111,3 +111,13 @@ test('worker and stale-world failures do not claim that placement is impossible'
   const pending=settlementHudRailway({stage:'planning',hasCity:true,siteValid:true,canBuild:false,code:'not-enough-gold'},{gold:3});
   assert.equal(pending.status,'Checking route…');assert.equal(pending.statusKind,'info');assert.equal(pending.canBuild,false);
 });
+
+
+test('loop construction and railway guidance use wood and the six-home station milestone',()=>{
+  const state=settlementHudConstruction({economic:'loops',logs:5,buildCost:{timber:8,tools:0},resources:{wood:5,metal:20,food:10,gold:60}});
+  assert.equal(state.costLabel,'8 wood');assert.equal(state.shortage,'Need 3 more wood');assert.equal(state.affordable,false);
+  assert.equal(settlementHudConstruction({economic:'loops',logs:8,buildCost:{wood:8}}).affordable,true);
+  assert.equal(settlementHudRailway({minHomes:6,hasCity:false}).status,'6 homes to unlock a station');
+  const reverse=settlementHudRailway({stage:'preview',hasCity:true,siteValid:true,canBuild:true,canReverse:true,reversed:true,sourceLabel:'Village',targetLabel:'Your city',cost:11},{gold:60});
+  assert.equal(reverse.selection,'Village → Your city');assert.equal(reverse.canReverse,true);assert.equal(reverse.reversed,true);assert.equal(reverse.canBuild,true);
+});

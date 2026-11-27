@@ -1,3 +1,4 @@
+import {createLoopEconomy} from './loop-economy.js';
 import {biomeAt} from './biomes.js';
 import {createTradeNetwork} from './trade-network.js';
 
@@ -14,7 +15,9 @@ const validCost=cost=>cost&&Object.keys(cost).every(key=>RESOURCES.includes(key)
 /** The economy owns depots, production and freight, never scenery or residents.
  * Every shipment removes real goods and escrows a real payment before departure.
  * Rendering, camera changes and repeated reads cannot advance this authority. */
-export function createSettlementEconomy(world,{session,railways,tuning={}}={}){
+export function createSettlementEconomy(world,options={}){
+  if(world.gameplay?.economy==='loops')return createLoopEconomy(world,options);
+  const {session,railways,tuning={}}=options;
   if(!session?.player||!railways?.snapshot)throw new TypeError('Economy requires a settlement session and railway authority');
   const accounts=new Map(),depots=new Map(),aliases=new Map(),trains=new Map(),locks=new Map(),events=[];
   const freeIndustry=new Set(),firstCity=new Map(),settled=new Set();

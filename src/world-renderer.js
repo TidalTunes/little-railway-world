@@ -424,7 +424,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
           m.x>=chunk.cellBounds.minX&&m.x<chunk.cellBounds.maxX&&m.z>=chunk.cellBounds.minZ&&m.z<chunk.cellBounds.maxZ)))chunk.obsolete=true;
       failures.clear();
     },
-    fellTree:(id,options)=>trees?.fellTree(id,options)??false,removeTree:id=>trees?.removeTree(id)??false,
+    fellTree:(id,options)=>trees?.fellTree(id,options)??false,removeTree:id=>trees?.removeTree(id)??false,restoreTree:(id,options)=>trees?.restoreTree(id,options)??false,
     updateTrees:dt=>{trees?.update(dt);scenery?.update(dt);},get removedTreeIds(){return trees?.removed;},get treeRevision(){return trees?.revision??0;},
     get placements(){refreshResidents();return placements;},get placementRevision(){return placementRevision;},
     get cityStreets(){refreshResidents();return cityStreets;},

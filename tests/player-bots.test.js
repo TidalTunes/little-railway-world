@@ -82,8 +82,7 @@ test('bot construction respects the same two-second build pause',()=>{
 });
 
 test('the real island completes three independent offscreen level-five cities without player income or duplicate harvests',()=>{
-  const world=generateWorld(createSettlementWorld(),{detail:'network'});
-  world.gameplay.economy=false;
+  const world=generateWorld(createSettlementWorld({economy:false}),{detail:'network'});
   preparePlayerBotScenery(world,generateWorldRegion);
   const bots=[],session=createSettlementSession(world,{getActors:()=>bots.map(bot=>bot.position)});
   const village=world.gameplay.farmVillages,permanent=[...world.gameplay.botScenery,...village.houses,...village.buildings];

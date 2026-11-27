@@ -356,7 +356,7 @@ export function createSettlementResidentSimulation(world={}){
 
 /** Two fixed-capacity instanced draws replace a scene hierarchy per citizen.
  * The head and coat reuse the same .75-unit passenger template as stations. */
-export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.ownerId}={}){
+export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.ownerId,simulation:externalSimulation}={}){
   const root=new THREE.Group();root.name='settlement-residents';parent.add(root);
   const owner=world.players?.find(player=>player.id===ownerId),palette=createPlayerPalette(owner),template=new THREE.Group();
   const model=person(template,{color:palette.body});model.remove(model.children[0],model.children[1]);
@@ -366,7 +366,7 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
   const limbs=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),limbMaterial,RESIDENT_LIMITS.visible*4);limbs.name='resident-limbs';
   for(const mesh of [body,limbs]){mesh.count=0;mesh.frustumCulled=false;mesh.castShadow=mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);root.add(mesh);}
   for(let index=0;index<RESIDENT_LIMITS.visible*4;index++)limbs.setColorAt(index,index%2?palette.body.color:M.metal.color);
-  const simulation=createSettlementResidentSimulation(world),pose=new THREE.Matrix4(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();
+  const simulation=externalSimulation??createSettlementResidentSimulation(world),pose=new THREE.Matrix4(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();
   const selected=[],candidates=[];let selectionAge=Infinity,previousFocus=null,previousRadius=0,rendered=0,visibilityRevision=-1;
   function select(focus,radius){candidates.length=0;
     for(const resident of simulation.residents.values())if(resident.edge&&!resident.indoors){const d=surfaceDistance(world,focus,resident);if(d<radius)candidates.push({resident,d});}
@@ -376,7 +376,7 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
   }
   function sync(snapshot){simulation.sync(snapshot);selectionAge=Infinity;}
   function update(dt,{focus={x:0,z:0},mapBlend=0,walkingWeight=0,visible=true,reducedMotion=false,night=0,dayPhase,unavailableHomes}={}){
-    simulation.update(dt,{night,dayPhase});selectionAge+=dt;
+    if(!externalSimulation)simulation.update(dt,{night,dayPhase});selectionAge+=dt;
     root.visible=visible&&mapBlend<.98;if(!root.visible){rendered=0;return;}
     const radius=walkingWeight>.5?RESIDENT_LIMITS.walkingRadius:RESIDENT_LIMITS.detailRadius;
     if(visibilityRevision!==simulation.visibilityRevision||selectionAge>=RESIDENT_LIMITS.selectionInterval||!previousFocus||previousRadius!==radius||surfaceDistance(world,focus,previousFocus)>3)select(focus,radius);
@@ -392,7 +392,7 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
         const swing=stride*side;
         part.position.set(side*.055,.32-Math.cos(swing)*.16,-Math.sin(swing)*.16);part.rotation.set(swing,0,0);part.scale.set(.075,.32,.10);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
-        const greeting=!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
+        const greeting=!reducedMotion&&resident.activity==='working'?-.48+Math.sin(resident.idleTime*4.2+side)*.18:!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
         const armSwing=-swing*.65+greeting;
         part.position.set(side*.143,.53-Math.cos(armSwing)*.105,-Math.sin(armSwing)*.105);part.rotation.set(armSwing,0,side*-.035);part.scale.set(.052,.21,.075);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
@@ -401,8 +401,8 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
     body.count=rendered=index;limbs.count=limbIndex;body.instanceMatrix.needsUpdate=limbs.instanceMatrix.needsUpdate=true;
   }
   return {root,body,limbs,sync,update,snapshot:()=>simulation.snapshot(),
-    get stats(){return {residents:simulation.residents.size,visible:rendered,edges:simulation.graph.edges.size,revision:simulation.revision,draws:rendered?2:0,...simulation.stats};},
-    dispose(){simulation.dispose();root.removeFromParent();body.dispose();limbs.dispose();body.geometry.dispose();limbs.geometry.dispose();
+    get stats(){return {residents:simulation.residents.size,visible:rendered,edges:simulation.graph?.edges.size??0,revision:simulation.revision,draws:rendered?2:0,...simulation.stats};},
+    dispose(){if(!externalSimulation)simulation.dispose();root.removeFromParent();body.dispose();limbs.dispose();body.geometry.dispose();limbs.geometry.dispose();
       for(const material of template.userData.ownedMaterials??[])material.dispose();limbMaterial.dispose();Object.values(palette).forEach(material=>material.dispose());selected.length=candidates.length=0;},
   };
 }

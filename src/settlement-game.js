@@ -63,24 +63,30 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   // retain their reservations while their scenery chunk is off screen.
   const villages=copy(config.farmVillages??{});
   const villageBuildings=[...villages.houses??[],...villages.buildings??[]],villagePaths=villages.paths??[];
-  const economic=Boolean(world.gameplay?.economy);
+  const economic=Boolean(world.gameplay?.economy),loopEconomy=world.gameplay?.economy==='loops';
   let cities=[],clusters=[],economy=null,establishedCity=false;
-  let logs=economic?12:0,gold=economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
+  let logs=economic?12:0,gold=loopEconomy?60:economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
 
   // Dispersed early outposts must still be able to form their first depot.
   // Requiring tools before any city exists would make them unobtainable.
-  const constructionCost=()=>({timber:economic?8:SETTLEMENT.houseCost,tools:economic&&establishedCity?2:0});
+  const constructionCost=()=>({timber:economic?8:SETTLEMENT.houseCost,tools:economic&&!loopEconomy&&establishedCity?2:0});
   function resourcesAt(point){
-    const resources=economic&&economy&&finitePoint(point)?economy.resourcesAt(point):{timber:logs,grain:0,tools:0};
-    return Object.fromEntries(['timber','grain','tools'].map(key=>[key,Number.isSafeInteger(resources?.[key])&&resources[key]>=0?resources[key]:0]));
+    const resources=economic&&economy&&(loopEconomy||finitePoint(point))?economy.resourcesAt(point):{wood:logs,timber:logs,metal:0,food:0,gold,grain:0,tools:0};
+    const valid=value=>Number.isSafeInteger(value)&&value>=0?value:0;
+    if(loopEconomy){
+      const wood=valid(resources?.wood??resources?.timber);
+      return {wood,timber:wood,metal:valid(resources?.metal),food:valid(resources?.food),gold:valid(resources?.gold??gold),
+        grain:0,tools:0,cityId:resources?.cityId??null};
+    }
+    return Object.fromEntries(['timber','grain','tools'].map(key=>[key,valid(resources?.[key])]));
   }
   function resourceFailure(cost,resources){
     const missing=Object.entries(cost).filter(([key,amount])=>amount>resources[key]).map(([key,amount])=>[key,amount-resources[key]]);
     if(!missing.length)return null;
     if(!economic)return {code:'not-enough-logs',reason:`Collect ${missing[0][1]} more ${missing[0][1]===1?'log':'logs'}`};
-    return {code:missing.some(([key])=>key==='tools')?'not-enough-tools':'not-enough-timber',
-      reason:`Need ${missing.map(([key,amount])=>`${amount} more ${key}`).join(' and ')}`};
+    return {code:missing.some(([key])=>key==='tools')?'not-enough-tools':loopEconomy?'not-enough-wood':'not-enough-timber',
+      reason:`Need ${missing.map(([key,amount])=>`${amount} more ${loopEconomy&&key==='timber'?'wood':key}`).join(' and ')}`};
   }
   function setEconomy(adapter){
     if(adapter!==null&&(!adapter||typeof adapter.resourcesAt!=='function'||typeof adapter.spendConstruction!=='function'))throw new TypeError('Economy requires resource and construction methods');
@@ -178,6 +184,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const invalid=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(!finitePoint(house)||!Number.isFinite(house.rotation))return invalid('invalid-position','Choose a place for your house');
     if(!ready)return invalid('loading','Preparing this patch of ground');
+    if(loopEconomy&&!neighbours.length)return invalid('outside-city','Build near your existing homes');
     if(player&&(!finitePoint(player)||enforceReach&&surfaceDistance(world,player,house)>SETTLEMENT.buildReach))return invalid('out-of-reach','Move closer to build here');
     const siteError=validateSite(house,{player,placements,ready,isReadyAt});
     if(siteError)return invalid(...siteError);
@@ -326,7 +333,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   refreshConnections();
   return {
     get logs(){return logs;},get gold(){return gold;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get spatialRevision(){return spatialRevision;},get ownerId(){return ownerId;},
-    get economic(){return economic;},get constructionCost(){return constructionCost();},
+    get economic(){return economic;},get economyMode(){return loopEconomy?'loops':economic?'trade':null;},get constructionCost(){return constructionCost();},
     get houses(){return copy(homes);},get buildings(){return copy(buildings);},get cities(){return copy(cities);},get clusters(){return copy(clusters);},
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},

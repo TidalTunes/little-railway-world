@@ -340,3 +340,17 @@ test('revision replacement and disposal release owned batches without disposing 
   assert.equal(parent.children.length,0);assert.equal(mapParent.children.length,0);assert.equal(sharedDisposals,0);
   assert.equal(art.sync({...snapshot,revision:3}),false);
 });
+
+
+test('directed rail arrows follow the travel tangent on built spines and live previews',t=>{
+  const art=createSettlementRailwayArt(new THREE.Group(),new THREE.Group(),{...world,gameplay:{economy:'loops'}});t.after(()=>art.dispose());
+  art.sync(snapshot);art.preview({valid:true,lines:[line],stations:[]},{visible:true});
+  const matrix=new THREE.Matrix4(),direction=new THREE.Vector3(0,0,1);
+  for(const root of [art.root,art.mapRoot])for(const name of ['railway-direction-arrows','railway-preview-direction-arrows']){
+    const arrows=root.getObjectByName(name);assert.ok(arrows.visible);assert.equal(arrows.count,1);arrows.getMatrixAt(0,matrix);
+    assert.equal(matrix.elements[12],0);assert.equal(matrix.elements[14],10);const forward=direction.clone().transformDirection(matrix);assert.ok(forward.z>.9999);
+  }
+  const arrows=art.root.getObjectByName('railway-preview-direction-arrows'),geometry=arrows.geometry;
+  for(let i=0;i<20;i++)art.preview({valid:true,lines:[line],stations:[]},{visible:true});assert.equal(arrows.geometry,geometry);
+  art.preview(null,{visible:false});assert.equal(arrows.count,0);
+});

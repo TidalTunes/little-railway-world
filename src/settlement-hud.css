@@ -154,3 +154,18 @@
   .settlement-placement-keys { margin-top: 2px; }
 }
 @media (prefers-reduced-motion: reduce) { .settlement-hud button, .settlement-progress-arc { transition: none; } }
+
+/* Shared player stock: four readable counters, no city depot panel. */
+.settlement-metal {color:oklch(.43 .04 225)}
+.settlement-food {color:oklch(.46 .095 85)}
+.settlement-hud[data-theme="night"] .settlement-metal {color:oklch(.83 .06 225)}
+.settlement-hud[data-theme="night"] .settlement-food {color:oklch(.85 .11 87)}
+.settlement-hud[data-economy="loops"] .settlement-inventory {gap:27px}
+@media(max-width:600px){
+  .settlement-hud[data-economy="loops"] .settlement-inventory {gap:17px}
+  .settlement-hud[data-economy="loops"] .settlement-resource strong {font-size:30px}
+  .settlement-hud[data-economy="loops"] .settlement-resource {min-width:43px}
+  .settlement-hud[data-economy="loops"] .settlement-resource-caption {font-size:11px}
+  .settlement-hud[data-economy="loops"] .settlement-resource-caption .settlement-symbol {width:19px;height:19px}
+  .settlement-hud[data-economy="loops"] .settlement-day-control {top:105px}
+}

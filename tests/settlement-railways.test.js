@@ -105,7 +105,7 @@ test('the settlement wallet rejects invalid costs and cannot become negative',()
 });
 
 test('canonical off-screen island scenery supports the actual starter layout and shared farm routes',()=>{
-  const world=generateWorld(createSettlementWorld(),{detail:'network'}),starter=world.gameplay.starterHouse;
+  const world=generateWorld(createSettlementWorld({economy:true}),{detail:'network'}),starter=world.gameplay.starterHouse;
   world.gameplay.railwayMaxDistance=1000;
   const city={id:'player-city',x:-84,z:-43-2/3,ownerId:'teal',level:1,houseCount:3};
   const {session}=fixture({cities:[city],gold:40});session.buildings=[[0,0],[-6,3],[0,-5]].map(([x,z],index)=>({...starter,id:`actual-${index}`,x:starter.x+x,z:starter.z+z,cityId:city.id}));
