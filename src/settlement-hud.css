@@ -67,7 +67,7 @@
 .settlement-phase-label .settlement-label { font-size: 13px; }
 .settlement-phase-label .settlement-symbol { width: 23px; height: 23px; }
 .settlement-dock { position: absolute; bottom: max(24px, env(safe-area-inset-bottom)); left: max(26px, env(safe-area-inset-left)); display: flex; flex-direction: column; align-items: flex-start; gap: 15px; max-width: calc(100% - 52px); }
-.settlement-actions, .settlement-placement-keys { display: flex; align-items: center; gap: 23px; }
+.settlement-actions, .settlement-placement-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 23px; }
 .settlement-hud button {
   appearance: none; position: relative; display: inline-flex; justify-content: flex-start; align-items: center; gap: 9px;
   min-height: 44px; padding: 3px 2px; margin: 0; border: 0; border-radius: 4px; background: transparent;
@@ -79,6 +79,7 @@
 .settlement-actions [data-action="axe"] { --settlement-action: var(--settlement-wood); --settlement-key-paint: oklch(0.47 0.13 43); }
 .settlement-actions [data-action="house"], .settlement-placement-keys [data-action="build"] { --settlement-action: var(--settlement-city); --settlement-key-paint: oklch(0.42 0.10 166); }
 .settlement-actions [data-action="view"], .settlement-day-control { --settlement-action: var(--settlement-view); }
+.settlement-actions [data-action="rail"], .settlement-placement-keys [data-action="rail-build"] { --settlement-action: var(--settlement-view); --settlement-key-paint: oklch(0.42 0.09 236); }
 .settlement-actions button kbd { border-color: color-mix(in oklch, var(--settlement-action) 65%, transparent); background: color-mix(in oklch, var(--settlement-action) 9%, transparent); }
 .settlement-hud button:hover:not(:disabled), .settlement-hud button[aria-pressed="true"] { color: var(--settlement-ink); }
 .settlement-hud button:hover:not(:disabled) kbd, .settlement-hud button[aria-pressed="true"] kbd { border-color: var(--settlement-action, var(--settlement-accent)); background: color-mix(in oklch, var(--settlement-action, var(--settlement-accent)) 12%, transparent); }
@@ -91,6 +92,11 @@
 .settlement-movement > span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 550; }
 .settlement-movement kbd { min-width: 0; height: 23px; padding: 0 5px; border-bottom-width: 2px; border-radius: 4px; font-size: 12px; }
 .settlement-build-actions { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; padding: 0 2px 5px; }
+.settlement-rail-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: min(420px, calc(100vw - 52px)); padding: 0 2px 5px; }
+.settlement-rail-selection { font-size: 16px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+.settlement-rail-status { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.settlement-rail-status[data-kind="error"] { color: var(--settlement-invalid); }
+.settlement-rail-status[data-kind="success"] { color: var(--settlement-city); }
 .settlement-placement-note { font-size: 14px; font-weight: 650; }
 .settlement-validity { max-width: 330px; font-size: 13px; color: var(--settlement-invalid); }
 .settlement-validity[data-valid="true"] { color: var(--settlement-city); }

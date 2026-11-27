@@ -16,7 +16,7 @@ import {applySceneStyle} from './scene-style.js';
 const LIVERY = {coral:'redLight',teal:'teal',gold:'gold',blue:'blue'};
 
 
-export function buildRailways(parent,world,{surfaceRoot}={}){
+export function buildRailways(parent,world,{surfaceRoot,skipTrackBed=false,skipRails=false}={}){
   const physical=!!surfaceRoot&&!!surfaceFor(world),target=physical?surfaceRoot:parent;
   for(const line of world.lines){
     const metric=physical?physicalLineMetric(world,line):null;
@@ -24,8 +24,10 @@ export function buildRailways(parent,world,{surfaceRoot}={}){
       const start=physicalDistanceAtChart(metric,range.start),end=physicalDistanceAtChart(metric,range.end);
       const steps=Math.max(1,Math.ceil((end-start)/.30));
       const points=Array.from({length:steps+1},(_,i)=>sampleLine(line,chartDistanceAtPhysical(metric,start+(end-start)*i/steps)));
-      if(physical)physicalRailRibbon(target,world,points,1.88,-.42,-.19,'gravel');
-      else solidRibbon(parent,points,1.88,-.42,-.19,'gravel');
+      if(!skipTrackBed){
+        if(physical)physicalRailRibbon(target,world,points,1.88,-.42,-.19,'gravel');
+        else solidRibbon(parent,points,1.88,-.42,-.19,'gravel');
+      }
       // Keep one arc-length phase across streamed cells, so a cell boundary
       // cannot restart the sleeper pattern or create a doubled/empty gap.
       const firstSleeper=.4+Math.ceil((start-.4)/.85-1e-9)*.85;
@@ -34,7 +36,7 @@ export function buildRailways(parent,world,{surfaceRoot}={}){
         if(physical)physicalRailBox(target,world,p,0,-.14,1.56,.10,.23,'timber');
         else box(parent,p.x,p.y-.14,p.z,1.56,.10,.23,'timber',p.angle);
       }
-      for(const side of [-1,1]){
+      if(!skipRails)for(const side of [-1,1]){
         if(physical){physicalRailRibbon(target,world,points,.095,-.09,0,'rail',side*.46);continue;}
         const rail=points.map(p=>({x:p.x+p.tangent.z*side*.46,y:p.y,z:p.z-p.tangent.x*side*.46,tangent:p.tangent}));
         solidRibbon(parent,rail,.095,-.09,0,'rail');

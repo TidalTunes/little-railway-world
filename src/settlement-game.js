@@ -267,6 +267,14 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     return {id:`income:${completedDays}`,day:completedDays,days,amount,totalGold:gold,houses:copy(eligible)};
   }
 
+  // Other construction systems use the same authoritative wallet. Failed
+  // plans never debit it, and repeated commands cannot overspend the account.
+  function spendGold(amount){
+    if(!Number.isSafeInteger(amount)||amount<=0)return {ok:false,code:'invalid-cost'};
+    if(gold<amount)return {ok:false,code:'not-enough-gold',cost:amount,totalGold:gold};
+    gold-=amount;revision++;return {ok:true,cost:amount,totalGold:gold};
+  }
+
   refreshConnections();
   return {
     get logs(){return logs;},get gold(){return gold;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get ownerId(){return ownerId;},
@@ -274,6 +282,6 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
     snapshot(){return {logs,gold,lastIncomeDay,revision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
-    evaluateBuild,build,chop,develop,settleIncome,
+    evaluateBuild,build,chop,develop,settleIncome,spendGold,
   };
 }

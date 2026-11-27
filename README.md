@@ -18,6 +18,8 @@ The continental stress preset opens as a map with 256 cities, 287 links, and 2,0
 
 Trains follow continuous circuits through stations, with each carriage sampled along the track. Straight city approaches and tangent-connected circular bends keep movement smooth. The deterministic planner accepts authored players, city levels, connections, rivers, mountains, and biome sites. `?layout=classic` retains the earlier eight-city generator; `?seed=68&cities=12` generates a classic twelve-city layout. `?layout=crossroads` loads the seven-city crossing preset.
 
+In overview, **T Railway** connects a formed player city to another city for **5 gold**. Select your city, select a destination, then confirm the visible route with **Enter / Build line**; **Escape** cancels. Stations appear beside both towns with connecting footpaths. Later links reuse existing stations and approach tracks, joining with matching tangents. Curves keep an eight-unit minimum radius, river crossings receive bridges, and routes avoid buildings, farms, mountains and ocean. Trees within the committed corridor are cleared without granting timber. Planning runs in a background worker and does not charge until confirmation.
+
 This is a settlement and world-exploration prototype. Multiplayer and a world-editor UI are still to come; the local rivals currently stand in for other players.
 
 ## Run and verify

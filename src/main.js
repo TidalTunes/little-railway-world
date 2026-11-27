@@ -266,7 +266,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. Move the cursor to look around. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths and sleep indoors at night. Gray level-one farming villages have their own residents who visit nearby fields. Rival coral, gold and blue settlers chop real trees and build their own cities to level five, then stop. Their resources and income are separate from yours. V switches between your traveller and overview. Each player-owned city home earns one gold at sunset; gray village homes earn you no income. Day and night each last five minutes; N or the day/night button advances to the next phase for testing.');
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. Move the cursor to look around. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths and sleep indoors at night. Gray level-one farming villages have their own residents who visit nearby fields. Rival coral, gold and blue settlers chop real trees and build their own cities to level five, then stop. Their resources and income are separate from yours. V switches between your traveller and overview. In overview, T selects railway building: choose one of your cities, choose another city, then Enter builds the previewed route and stations for five gold. Escape cancels. Each player-owned city home earns one gold at sunset; gray village homes earn you no income. Day and night each last five minutes; N or the day/night button advances to the next phase for testing.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
@@ -359,7 +359,7 @@ function frame(now){
       groundFocus,groundRadius,groundOnly:groundLayer,
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
-    settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,dayState,night:daylight.night,uiDt:dt});
+    settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,zoom:navigation.zoom,dayState,night:daylight.night,uiDt:dt});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:settlement?.cityStreets??detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
@@ -430,7 +430,7 @@ window.__railway={
 window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),
-  inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot()}:null,
+  inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot(),railway:settlement.railways.snapshot()}:null,
   generateWorld,validateWorld,createStressWorld,
 });
 const parameters=new URLSearchParams(location.search);

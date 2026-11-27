@@ -44,3 +44,20 @@ test('construction protects another traveller while keeping session state indepe
   earn(session.player,'player');assert.equal(session.player.evaluateBuild({x:5,z:5}).code,'player-blocked');
   assert.equal(fresh.revision,0);assert.equal(fresh.player.logs,0);assert.equal(fresh.shared.removedTreeIds.size,0);
 });
+
+test('new railway stations and track corridors reserve land for every owner without changing city income',()=>{
+  let infrastructure={revision:0,buildings:[],paths:[],corridors:[]};
+  const session=createSettlementSession(world(),{surfaceAt:flat,getInfrastructure:()=>infrastructure});
+  earn(session.player,'player');const bot=session.bots[0].game;earn(bot,'bot');
+  const before=session.revision;
+  infrastructure={revision:1,buildings:[{id:'station',kind:'station',x:8,z:10,radius:3.42}],paths:[],
+    corridors:[{id:'rail',width:2.25,points:[{x:-10,z:8},{x:20,z:8}]}]};
+  assert.equal(session.revision,before+1);
+  assert.ok(session.buildings.some(item=>item.id==='station'));
+  assert.equal(session.player.evaluateBuild({x:8,z:10}).code,'house-blocked');
+  assert.equal(bot.evaluateBuild({x:8,z:10}).code,'house-blocked');
+  assert.equal(session.player.evaluateBuild({x:0,z:8}).code,'path-blocked');
+  assert.equal(bot.evaluateBuild({x:18,z:8}).code,'path-blocked');
+  assert.deepEqual(session.paths,[],'track clearance is not drawn as a village footpath');
+  assert.equal(session.player.settleIncome(1).amount,0);
+});
