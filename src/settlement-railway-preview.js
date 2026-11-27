@@ -19,6 +19,9 @@ export function createRailwayPreview(railways,planner){
       if(nextKey!==key){
         epoch++;key=nextKey;requested='';confirmed=false;checking=true;
         result=railways.preview(from,to,options);
+        // A city outside the construction radius is already decisively
+        // rejected. Do not wake the terrain worker for an impossible pair.
+        if(result.code==='out-of-range')checking=false;
       }
       wallet();
       if(checking&&!settings.dragging&&requested!==key){

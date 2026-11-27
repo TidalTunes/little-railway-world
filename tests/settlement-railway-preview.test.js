@@ -20,7 +20,7 @@ function fixture(t){
     const request=requests[index];assert.ok(request,`request ${index} exists`);
     request.resolve(response??{result:{...draft(request.from,request.to,request.options),provisional:false,checked:true}});
   };
-  return {editor,planner,previews,requests,complete,invalidate(){revision++;}};
+  return {editor,railways,planner,previews,requests,complete,invalidate(){revision++;}};
 }
 const initial=()=>({waypoints:[{x:25,z:5},{x:55,z:-5}],attachments:{from:{x:7,z:0},to:{x:73,z:0}}});
 
@@ -34,6 +34,26 @@ test('hover returns an immediate visual route before asynchronous validation and
   f.complete(0);await tick();const confirmed=f.editor.update('home','village',options,{gold:10});
   assert.equal(confirmed.confirmed,true);assert.equal(confirmed.checking,false);assert.equal(confirmed.result.checked,true);
   assert.equal(f.previews.length,1);assert.equal(f.requests.length,1);
+});
+
+test('out-of-range cities reject immediately without worker work and cannot revive an earlier checked route',async t=>{
+  const f=fixture(t),preview=f.railways.preview;
+  f.railways.preview=(from,to,options)=>to==='distant-city'
+    ?{provisional:true,siteValid:false,valid:false,cost:5,code:'out-of-range',reason:'City is outside railway range',lines:[],handles:[]}
+    :preview(from,to,options);
+  f.editor.update('home','village',initial(),{gold:10});
+  const outside=f.editor.update('home','distant-city',initial(),{gold:10});
+  assert.equal(outside.checking,false);assert.equal(outside.confirmed,false);assert.equal(outside.result.code,'out-of-range');
+  assert.equal(f.requests.length,1,'only the preceding in-range pair started validation');
+  f.complete(0);await tick();
+  for(const gold of [0,5,100]){
+    const state=f.editor.update('home','distant-city',initial(),{gold});
+    assert.equal(state.result.code,'out-of-range');assert.equal(state.result.valid,false);
+    assert.equal(state.confirmed,false);assert.equal(state.checking,false);
+  }
+  assert.equal(f.requests.length,1,'gold changes cannot request a terrain check for a distant city');
+  const back=f.editor.update('home','village',initial(),{gold:10});assert.equal(back.checking,true);
+  assert.equal(f.requests.length,2);f.complete(1);await tick();assert.equal(f.editor.state.confirmed,true);
 });
 
 test('each pointer move updates the curve immediately while one release validates the final unchanged key',async t=>{

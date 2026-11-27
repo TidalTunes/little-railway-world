@@ -4,18 +4,18 @@ import {createSettlementRailways,railwayControlCount,SETTLEMENT_RAILWAY} from '.
 import {createSettlementSession} from '../src/settlement-session.js';
 import {createSettlementWorld} from '../src/settlement-world.js';
 import {generateWorld,worldSurface,mountainHeight,CLEARANCES} from '../src/world-model.js';
-import {sampleAlignment} from '../src/alignments.js';
+import {sampleAlignment,combineAlignments,straightSegment,sampleAlignmentPoints} from '../src/alignments.js';
 
 const flat=()=>({type:'ground',height:0});
 const interior=preview=>preview.handles.filter(handle=>handle.kind==='bend').map(({x,z})=>({x,z}));
 const endpoints=preview=>({from:{x:preview.handles[0].x,z:preview.handles[0].z},to:{x:preview.handles.at(-1).x,z:preview.handles.at(-1).z}});
-function fixture({gold=20,surfaceAt=flat,placements=[],cities}={}){
+function fixture({gold=20,surfaceAt=flat,placements=[],cities,maxConnectionDistance=1000}={}){
   cities??=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:55,z:20,ownerId:'coral',level:1,houseCount:3},{id:'c',x:48,z:-40,ownerId:'blue',level:1,houseCount:3}];
   const buildings=cities.flatMap(city=>[[0,0],[4,0],[0,4]].map(([x,z],index)=>({id:`${city.id}:home:${index}`,kind:'house',cityId:city.id,ownerId:city.ownerId,
     x:city.x+x,z:city.z+z,rotation:0,width:2.2,depth:2.2})));cities.forEach(city=>city.houseIds=buildings.filter(home=>home.cityId===city.id).map(home=>home.id));
   const player={cities:[cities[0]],ownerId:'teal',gold,logs:0,spendGold(amount){if(this.gold<amount)return{ok:false,code:'not-enough-gold'};this.gold-=amount;return {ok:true,totalGold:this.gold};}};
   const actors=[],session={player,bots:cities.slice(1).map(city=>({game:{cities:[city]}})),buildings,revision:0,shared:{removedTreeIds:new Set(),getActors:()=>actors}};
-  const world={seed:'rail-test',gameplay:{},rivers:[]};
+  const world={seed:'rail-test',gameplay:{...(maxConnectionDistance===null?{}:{railwayMaxDistance:maxConnectionDistance})},rivers:[]};
   return {world,session,cities,actors,placements,surfaceAt,rail:createSettlementRailways(world,{session,surfaceAt,getPlacements:()=>placements})};
 }
 function assertSmooth(line){
@@ -106,6 +106,7 @@ test('the settlement wallet rejects invalid costs and cannot become negative',()
 
 test('canonical off-screen island scenery supports the actual starter layout and shared farm routes',()=>{
   const world=generateWorld(createSettlementWorld(),{detail:'network'}),starter=world.gameplay.starterHouse;
+  world.gameplay.railwayMaxDistance=1000;
   const city={id:'player-city',x:-84,z:-43-2/3,ownerId:'teal',level:1,houseCount:3};
   const {session}=fixture({cities:[city]});session.buildings=[[0,0],[-6,3],[0,-5]].map(([x,z],index)=>({...starter,id:`actual-${index}`,x:starter.x+x,z:starter.z+z,cityId:city.id}));
   city.houseIds=session.buildings.map(home=>home.id);const rail=createSettlementRailways(world,{session});
@@ -268,7 +269,7 @@ test('existing station attachment requests snap to physical ends or junctions an
   assertSmooth(full.lines.at(-1));
 });
 
-test('unchanged approach junctions persist, but dragging snaps to a physical station end',()=>{
+test('approach junctions persist and endpoint dragging slides continuously along the track',()=>{
   const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:100,z:0,ownerId:'coral',level:1,houseCount:3},{id:'c',x:50,z:75,ownerId:'blue',level:1,houseCount:3}];
   const {rail}=fixture({cities});assert.ok(rail.build('a','b').ok);
   const existing=rail.lines.at(-1),point=sampleAlignment(existing.alignment,22),station=rail.stations.find(s=>s.cityId==='a');
@@ -278,10 +279,95 @@ test('unchanged approach junctions persist, but dragging snaps to a physical sta
   assert.ok(Math.hypot(start.x-point.x,start.z-point.z)<1e-7);
   assert.ok(Math.abs(start.tangent.x*point.tangent.x+start.tangent.z*point.tangent.z)>.999999);
   const full=rail.evaluate('a','c',options);assert.deepEqual(full.handles,draft.handles);assert.equal(full.valid,true);
-  const dragged=rail.preview('a','c',{attachments:{from:{x:point.x+.2,z:point.z+.2}}});assert.ok(dragged.valid,dragged.reason);assert.equal(dragged.fromJunction,null);
-  const spine=rail.lines.find(line=>line.id===station.lineId);
-  assert.ok([spine.points[0],spine.points.at(-1)].some(p=>Math.hypot(p.x-dragged.handles[0].x,p.z-dragged.handles[0].z)<1e-7));
+  const dragged=rail.preview('a','c',{attachments:{from:{x:point.x+.2,z:point.z+.2}}});assert.ok(dragged.valid,dragged.reason);
+  assert.equal(dragged.fromJunction.lineId,existing.id);assert.notEqual(dragged.fromJunction.distance,22);
+  assert.ok(Math.hypot(point.x-dragged.handles[0].x,point.z-dragged.handles[0].z)<.3,'small cursor motion produces a small change in switch position');
   assert.deepEqual(rail.stations.find(s=>s.cityId==='a'),station);
+});
+
+test('track attachments project continuously onto exact straights and arcs and replay without drift',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:100,z:0,ownerId:'coral',level:1,houseCount:3},{id:'c',x:50,z:75,ownerId:'blue',level:1,houseCount:3}];
+  const f=fixture({cities});assert.ok(f.rail.build('a','b').ok);const existing=f.rail.lines.at(-1),station=f.rail.stations.find(s=>s.cityId==='a');
+  const arc=existing.alignment.segments.filter(segment=>segment.type==='arc').at(-1);
+  for(const distance of [22.137,22.387,22.637,arc.startDistance+arc.length*.47]){
+    const point=sampleAlignment(existing.alignment,distance),options={attachments:{from:{x:point.x-point.tangent.z*.3,z:point.z+point.tangent.x*.3}}};
+    const draft=f.rail.preview('a','c',options);assert.ok(draft.valid,draft.reason);
+    assert.equal(draft.fromJunction.lineId,existing.id);assert.ok(Math.abs(draft.fromJunction.distance-distance)<1e-8);
+    assert.ok(Math.hypot(draft.handles[0].x-point.x,draft.handles[0].z-point.z)<1e-8);
+    const start=sampleAlignment(draft.lines.at(-1).alignment,0);assert.ok(Math.abs(start.tangent.x*point.tangent.x+start.tangent.z*point.tangent.z)>.999999);
+    const replay=f.rail.preview('a','c',{attachments:{from:endpoints(draft).from}});
+    assert.deepEqual(replay.fromJunction,draft.fromJunction);assert.deepEqual(replay.handles,draft.handles);
+    const full=f.rail.evaluate('a','c',options);assert.ok(full.valid,full.reason);assert.deepEqual(full.lines,draft.lines);assert.deepEqual(full.fromJunction,draft.fromJunction);
+  }
+  assert.deepEqual(f.rail.stations.find(s=>s.cityId==='a'),station);assert.equal(f.session.player.gold,15);
+});
+
+test('a station can branch from a second connected line without inventing a station or duplicating its rail',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:100,z:0,ownerId:'teal',level:1,houseCount:3},
+    {id:'c',x:140,z:100,ownerId:'blue',level:1,houseCount:3},{id:'d',x:160,z:40,ownerId:'coral',level:1,houseCount:3}];
+  const f=fixture({cities});assert.ok(f.rail.build('a','b').ok);const extension=f.rail.build('b','d');assert.ok(extension.ok,extension.reason);
+  const existing=extension.lines.at(-1),distance=existing.length*.5,point=sampleAlignment(existing.alignment,distance);
+  const options={attachments:{from:{x:point.x,z:point.z}}},draft=f.rail.preview('a','c',options);assert.ok(draft.valid,draft.reason);
+  assert.equal(draft.fromJunction.lineId,existing.id);assert.ok(Math.abs(draft.fromJunction.distance-distance)<1e-8);
+  const worker=createSettlementRailways(f.world,{session:f.session,surfaceAt:flat,initialState:f.rail.snapshot()});
+  const validated=worker.evaluate('a','c',options);assert.deepEqual(validated.fromJunction,draft.fromJunction);assert.deepEqual(validated.handles,draft.handles);
+  assert.ok(f.rail.adoptPreview('a','c',validated,f.rail.geometryKey('a','c',options),options));
+  const count=f.rail.stations.length,built=f.rail.build('a','c',{...options,requireCached:true});assert.ok(built.ok,built.reason);
+  assert.equal(f.rail.stations.length,count+1);assert.equal(f.rail.lines.filter(line=>line.id===existing.id).length,1);
+  assert.deepEqual(built.connection.fromJunction,validated.fromJunction);assertSmooth(built.lines.at(-1));
+});
+
+test('endpoint snapping excludes disconnected own rails and connected rails owned by another player',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:100,z:0,ownerId:'coral',level:1,houseCount:3},{id:'c',x:50,z:75,ownerId:'blue',level:1,houseCount:3}];
+  const f=fixture({cities});assert.ok(f.rail.build('a','b').ok);const state=f.rail.snapshot(),existing=state.lines.at(-1),anchor=sampleAlignment(existing.alignment,30);
+  const add=(id,a,b,ownerId)=>{const alignment=combineAlignments([straightSegment(a,b)]);state.lines.push({id,ownerId,stationIds:[],alignment,...sampleAlignmentPoints(alignment)});};
+  add('isolated',{x:25,z:-45},{x:75,z:-45},'teal');
+  add('rail-link:foreign',anchor,{x:50,z:-65},'blue');
+  state.connections.push({id:'connection:foreign',fromStationId:state.stations[0].id,fromJunction:{lineId:existing.id,distance:30},toStationId:'foreign'});
+  const rail=createSettlementRailways(f.world,{session:f.session,surfaceAt:flat,initialState:state});
+  for(const attachment of [{x:50,z:-45},{x:50,z:-65}]){
+    const draft=rail.preview('a','c',{attachments:{from:attachment}});assert.ok(draft.valid,draft.reason);
+    assert.equal(draft.fromJunction.lineId,existing.id);assert.ok(Math.hypot(draft.handles[0].x-attachment.x,draft.handles[0].z-attachment.z)>35);
+  }
+});
+
+test('a switch cannot exempt foreign or disconnected rails that cross exactly at its attachment',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:100,z:0,ownerId:'coral',level:1,houseCount:3},{id:'c',x:50,z:75,ownerId:'blue',level:1,houseCount:3}];
+  const f=fixture({cities});assert.ok(f.rail.build('a','b').ok);const state=f.rail.snapshot(),existing=state.lines.at(-1),point=sampleAlignment(existing.alignment,30);
+  const options={attachments:{from:{x:point.x,z:point.z}}};assert.ok(f.rail.preview('a','c',options).valid);
+  for(const ownerId of ['teal','blue']){
+    const alignment=combineAlignments([straightSegment({x:point.x,z:point.z-20},{x:point.x,z:point.z+20})]),crossing={id:'unrelated-crossing',ownerId,stationIds:[],alignment,...sampleAlignmentPoints(alignment)};
+    const rail=createSettlementRailways(f.world,{session:f.session,surfaceAt:flat,initialState:{...state,lines:[...state.lines,crossing]}});
+    const draft=rail.preview('a','c',options);assert.equal(draft.siteValid,false,'coincident tracks do not imply shared ownership or connectivity');
+    assert.equal(rail.evaluate('a','c',options).siteValid,false);assert.equal(rail.build('a','c',options).ok,false);assert.equal(f.session.player.gold,15);
+  }
+});
+
+test('railway range defaults to 140, includes its boundary, and cannot be bypassed by dragging endpoints',()=>{
+  const cities=distance=>[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:distance,z:0,ownerId:'coral',level:1,houseCount:3}];
+  const edge=fixture({cities:cities(140),maxConnectionDistance:null}),ready=edge.rail.preview('a','b');
+  assert.equal(edge.rail.maxConnectionDistance,140);assert.equal(ready.distance,140);assert.equal(ready.maxConnectionDistance,140);assert.ok(ready.valid,ready.reason);
+  const outside=fixture({cities:cities(140.001),maxConnectionDistance:null,surfaceAt:()=>{throw new Error('Out-of-range routes must not query terrain');}});
+  const options={attachments:{from:{x:60,z:0},to:{x:65,z:0}}};
+  for(const result of [outside.rail.preview('a','b',options),outside.rail.evaluate('a','b',options),outside.rail.build('a','b',options),outside.rail.build('a','b',{...options,requireCached:true})]){
+    assert.equal(result.code,'out-of-range');assert.equal(result.valid,false);assert.equal(result.distance,140.001);assert.equal(result.maxConnectionDistance,140);
+    assert.deepEqual(result.range,{distance:140.001,maxConnectionDistance:140});assert.equal(result.reason,'Outside connection range');
+    assert.equal(result.lines.length,0);assert.equal(result.stations.length,0);
+  }
+  assert.equal(outside.rail.sceneryCatalog,null);assert.equal(outside.session.player.gold,20);assert.equal(outside.rail.revision,0);
+  assert.equal(outside.rail.adoptPreview('a','b',{...ready,provisional:false},outside.rail.geometryKey('a','b',options),options),false);
+  const configured=fixture({cities:cities(145),maxConnectionDistance:150});assert.equal(configured.rail.maxConnectionDistance,150);assert.ok(configured.rail.preview('a','b').valid);
+  const sameCities=fixture({cities:cities(140),maxConnectionDistance:150});assert.notEqual(sameCities.rail.geometryKey('a','b'),edge.rail.geometryKey('a','b'));
+  for(const value of [0,-1,NaN,Infinity,'200'])assert.throws(()=>fixture({maxConnectionDistance:value}),/positive and finite/);
+});
+
+test('city selection radii enclose actual homes and civic footprints and retain a larger authored radius',()=>{
+  const f=fixture();f.cities[0].radius=2;f.cities[1].radius=120;
+  f.session.buildings.push({id:'far-home',cityId:'a',kind:'house',x:40,z:0,width:3,depth:4},
+    {id:'far-civic',cityId:'a',kind:'civic',x:70,z:10,width:12,depth:8,rotation:.7});
+  const cities=f.rail.cities,city=cities.find(city=>city.id==='a');
+  assert.ok(city.radius>=Math.hypot(70,10)+Math.hypot(12,8)/2);assert.equal(cities.find(city=>city.id==='b').radius,120);
+  assert.ok(cities.find(city=>city.id==='c').radius<10,'unrelated city buildings do not inflate another town');
 });
 
 test('terrain validation can reject an immediate draft but never reshapes it or spends gold',()=>{

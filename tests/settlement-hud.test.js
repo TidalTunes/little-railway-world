@@ -83,6 +83,15 @@ test('an impossible local bend stays an error during dragging regardless of the 
   assert.equal(selected.statusKind,'error');
 });
 
+test('range failures explain the unavailable city while hovering or selected, independently of gold',()=>{
+  for(const stage of ['destination','preview'])for(const gold of [0,5,100]){
+    const state=settlementHudRailway({stage,hovering:stage==='destination',hasCity:true,siteValid:false,canBuild:false,
+      code:'out-of-range',reason:'City is outside railway range'},{gold});
+    assert.equal(state.status,'City is outside railway range');assert.equal(state.statusKind,'error');
+    assert.equal(state.canBuild,false);assert.equal(state.showConfirm,stage==='preview');
+  }
+});
+
 test('worker and stale-world failures do not claim that placement is impossible',()=>{
   for(const code of ['planning-failed','world-changed']){
     const route={stage:'preview',hasCity:true,siteValid:false,canBuild:false,code,reason:'Route checks could not finish.'};

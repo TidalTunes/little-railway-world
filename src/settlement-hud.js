@@ -180,7 +180,7 @@ export function createSettlementHud({
     const toggleIcon=night?'sun':'moon';if(buttons['day-night'].dataset.icon!==toggleIcon){buttons['day-night'].querySelector('[data-action-icon]').innerHTML=symbols[toggleIcon];buttons['day-night'].dataset.icon=toggleIcon;}
     buttons['day-night'].title=`${night?'Day':'Night'} · N`;
     nodes.movement.hidden=!walking||building;
-    const toolAnnouncement=railPlanning?`Railway selected. ${rail.cost} gold. ${rail.selection}. ${rail.status}. ${rail.showConfirm?'Drag route dots to adjust. Enter confirms the purchase. ':''}Escape cancels.`:building?'House placement selected. Aim at clear ground. Enter places; Escape cancels.':walking?'Axe selected. E or click chops a nearby tree.':'T plans a railway. V returns to your traveller to build houses.';
+    const toolAnnouncement=railPlanning?`Railway selected. ${rail.cost} gold. ${rail.selection}. ${rail.status}. ${rail.showConfirm&&railway?.code!=='out-of-range'?'Drag route dots to adjust. ':''}${rail.canBuild?'Enter confirms the purchase. ':''}Escape cancels.`:building?'House placement selected. Aim at clear ground. Enter places; Escape cancels.':walking?'Axe selected. E or click chops a nearby tree.':'T plans a railway. V returns to your traveller to build houses.';
     const announcement=[ready?`${logs} logs. ${gold} gold.`:'Preparing your clearing.',development,toolAnnouncement,walking?'':'Overview.',message].filter(Boolean).join(' ');
     if(announcement!==announced){text(nodes.announcements,announcement);announced=announcement;}
   }

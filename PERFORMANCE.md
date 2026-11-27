@@ -4,6 +4,12 @@ The continental preset contains 256 cities, 287 rail links, 32 regional circuits
 
 ## Reproduce
 
+Keep testing to one local server and one game tab, reusing an existing instance when possible. Run the smallest relevant test files first and run benchmarks individually. Use a full suite or stress preset only when the change requires it. Close test tabs after inspection and stop servers started for that check; leave unrelated user processes alone. Multiple visible game tabs each have their own renderer, render targets and worker pool.
+
+The normal render loop stops when `document.hidden` becomes true and resumes with a fresh frame timestamp. Existing worker jobs and shader preparation can still finish in the background. Space pauses simulation motion while the visible page continues rendering, so pausing or hiding an unused test page does not release its resources. Close it when the check is complete.
+
+Run only the commands needed for the current investigation:
+
 ```sh
 npm ci
 npm test
@@ -154,8 +160,12 @@ Walking wildflowers share one 39-triangle mesh in the existing 100-instance batc
 
 ## Session railway editing
 
-Rail editing fits a provisional curve synchronously, using cached occupied-building queries and station candidates with a bounded set of direct routes and small detours. It keeps the eight-unit minimum radius and both ends of existing stations available. Full terrain, station access and clearing checks run separately in a dedicated worker using the same fitted geometry; they do not reroute the displayed curve. Drag frames never enqueue these full checks. Releasing a handle validates the latest edit. The worker receives immutable world data once, retains a bounded scenery catalog and runs at most one request with one newest request waiting. Geometry keys include interior waypoints, endpoint attachments, city state, occupied buildings and railway revision; edit epochs and revision checks reject stale plans before display, adoption or purchase.
+Rail editing fits a provisional curve synchronously, using cached occupied-building queries and station candidates with a bounded set of direct routes and small detours. It keeps the eight-unit minimum radius and both ends of existing stations available. Endpoint drags can also project continuously onto player-owned track connected to the selected city, preserving the track tangent at the junction. The city-center range check rejects destinations beyond `world.gameplay.railwayMaxDistance` (140 units by default) before fitting; edited route length and endpoint positions do not alter that limit. Full terrain, station access and clearing checks run separately in a dedicated worker using the same fitted geometry; they do not reroute the displayed curve. Drag frames never enqueue these full checks. Releasing a handle validates the latest edit. The worker receives immutable world data once, retains a bounded scenery catalog and runs at most one request with one newest request waiting. Geometry keys include interior waypoints, endpoint attachments, city state, occupied buildings and railway revision; edit epochs and revision checks reject stale plans before display, adoption or purchase.
 
 There are 1–12 interior controls, calculated at 48-unit city-chord spacing and frozen for the current city pair, plus two endpoint handles. Reshaping the route or growing the cities does not increase that count; changed occupied geometry still requires fresh validation. Handles use three shared instanced batches per render layer with bounded screen sizes. Two preview strokes share pooled geometry for the pale outline and twin ink rails. The shader draws sleeper marks and fades them when too dense to resolve. Short invalid-bend highlights use a separate reusable buffer and two local strokes; valid previews have no broad glow or fullscreen bloom. Route, diagnostic and guide buffers grow by powers of two and reuse their typed arrays. Station previews reuse pooled meshes. Affordability updates the HUD and confirmation state without refitting or recoloring the route. Committed track and station batches rebuild only when infrastructure revision changes.
+
+Selection decoration is bounded to the source and target city footprints plus one range boundary around the source. Other cities retain their level numerals without individual eligibility rings.
+
+Continuous attachment queries use exact line/arc projections in spatial trees for each player-owned connected component. Connectivity and segment indexes rebuild on infrastructure revision, while bounded switch lookup and station-site caches support repeated endpoint drags. A query selects an existing point on track; it does not regenerate the network.
 
 Clearing records stable tree/scenery IDs across chunk reloads; farm estates and other non-building scenery can be removed without changing the economy. Mountain cut/tunnel records reuse the existing terrain excavation path.

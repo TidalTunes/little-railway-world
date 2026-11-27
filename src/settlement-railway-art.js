@@ -3,7 +3,7 @@ import {station,person} from './assets.js';
 import {buildRailways} from './railway.js';
 import {consolidate} from './geometry.js';
 import {bakeMaterialColors} from './color-batches.js';
-import {createPlayerPalette,playerColors} from './player-palette.js';
+import {createPlayerPalette} from './player-palette.js';
 import {FARM_VILLAGE_PLAYER} from './farm-villages.js';
 import {buildCityStreets,streetFootprint,STREET_HEIGHT} from './city-streets.js';
 import {sampleLine,worldSurface} from './world-model.js';
@@ -93,10 +93,45 @@ export function createSettlementRailwayArt(parent,mapParent,world){
   const ghostMaterial=new THREE.MeshBasicMaterial({color:TRACK_PAPER,transparent:true,opacity:.18,depthWrite:false,depthTest:false,side:THREE.DoubleSide,toneMapped:false,fog:false});ghostMaterial.forceSinglePass=true;
   const ghostEdgeMaterial=new THREE.LineBasicMaterial({color:GOOD,transparent:true,opacity:.90,depthWrite:false,depthTest:false,toneMapped:false,fog:false});
   const blockedGuideMaterial=new THREE.LineDashedMaterial({color:BAD,dashSize:.65,gapSize:.5,transparent:true,opacity:.9,depthWrite:false,depthTest:false,toneMapped:false,fog:false});
-  const haloGeometry=new THREE.RingGeometry(.90,1,48);haloGeometry.rotateX(-Math.PI/2);
-  const haloMaterial=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.85,depthWrite:false,side:THREE.DoubleSide,toneMapped:false});
+  // A unit centreline plus a shader-expanded edge keeps stroke widths stable
+  // even when the selected city's footprint or connection range is very large.
+  const circleSegments=192,circlePositions=new Float32Array((circleSegments+1)*6),circleSides=new Float32Array((circleSegments+1)*2),circleArcs=new Float32Array((circleSegments+1)*2),circleIndices=[];
+  for(let i=0;i<=circleSegments;i++)for(let side=0;side<2;side++){
+    const index=i*2+side,angle=i/circleSegments*Math.PI*2;circlePositions[index*3]=Math.cos(angle);circlePositions[index*3+2]=Math.sin(angle);circleSides[index]=side?1:-1;circleArcs[index]=i/circleSegments*48;
+    if(i<circleSegments&&side===0)circleIndices.push(index,index+2,index+1,index+1,index+2,index+3);
+  }
+  const circleGeometry=new THREE.BufferGeometry();circleGeometry.setAttribute('position',new THREE.BufferAttribute(circlePositions,3));circleGeometry.setAttribute('circleSide',new THREE.BufferAttribute(circleSides,1));circleGeometry.setAttribute('circleArc',new THREE.BufferAttribute(circleArcs,1));circleGeometry.setIndex(circleIndices);
+  function circleMaterial(name,color,halfWidth,pixels,opacity,dashed=false){
+    const material=new THREE.MeshBasicMaterial({name,color,transparent:true,opacity,depthWrite:false,depthTest:false,side:THREE.DoubleSide,toneMapped:false,fog:false});material.forceSinglePass=true;
+    material.onBeforeCompile=shader=>{
+      shader.uniforms.previewViewport=previewViewport;shader.uniforms.circleHalfWidth={value:halfWidth};shader.uniforms.circlePixels={value:pixels};
+      shader.vertexShader='attribute float circleSide; attribute float circleArc; varying float vCircleSide; varying float vCircleArc; uniform float previewViewport; uniform float circleHalfWidth; uniform float circlePixels;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`vec4 circlePosition = vec4(position, 1.0); float circleScale = 1.0;
+        #ifdef USE_INSTANCING
+          circlePosition = instanceMatrix * circlePosition; circleScale = length(instanceMatrix[0].xyz);
+        #endif
+        vec4 circleClip = projectionMatrix * modelViewMatrix * circlePosition;
+        float circleUnit = 2.0 * abs(circleClip.w) / (previewViewport * abs(projectionMatrix[1][1]));
+        vec3 transformed = position + normalize(position) * circleSide * max(circleHalfWidth, circlePixels * circleUnit) / max(circleScale, 0.001);
+        vCircleSide = circleSide; vCircleArc = circleArc;`);
+      shader.fragmentShader='varying float vCircleSide; varying float vCircleArc;\n'+shader.fragmentShader;
+      shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`#include <color_fragment>
+        diffuseColor.a *= 1.0 - smoothstep(0.75, 1.0, abs(vCircleSide));
+        ${dashed?'diffuseColor.a *= 1.0 - smoothstep(0.28, 0.36, abs(fract(vCircleArc) - 0.5));':''}`);
+    };
+    material.customProgramCacheKey=()=>`railway-selection-circle-v1:${halfWidth}:${pixels}:${dashed}`;return material;
+  }
+  const cityCircleOutline=circleMaterial('railway-city-outline',TRACK_PAPER,.48,3.3,.96),cityCircleInk=circleMaterial('railway-city-targets',0xffffff,.24,1.65,1);
+  const rangeCircleOutline=circleMaterial('railway-connection-range-outline',TRACK_PAPER,.25,1.8,.65,true),rangeCircleInk=circleMaterial('railway-connection-range',GOOD,.11,.85,.85,true);
+  function circleBatch(parent,material,capacity,order){
+    const batch=new THREE.InstancedMesh(circleGeometry,material,capacity);batch.name=material.name;batch.count=0;batch.visible=false;batch.frustumCulled=false;batch.renderOrder=order;parent.add(batch);return batch;
+  }
+  const circlePools=[root,mapRoot].map(parent=>({
+    cityOutline:circleBatch(parent,cityCircleOutline,2,8),cities:circleBatch(parent,cityCircleInk,2,9),
+    rangeOutline:circleBatch(parent,rangeCircleOutline,1,6),range:circleBatch(parent,rangeCircleInk,1,7),
+  }));
   const stats={lines:0,stations:0,detailBatches:0,mapBatches:0,rebuilds:0,previewBufferAllocations:0,previewUpdates:0};
-  let halos=null,mapHalos=null,haloCapacity=0,disposed=false,revision=null,previewResult=null,previewKey='',previewVisible=false;
+  let disposed=false,revision=null,previewResult=null,previewKey='',previewVisible=false;
   let handlePoints=[],handleCount=0,handleIndex=-1,handlesVisible=false;
   const dotGeometry=new THREE.CircleGeometry(1,24),dotMaterial=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,depthTest:false,depthWrite:false,toneMapped:false,fog:false});
   const handleBatches=[root,mapRoot].map(parent=>['railway-handle-rims','railway-handle-centres','railway-handle-pins'].map((name,index)=>{
@@ -242,29 +277,34 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     stats.lines=lines.length;stats.stations=stations.length;stats.detailBatches=network.children.length;stats.mapBatches=mapNetwork.children.length;stats.rebuilds++;
     revision=snapshot.revision??(revision??0)+1;network.updateMatrixWorld(true);return true;
   }
-  function refreshHalos(cities,sourceCityId,targetCityId,result){
-    if(cities.length>haloCapacity){
-      for(const batch of [halos,mapHalos]){batch?.removeFromParent();batch?.dispose();}
-      haloCapacity=2**Math.ceil(Math.log2(Math.max(8,cities.length)));
-      halos=new THREE.InstancedMesh(haloGeometry,haloMaterial,haloCapacity);mapHalos=new THREE.InstancedMesh(haloGeometry,haloMaterial,haloCapacity);
-      halos.name=mapHalos.name='railway-city-targets';halos.renderOrder=mapHalos.renderOrder=13;root.add(halos);mapRoot.add(mapHalos);
+  const cityRadius=city=>Math.max(3.4,Number.isFinite(city.radius)?city.radius:3.4)+1.2;
+  function refreshCircles(source,target,result,range){
+    const selected=source?[source]:[];if(target&&target.id!==source?.id)selected.push(target);
+    for(let layer=0;layer<circlePools.length;layer++){
+      const pool=circlePools[layer];pool.cities.count=pool.cityOutline.count=selected.length;
+      for(let i=0;i<selected.length;i++){
+        const city=selected[i],radius=cityRadius(city),color=city.id===target?.id&&wholeRouteBlocked(result)?BAD:GOOD;
+        rigidSurfacePoseMatrix(world,city.x,layer?.82:(city.y??0)+.13,city.z,0,pose);pose.scale(scale.set(radius,1,radius));
+        pool.cities.setMatrixAt(i,pose);pool.cityOutline.setMatrixAt(i,pose);pool.cities.setColorAt(i,color);
+      }
+      pool.range.count=pool.rangeOutline.count=source&&range>0?1:0;
+      if(pool.range.count){
+        rigidSurfacePoseMatrix(world,source.x,layer?.82:(source.y??0)+.12,source.z,0,pose);pose.scale(scale.set(range,1,range));
+        pool.range.setMatrixAt(0,pose);pool.rangeOutline.setMatrixAt(0,pose);
+      }
+      for(const batch of Object.values(pool)){
+        batch.instanceMatrix.needsUpdate=true;if(batch.instanceColor)batch.instanceColor.needsUpdate=true;batch.boundingBox=batch.boundingSphere=null;
+      }
     }
-    if(!halos)return;
-    halos.count=mapHalos.count=cities.length;
-    cities.forEach((city,index)=>{
-      const selected=city.id===sourceCityId||city.id===targetCityId,color=city.id===targetCityId&&wholeRouteBlocked(result)?BAD:selected?GOOD:playerColors(players.get(city.ownerId)).body;
-      const radius=Math.max(3.4,Math.min(6.2,city.radius??3.4))*(selected?1.10:1);
-      rigidSurfacePoseMatrix(world,city.x,(city.y??0)+.13,city.z,0,pose);pose.scale(scale.set(radius,1,radius));halos.setMatrixAt(index,pose);halos.setColorAt(index,color);
-      rigidSurfacePoseMatrix(world,city.x,.82,city.z,0,pose);pose.scale(scale.set(radius,1,radius));mapHalos.setMatrixAt(index,pose);mapHalos.setColorAt(index,color);
-    });
-    for(const batch of [halos,mapHalos]){batch.instanceMatrix.needsUpdate=true;if(batch.instanceColor)batch.instanceColor.needsUpdate=true;batch.computeBoundingSphere();}
   }
-  function preview(result,{cities=[],sourceCityId=null,targetCityId=null,visible=false,editable=false,handles=result?.handles??[],activeHandle=-1}={}){
+  function showCircles(){for(const pool of circlePools)for(const batch of Object.values(pool))batch.visible=previewVisible&&batch.count>0;}
+  function preview(result,{cities=[],sourceCityId=null,targetCityId=null,maxConnectionDistance,visible=false,editable=false,handles=result?.handles??[],activeHandle=-1}={}){
     if(disposed)return;
     // Endpoints are model constraints (station or junction positions), not raw
     // pointer positions. Never let an optional drag overlay move their rings.
     if(result?.handles?.length)handles=result.handles;
-    handlePoints=handles;handleCount=Math.min(HANDLE_CAPACITY,handles.length);handleIndex=activeHandle;handlesVisible=visible&&editable;
+    const outOfRange=result?.code==='out-of-range';
+    handlePoints=handles;handleCount=outOfRange?0:Math.min(HANDLE_CAPACITY,handles.length);handleIndex=activeHandle;handlesVisible=visible&&editable&&!outOfRange;
     const blocked=wholeRouteBlocked(result),color=blocked?BAD:GOOD;
     invalidIndices.clear();for(const bend of result?.invalidBends??[])invalidIndices.add(bend.index);
     for(const layers of handleBatches){
@@ -275,25 +315,26 @@ export function createSettlementRailwayArt(parent,mapParent,world){
       }
       for(const batch of layers)if(batch.instanceColor)batch.instanceColor.needsUpdate=true;
     }
-    previewVisible=visible;ghost.visible=mapGhost.visible=visible&&!!result;
-    const key=`${sourceCityId}:${targetCityId}:${blocked}:${cities.map(city=>`${city.id},${city.x},${city.z},${city.radius}`).join(';')}`;
-    if(key!==previewKey){refreshHalos(cities,sourceCityId,targetCityId,result);previewKey=key;}
-    if(halos)halos.visible=mapHalos.visible=visible;
+    previewVisible=visible;ghost.visible=mapGhost.visible=visible&&!!result&&!outOfRange;
+    const source=cities.find(city=>city.id===sourceCityId),target=cities.find(city=>city.id===targetCityId),rangeValue=result?.range?.maxConnectionDistance??maxConnectionDistance;
+    const range=Number.isFinite(rangeValue)&&rangeValue>0?rangeValue:0;
+    const key=`${source?.id}:${source?.x}:${source?.y}:${source?.z}:${source?.radius}:${target?.id}:${target?.x}:${target?.y}:${target?.z}:${target?.radius}:${blocked}:${range}`;
+    if(key!==previewKey){refreshCircles(source,target,result,range);previewKey=key;}showCircles();
     // The preview flow publishes an immutable result for every changed key.
     // Waiting for validation or holding a stationary handle needs no uploads.
     if(result===previewResult)return;previewResult=result;stats.previewUpdates++;
     ghostMaterial.color.copy(blocked?BAD:TRACK_PAPER);ghostEdgeMaterial.color.copy(color);blockedGuideMaterial.color.copy(blocked?BAD:TRACK_INK);
     previewMaterials[0].color.copy(TRACK_PAPER);previewMaterials[1].color.copy(blocked?BAD:TRACK_INK);
     previewLines.length=invalidLines.length=0;seenLines.clear();
-    for(const bend of result?.invalidBends??[])if(bend.points?.length>1)invalidLines.push(bend.points);
-    for(const line of result?.lines??[]){
+    for(const bend of outOfRange?[]:result?.invalidBends??[])if(bend.points?.length>1)invalidLines.push(bend.points);
+    for(const line of outOfRange?[]:result?.lines??[]){
       if(seenLines.has(line.id)||!(line.length>0))continue;seenLines.add(line.id);
       let points=line.points;
       if(!points?.length){points=fallbackSamples.get(line);if(!points){points=pointsFor(line);fallbackSamples.set(line,points);}}
       if(points.length>1)previewLines.push(points);
     }
     let guideCount=0;
-    if(result&&!previewLines.length){
+    if(result&&!outOfRange&&!previewLines.length){
       const source=result.handles?.find(handle=>(handle.kind??handle.role)==='from')??result.attachments?.from??cities.find(city=>city.id===(sourceCityId??result.fromCityId));
       const target=result.handles?.find(handle=>(handle.kind??handle.role)==='to')??result.attachments?.to??cities.find(city=>city.id===(targetCityId??result.toCityId));
       if(source&&target){
@@ -309,7 +350,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     // Even an impossible placement retains the requested corridor. Its outline
     // connects the snapped endpoints and the dashed centre remains editable.
     activeGuidePoints.length=guideCount;if(guideCount>1)previewLines.push(activeGuidePoints);
-    updateRoutes();updateRoutes(invalidLines,'invalid');updateStations(result?.stations);
+    updateRoutes();updateRoutes(invalidLines,'invalid');updateStations(outOfRange?[]:result?.stations);
     updateGuide(guideSamples,guideCount);
   }
   return{root,mapRoot,sync,preview,stats,get revision(){return revision;},get meshes(){return network.children.filter(mesh=>mesh.isMesh&&mesh.material.userData.sceneStyle!=='window');},
@@ -328,14 +369,14 @@ export function createSettlementRailwayArt(parent,mapParent,world){
           });
         }for(const layers of handleBatches)for(const batch of layers)batch.instanceMatrix.needsUpdate=true;
       }
-      ghost.visible=mapGhost.visible=previewVisible&&!!previewResult;if(halos)halos.visible=mapHalos.visible=previewVisible;
+      ghost.visible=mapGhost.visible=previewVisible&&!!previewResult&&previewResult.code!=='out-of-range';showCircles();
     },
     dispose(){
       if(disposed)return;disposed=true;clear(network,{materials:true});clear(mapNetwork);
       for(const pool of previewPools){pool.geometry.dispose();pool.invalidGeometry.dispose();pool.guideGeometry.dispose();pool.group.clear();}stationGeometry.dispose();stationEdges.dispose();
-      for(const batch of [halos,mapHalos])batch?.dispose();haloGeometry.dispose();
+      for(const pool of circlePools)for(const batch of Object.values(pool))batch.dispose();circleGeometry.dispose();
       for(const layers of handleBatches)for(const batch of layers)batch.dispose();dotGeometry.dispose();dotMaterial.dispose();
-      for(const material of [mapRim,mapInk,mapPathMaterial,ghostMaterial,ghostEdgeMaterial,blockedGuideMaterial,haloMaterial,...previewMaterials,...invalidMaterials])material.dispose();
+      for(const material of [mapRim,mapInk,mapPathMaterial,ghostMaterial,ghostEdgeMaterial,blockedGuideMaterial,cityCircleOutline,cityCircleInk,rangeCircleOutline,rangeCircleInk,...previewMaterials,...invalidMaterials])material.dispose();
       root.removeFromParent();mapRoot.removeFromParent();root.clear();mapRoot.clear();
     },
   };

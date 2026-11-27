@@ -65,7 +65,7 @@ test('shared station spines and endpoint stations render once even if a caller r
 
 test('preview follows the proposed alignment, changes color when invalid, and keeps city targets visible before a destination is chosen',t=>{
   const {art}=fixture(t);art.preview(null,{cities,sourceCityId:'home',visible:true});
-  const halos=art.root.getObjectByName('railway-city-targets');assert.ok(halos.visible);assert.equal(halos.count,2);
+  const halos=art.root.getObjectByName('railway-city-targets');assert.ok(halos.visible);assert.equal(halos.count,1,'only the selected source is outlined before a destination is chosen');
   assert.equal(art.root.getObjectByName('railway-preview').visible,false);
   const result={valid:true,lines:[line],stations};art.preview(result,{cities,sourceCityId:'home',targetCityId:'other',visible:true});
   const preview=art.root.getObjectByName('railway-preview'),route=preview.getObjectByName('railway-route-preview');
@@ -77,6 +77,58 @@ test('preview follows the proposed alignment, changes color when invalid, and ke
   const badRoute=preview.getObjectByName('railway-route-preview');assert.ok(!badRoute.material.color.equals(good));
   const target=new THREE.Color();halos.getColorAt(1,target);assert.ok(Math.abs(target.r-badRoute.material.color.r)<1e-7&&Math.abs(target.g-badRoute.material.color.g)<1e-7&&Math.abs(target.b-badRoute.material.color.b)<1e-7);
   art.preview(null,{cities,visible:false});art.update({mapBlend:1});assert.equal(halos.visible,false);assert.equal(preview.visible,false);
+});
+
+test('only selected cities get strong full-footprint rings and large cities are never capped',t=>{
+  const {art}=fixture(t),selection=[{...cities[0],radius:22},{...cities[1],radius:34},{id:'unselected',x:40,z:40,radius:50}];
+  art.preview(null,{cities:selection,visible:true});
+  for(const root of [art.root,art.mapRoot]){assert.equal(root.getObjectByName('railway-city-targets').count,0);assert.equal(root.getObjectByName('railway-city-targets').visible,false);}
+  art.preview(null,{cities:selection,sourceCityId:'home',targetCityId:'other',visible:true});
+  for(const root of [art.root,art.mapRoot]){
+    const ring=root.getObjectByName('railway-city-targets'),outline=root.getObjectByName('railway-city-outline'),matrix=new THREE.Matrix4();
+    assert.equal(ring.count,2);assert.equal(outline.count,2);assert.ok(ring.visible&&outline.visible);
+    ring.getMatrixAt(0,matrix);assert.ok(Math.abs(new THREE.Vector3().setFromMatrixScale(matrix).x-23.2)<1e-5);assert.equal(matrix.elements[12],selection[0].x);
+    ring.getMatrixAt(1,matrix);assert.ok(Math.abs(new THREE.Vector3().setFromMatrixScale(matrix).x-35.2)<1e-5);
+  }
+  art.preview(null,{cities:selection,sourceCityId:'home',targetCityId:'home',visible:true});assert.equal(art.root.getObjectByName('railway-city-targets').count,1,'a duplicate source/target cannot draw twice');
+});
+
+test('source selection shows a thin dashed maximum-range boundary before a route exists',t=>{
+  const {art}=fixture(t),options={cities,sourceCityId:'home',maxConnectionDistance:140,visible:true};art.preview(null,options);
+  for(const root of [art.root,art.mapRoot]){
+    const range=root.getObjectByName('railway-connection-range'),city=root.getObjectByName('railway-city-targets'),matrix=new THREE.Matrix4();
+    assert.ok(range.visible);assert.equal(range.count,1);range.getMatrixAt(0,matrix);assert.equal(matrix.elements[12],cities[0].x);assert.equal(matrix.elements[14],cities[0].z);assert.equal(new THREE.Vector3().setFromMatrixScale(matrix).x,140);
+    assert.equal(range.geometry,city.geometry,'selection and range boundaries share one immutable circle');
+    const rangeShader={uniforms:{},vertexShader:'#include <begin_vertex>',fragmentShader:'#include <color_fragment>'},cityShader={uniforms:{},vertexShader:'#include <begin_vertex>',fragmentShader:'#include <color_fragment>'};
+    range.material.onBeforeCompile(rangeShader);city.material.onBeforeCompile(cityShader);
+    assert.ok(rangeShader.fragmentShader.includes('fract(vCircleArc)'));assert.ok(!cityShader.fragmentShader.includes('fract(vCircleArc)'));
+    assert.ok(rangeShader.uniforms.circlePixels.value<cityShader.uniforms.circlePixels.value,'the planning boundary stays lighter than the selected city');
+    assert.ok(rangeShader.vertexShader.includes('/ max(circleScale, 0.001)'),'stroke thickness is independent of circle radius');
+  }
+  art.preview({valid:true,siteValid:true,lines:[],stations:[],range:{maxConnectionDistance:95}},options);
+  const matrix=new THREE.Matrix4();art.root.getObjectByName('railway-connection-range').getMatrixAt(0,matrix);assert.equal(new THREE.Vector3().setFromMatrixScale(matrix).x,95);
+  art.preview(null,{cities,maxConnectionDistance:140,visible:true});assert.equal(art.root.getObjectByName('railway-connection-range').visible,false,'a range circle requires an actual source');
+});
+
+test('out-of-range destinations keep selection and range context without any route or edit handles',t=>{
+  const {art}=fixture(t),result={valid:false,siteValid:false,code:'out-of-range',range:{maxConnectionDistance:140},lines:[line],stations,handles:[{kind:'from',x:0,z:0},{kind:'to',x:0,z:20}]};
+  art.preview(result,{cities,sourceCityId:'home',targetCityId:'other',visible:true,editable:true});art.update({mapBlend:1});
+  for(const root of [art.root,art.mapRoot]){
+    const range=root.getObjectByName('railway-connection-range'),selection=root.getObjectByName('railway-city-targets');
+    assert.ok(range.visible);assert.equal(range.material.color.getHexString(),'5db6a5');assert.equal(selection.count,2);
+    const color=new THREE.Color();selection.getColorAt(0,color);assert.equal(color.getHexString(),'5db6a5');selection.getColorAt(1,color);assert.equal(color.getHexString(),'ee7666');
+    assert.equal(root.getObjectByName('railway-route-preview').visible,false);assert.equal(root.getObjectByName('blocked-railway-guide').visible,false);assert.equal(root.getObjectByName('railway-handle-rims').count,0);
+  }
+});
+
+test('unchanged city and range boundaries retain buffers while size changes reuse the same pool',t=>{
+  const {art}=fixture(t),options={cities,sourceCityId:'home',targetCityId:'other',maxConnectionDistance:140,visible:true};art.preview(null,options);
+  const city=art.root.getObjectByName('railway-city-targets'),range=art.root.getObjectByName('railway-connection-range'),geometry=city.geometry,cityVersion=city.instanceMatrix.version,rangeVersion=range.instanceMatrix.version;
+  for(let i=0;i<20;i++)art.preview(null,options);
+  assert.equal(city.instanceMatrix.version,cityVersion);assert.equal(range.instanceMatrix.version,rangeVersion);assert.equal(city.geometry,geometry);assert.equal(range.geometry,geometry);
+  art.preview(null,{...options,cities:[{...cities[0],radius:31},cities[1]],maxConnectionDistance:180});
+  assert.equal(city.geometry,geometry);assert.equal(range.geometry,geometry);assert.ok(city.instanceMatrix.version>cityVersion);assert.ok(range.instanceMatrix.version>rangeVersion);
+  art.preview(null,{visible:false});art.update();assert.equal(city.visible,false);assert.equal(range.visible,false);
 });
 
 test('map line widths are camera-driven uniforms while detailed geometry never changes across zoom modes',t=>{
