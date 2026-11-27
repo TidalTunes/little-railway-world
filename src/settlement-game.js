@@ -55,7 +55,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   const starter={...copy(config.starterHouse),kind:'house',ownerId,cityId:null,connected:false};
   const homes=[starter],buildings=[],paths=[],links=[],removed=new Set();
   let cities=[],clusters=[];
-  let logs=0,revision=0,nextHouse=2,developmentSearching=false;
+  let logs=0,gold=0,lastIncomeDay=0,revision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
 
   function homeComponents(items=homes,edges=links){
@@ -248,13 +248,24 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     return {ok:true,treeId,logs:gained,totalLogs:logs};
   }
 
+  /** Residents never enter this calculation. Only owned homes belonging to a
+   * formed city earn income. Repeated frames or view changes cannot pay twice. */
+  function settleIncome(completedDays){
+    if(!Number.isSafeInteger(completedDays)||completedDays<=lastIncomeDay)return null;
+    const days=completedDays-lastIncomeDay;
+    const eligible=homes.filter(home=>home.ownerId===ownerId&&home.connected&&home.cityId!=null);
+    lastIncomeDay=completedDays;
+    const amount=eligible.length*days;gold+=amount;revision++;
+    return {id:`income:${completedDays}`,day:completedDays,days,amount,totalGold:gold,houses:copy(eligible)};
+  }
+
   refreshConnections();
   return {
-    get logs(){return logs;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get ownerId(){return ownerId;},
+    get logs(){return logs;},get gold(){return gold;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get ownerId(){return ownerId;},
     get houses(){return copy(homes);},get buildings(){return copy(buildings);},get cities(){return copy(cities);},get clusters(){return copy(clusters);},
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
-    snapshot(){return {logs,revision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
-    evaluateBuild,build,chop,develop,
+    snapshot(){return {logs,gold,lastIncomeDay,revision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
+    evaluateBuild,build,chop,develop,settleIncome,
   };
 }

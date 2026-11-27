@@ -19,3 +19,31 @@ export function dayCycleAt(elapsedSeconds,out={}){
   out.clockTime=seconds/cycleSeconds*24*60+6*60-(10*60+8);
   return out;
 }
+
+/** The first sunset is at 300s, then once per complete day/night pair. */
+export function completedDayCount(elapsedSeconds){
+  return Number.isFinite(elapsedSeconds)?Math.max(0,Math.floor((elapsedSeconds+DAY_NIGHT_CYCLE.nightSeconds)/cycleSeconds)):0;
+}
+
+/** Testing skips forward to the next phase, never rewinds the economy's day
+ * identity. Real time then resumes from that boundary at the normal pace. */
+export function createDayCalendar(){
+  let wall=0,anchorWall=0,anchorElapsed=0;
+  const state={};
+  function read(wallSeconds=wall){
+    if(Number.isFinite(wallSeconds))wall=Math.max(wall,wallSeconds);
+    const elapsed=anchorElapsed+(wall-anchorWall);dayCycleAt(elapsed,state);
+    state.elapsedSeconds=elapsed;state.completedDays=completedDayCount(elapsed);
+    state.dayNumber=Math.floor(elapsed/cycleSeconds)+1;return state;
+  }
+  return{
+    read,
+    advance(wallSeconds){
+      const current=read(wallSeconds),phaseEnd=current.phase==='day'?DAY_NIGHT_CYCLE.daySeconds:cycleSeconds;
+      // Keep the requested boundary exact. Summed offsets can round a skip
+      // down to 599.9999999999999 and report the phase we just left.
+      anchorElapsed=Math.floor(current.elapsedSeconds/cycleSeconds)*cycleSeconds+phaseEnd;
+      anchorWall=wall;return read();
+    },
+  };
+}

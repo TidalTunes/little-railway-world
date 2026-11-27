@@ -15,6 +15,7 @@ import { C,color } from './palette.js';
 import {surfaceFor,surfacePoint,surfaceFrame,surfaceChartCoordinates,surfaceDisplacement} from './world-surface.js';
 import {createSurfaceShell} from './surface-shell.js';
 import {createDaylight,styleUniforms} from './scene-style.js';
+import {createDayCalendar} from './day-cycle.js';
 import {createNightSky} from './night-sky.js';
 import {createWalkingPlayer} from './walking-player.js';
 import {createWalkingDetail} from './walking-detail.js';
@@ -58,7 +59,10 @@ let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,lo
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 let characterTransition=createCharacterTransition({reducedMotion});
 const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer});
+const calendar=createDayCalendar();
 let daylightStartedAt;
+const calendarWallTime=()=>daylightStartedAt===undefined?0:(performance.now()-daylightStartedAt)/1000;
+const advanceDayNight=()=>calendar.advance(calendarWallTime());
 const nightSky=createNightSky(scene,mapScene);
 const walkingSky=createWalkingSky(scene),walkingSunDirection=new THREE.Vector3();
 let paused=reducedMotion.matches;
@@ -78,7 +82,11 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
 });
 const {navigation,controls}=view;
 const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking,
-  onKey:event=>settlement?.keyDown(event)??false});
+  canLook:()=>!settlement?.building,
+  onKey:event=>{
+    if(event.key.toLowerCase()==='n'){if(!event.repeat)advanceDayNight();return true;}
+    return settlement?.keyDown(event)??false;
+  }});
 const transitionFocus=new THREE.Vector3();
 const smoothStep=(a,b,value)=>{const t=THREE.MathUtils.clamp((value-a)/(b-a),0,1);return t*t*(3-2*t);};
 function walkingTarget(){return walker.cameraTarget.clone();}
@@ -105,7 +113,7 @@ function initializeCharacter(){
   // tree records, even when the player has not entered walking mode yet.
   const scale=worldRoot.scale.y;worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
   if(walker.enter(walkSpawn,spawnHeading())){
-    if(settlement){walkingMode=true;view.setInputEnabled(false);entryFrame=true;canvas.style.cursor='grab';}
+    if(settlement){walkingMode=true;view.setInputEnabled(false);entryFrame=true;canvas.style.cursor='default';}
     else walker.exit();
     walker.root.visible=true;walkSpawn={...walker.position};
   }
@@ -126,7 +134,7 @@ function enterWalking(){
   characterTransition.begin({fromCamera,toCamera:walker.camera,fromTarget,toTarget:walkingTarget(),toWalking:true,sphere:transitionSphere()});
   entryFrame=true;
   if(!characterTransition.active)finishCharacterTransition();
-  canvas.dataset.view='person';canvas.style.cursor='grab';clearMeasurements();
+  canvas.dataset.view='person';canvas.style.cursor='default';clearMeasurements();
 }
 function leaveWalking(){
   if(!walker||!walkingMode)return;
@@ -240,7 +248,7 @@ async function loadWorld(input={}){
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
-      onView:()=>walkingMode?leaveWalking():enterWalking(),reducedMotion});
+      onView:()=>walkingMode?leaveWalking():enterWalking(),onDayNight:advanceDayNight,reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
       getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
@@ -251,7 +259,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths. V switches between your traveller and overview. Day and night each last five minutes.');
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. Move the cursor to look around. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths. V switches between your traveller and overview. Each city home earns one gold at sunset. Day and night each last five minutes; N or the day/night button advances to the next phase for testing.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
@@ -303,7 +311,7 @@ function metrics(now,interval,cpu){
     trafficCpu:trafficCpu.toFixed(2),detailCpu:detailCpu.toFixed(2),viewCpu:viewCpu.toFixed(2),renderCpu:renderCpu.toFixed(2),
     simulationSeconds:time.toFixed(1),
     simulationCpu:(railway.stats.simulationMs??0).toFixed(2),poseCpu:(railway.stats.poseMs??0).toFixed(2),
-    generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),dayPhase:daylight.phase,dayElapsed:((now-(daylightStartedAt??now))/1000).toFixed(1),
+    generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),dayPhase:daylight.phase,dayElapsed:calendar.read().elapsedSeconds.toFixed(1),dayNumber:String(calendar.read().dayNumber),
     walking:String(walkingMode),playerX:walker?.position.x.toFixed(3),playerY:walker?.position.y.toFixed(3),playerZ:walker?.position.z.toFixed(3),
     playerGrounded:String(walker?.grounded),playerSwings:String(walker?.stats.swings??0),walkingInstances:String(walkingDetail?.stats.instances??0),
     lifeInstances:String(life?.stats?.instances??life?.stats?.active??0),lifeSheep:String(life?.stats?.sheep??0),lifeBirds:String(life?.stats?.birds??0)});
@@ -312,7 +320,8 @@ function frame(now){
   const start=performance.now(),interval=now-last,dt=THREE.MathUtils.clamp(interval/1000,0,.05);last=now;
   if(model){
     if(!paused)time+=dt;
-    daylight.update(dt,time,(now-(daylightStartedAt??now))/1000);nightSky.update();scene.fog.color.copy(scene.background);
+    const dayState=calendar.read((now-(daylightStartedAt??now))/1000);
+    daylight.update(dt,time,dayState.elapsedSeconds);nightSky.update();scene.fog.color.copy(scene.background);
     let stamp=performance.now();
     railway.update(paused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
@@ -343,7 +352,7 @@ function frame(now){
       groundFocus,groundRadius,groundOnly:groundLayer,
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
-    settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight});
+    settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,dayState,night:daylight.night,uiDt:dt});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:settlement?.cityStreets??detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});

@@ -7,7 +7,7 @@ import {M} from './palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {rigidSurfacePoseMatrix,surfaceDistance} from './world-surface.js';
 
-export const RESIDENT_LIMITS=Object.freeze({visible:192,detailRadius:95,walkingRadius:48,doorInset:.24,selectionInterval:.25});
+export const RESIDENT_LIMITS=Object.freeze({visible:192,detailRadius:95,walkingRadius:48,doorInset:.24,selectionInterval:.25,routineRadius:24,routeBudget:3,routeNodes:900,routeLength:160});
 const epsilon=1e-5,clamp=(value,a,b)=>Math.max(a,Math.min(b,value));
 const distance=(a,b)=>Math.hypot(b.x-a.x,b.z-a.z);
 const pointKey=p=>`${Math.round(p.x*10000)}:${Math.round(p.z*10000)}:${Math.round(p.y*1000)}`;
@@ -98,38 +98,131 @@ function nearestEdge(graph,point,cityId){let best=null;
   return best;
 }
 
-/** The simulation owns stable residents, independently of visible chunks or
- * camera level. Extending roads preserves position, gait phase and random seed. */
+class RouteHeap{
+  constructor(){this.items=[];}
+  push(item){const a=this.items;a.push(item);let i=a.length-1;while(i){const p=(i-1)>>1;if(a[p].score<=item.score)break;a[i]=a[p];i=p;}a[i]=item;}
+  pop(){const a=this.items,first=a[0],last=a.pop();if(a.length){let i=0;while(i*2+1<a.length){let child=i*2+1;if(child+1<a.length&&a[child+1].score<a[child].score)child++;if(a[child].score>=last.score)break;a[i]=a[child];i=child;}a[i]=last;}return first;}
+  get length(){return this.items.length;}
+}
+
+function localRoute(from,to){
+  if(from.id===to.id)return [];
+  const queue=new RouteHeap(),seen=new Map([[from.id,{node:from,cost:0,parent:null,edge:null}]]);
+  queue.push({...seen.get(from.id),score:distance(from,to)});let visits=0;
+  while(queue.length&&visits++<RESIDENT_LIMITS.routeNodes){
+    const current=queue.pop();if(current.cost!==seen.get(current.node.id)?.cost)continue;
+    if(current.node.id===to.id){const route=[];for(let item=current;item.edge;item=item.parent)route.push(item.edge.id);return route.length<=RESIDENT_LIMITS.routeLength?route.reverse():null;}
+    for(const edge of current.node.edges){const node=edge.a.id===current.node.id?edge.b:edge.a,cost=current.cost+edge.length,old=seen.get(node.id);
+      if(old&&old.cost<=cost)continue;
+      const entry={node,cost,parent:current,edge,score:cost+distance(node,to)};seen.set(node.id,entry);queue.push(entry);
+    }
+  }
+  return null;
+}
+
+function routineDestinations(graph,paths,houses,buildings,membership){
+  const destinations=new Map(),byCity=new Map(),entrances=new Map();
+  for(const path of paths){const points=trimmedPoints(path.points??[]),cityId=path.cityId??membership.get(path.fromHouseId)??membership.get(path.toHouseId);if(!points.length||cityId==null)continue;
+    for(const [id,point]of [[path.fromHouseId,points[0]],[path.toHouseId,points.at(-1)]]){
+      const node=graph.nodes.get(`${cityId}:${pointKey(point)}`);if(node&&!entrances.has(id))entrances.set(id,node);
+    }
+  }
+  const add=target=>{destinations.set(target.id,target);if(!byCity.has(target.cityId))byCity.set(target.cityId,[]);byCity.get(target.cityId).push(target);};
+  for(const item of [...houses,...buildings]){
+    const cityId=membership.get(item.id)??item.cityId;if(cityId==null)continue;
+    let node=entrances.get(item.id);
+    if(!node){const nearest=nearestEdge(graph,item,cityId);if(nearest)node=distance(nearest.edge.a,item)<distance(nearest.edge.b,item)?nearest.edge.a:nearest.edge.b;}
+    if(!node)continue;
+    const kind=item.buildingType??'home';
+    add({id:item.id,cityId,kind,nodeId:node.id,x:node.x,z:node.z,lookX:item.x,lookZ:item.z,heading:Math.atan2(item.x-node.x,item.z-node.z)});
+  }
+  for(const node of graph.nodes.values())if(node.edges.length>=3)add({id:`junction:${node.id}`,cityId:node.cityId,kind:'junction',nodeId:node.id,x:node.x,z:node.z,heading:0});
+  // Small towns with a single through-road still have quiet places to stop
+  // and look around, all of them on an existing path rather than in gardens.
+  for(const [cityId,list]of byCity)if(!list.some(target=>target.kind==='junction')){
+    const nodes=[...graph.nodes.values()].filter(node=>node.cityId===cityId&&node.edges.length===2);
+    for(const node of nodes.slice(0,8))add({id:`junction:${node.id}`,cityId,kind:'junction',nodeId:node.id,x:node.x,z:node.z,heading:0});
+  }
+  return {destinations,byCity};
+}
+
+/** Stable residents take short, cosmetic errands on their own city's paths.
+ * A globally bounded route budget spreads decisions across frames, while the
+ * current segment, position and gait survive new streets and city merges. */
 export function createSettlementResidentSimulation(world={}){
   let graph={nodes:new Map(),edges:new Map()},residents=new Map(),revision=0;
-  function enterEdge(resident,node){
-    const choices=node.edges.filter(edge=>edge.id!==resident.edge?.id),pool=choices.length?choices:node.edges;
-    if(!pool.length){resident.moving=false;return;}
-    const edge=pool[Math.floor(random(resident)*pool.length)];resident.edge=edge;
-    resident.direction=edge.a.id===node.id?1:-1;resident.along=resident.direction===1?0:edge.length;resident.moving=true;
+  let destinations=new Map(),byCity=new Map(),dark=false,routeBudget=0,routeSearches=0;
+  const activityCounts={walking:0,lingering:0,chatting:0,resting:0};
+  function enterEdge(resident,node,edge){
+    if(!edge||!node.edges.includes(edge)){resident.moving=false;return false;}
+    resident.edge=edge;resident.direction=edge.a.id===node.id?1:-1;resident.along=resident.direction===1?0:edge.length;return true;
   }
-  function sync({houses=[],paths=[],cities}={}){
+  function setDestination(resident,target){
+    resident.destinationId=target?.id??null;resident.destinationKind=target?.kind??null;resident.route=[];
+    resident.activity=dark?'heading-home':'walking';resident.arrived=false;
+  }
+  function chooseDestination(resident,node){
+    const home=destinations.get(resident.houseId),choices=(byCity.get(resident.cityId)??[]).filter(target=>
+      target.id!==resident.destinationId&&target.nodeId!==node.id&&(!home||distance(target,home)<=RESIDENT_LIMITS.routineRadius));
+    if(dark){setDestination(resident,home);return;}
+    const weighted=choices.map(target=>({target,weight:target.kind==='home'?(target.id===resident.houseId? .3:.7):
+      target.kind==='market'?2.8:target.kind==='well'?2.1:target.kind==='plaza'?2.5:target.kind==='junction'?1.25:1.6}));
+    if(!weighted.length){setDestination(resident,home);resident.wait=2+random(resident)*3;return;}
+    let roll=random(resident)*weighted.reduce((sum,item)=>sum+item.weight,0),target=weighted.at(-1).target;
+    for(const item of weighted){roll-=item.weight;if(roll<=0){target=item.target;break;}}
+    setDestination(resident,target);
+  }
+  function arrive(resident,target){
+    resident.arrived=true;resident.route=[];resident.lookHeading=target.lookX===undefined?target.heading:Math.atan2(target.lookX-resident.x,target.lookZ-resident.z);
+    if(dark&&target.id===resident.houseId){resident.activity='resting';resident.wait=0;return;}
+    resident.activity='lingering';
+    const duration=target.kind==='market'?[4,8]:target.kind==='well'?[2,5]:target.kind==='plaza'?[5,10]:target.kind==='junction'?[2,5]:target.kind==='home'?[1,4]:[3,6];
+    resident.wait=(duration[0]+random(resident)*duration[1])*resident.tempo;
+    if(target.kind==='junction')resident.lookHeading=resident.heading+(random(resident)-.5)*Math.PI;
+  }
+  function leaveNode(resident,node){
+    let target=destinations.get(resident.destinationId);
+    if(!target||target.cityId!==resident.cityId||resident.arrived){chooseDestination(resident,node);target=destinations.get(resident.destinationId);}
+    if(!target){resident.wait=1;return false;}
+    if(target.nodeId===node.id){arrive(resident,target);return false;}
+    let edge=resident.route.length?graph.edges.get(resident.route[0]):null;
+    if(!edge||!node.edges.includes(edge)){
+      resident.route=[];
+      if(!routeBudget){resident.wait=.08;return false;}
+      routeBudget--;routeSearches++;
+      const goal=graph.nodes.get(target.nodeId),route=goal?localRoute(node,goal):null;
+      if(!route){
+        // An unreachable or removed destination never pulls someone across a
+        // lawn. Try a different daytime errand after a short stationary pause.
+        resident.arrived=!dark;resident.wait=dark?4:1+random(resident)*2;return false;
+      }
+      resident.route=route;edge=graph.edges.get(route[0]);
+    }
+    resident.route.shift();return enterEdge(resident,node,edge);
+  }
+  function sync({houses=[],paths=[],cities,buildings=[]}={}){
     const membership=eligibleHomes(houses,cities);graph=buildResidentPathGraph(paths,membership);const alive=new Set();
+    ({destinations,byCity}=routineDestinations(graph,paths,houses,buildings,membership));
     for(const house of houses){const cityId=membership.get(house.id);if(cityId==null)continue;const id=`resident:${house.id}`;alive.add(id);
       let resident=residents.get(id);
-      if(resident){resident.cityId=cityId;
+      if(resident){resident.cityId=cityId;resident.route=resident.route.filter(edge=>graph.edges.has(edge));
         if(!resident.onRoad){const start=nearestEdge(graph,house,cityId);if(start){Object.assign(resident,start.position);resident.edge=start.edge;resident.along=start.t*start.edge.length;resident.direction=start.t>.5?-1:1;resident.onRoad=true;}continue;}
         const same=resident.edge&&graph.edges.get(resident.edge.id);
         if(same)resident.edge=same;
         else{const match=nearestEdge(graph,resident,cityId),previousEdge=resident.edge,previousDirection=resident.direction;
-          // A new intersection may split an existing edge beneath the walker.
-          // Adopt the exact new segment only when it occupies the same place.
           if(match&&match.error<.0002&&Math.abs(match.position.y-resident.y)<.002){resident.edge=match.edge;resident.along=match.t*match.edge.length;
             const heading=Math.atan2(match.edge.b.x-match.edge.a.x,match.edge.b.z-match.edge.a.z);
             const previousHeading=previousEdge?Math.atan2((previousEdge.b.x-previousEdge.a.x)*previousDirection,(previousEdge.b.z-previousEdge.a.z)*previousDirection):resident.heading;
-            resident.direction=Math.cos(heading-previousHeading)>=0?1:-1;}
+            resident.direction=Math.cos(heading-previousHeading)>=0?1:-1;resident.route=[];}
         }
         continue;
       }
       const seed=hash(`${world.seed??'island'}:${id}`)||1;
       resident={id,houseId:house.id,cityId,randomState:seed,x:house.x,y:house.y??0,z:house.z,heading:house.rotation??0,
-        edge:null,along:0,direction:1,wait:0,phase:0,moving:false,distance:0,onRoad:false};
+        edge:null,along:0,direction:1,wait:0,phase:0,moving:false,distance:0,onRoad:false,route:[],destinationId:null,destinationKind:null,
+        activity:'lingering',arrived:false,idleTime:0,lookHeading:null,nightDelay:0};
       resident.speed=.58+random(resident)*.32;resident.wait=random(resident)*1.8;resident.phase=random(resident)*Math.PI*2;
+      resident.tempo=.85+random(resident)*.3;resident.arrivalOffset=.18+random(resident)*.7;
       const start=nearestEdge(graph,house,cityId);
       if(start){Object.assign(resident,start.position);resident.edge=start.edge;resident.along=start.t*start.edge.length;resident.onRoad=true;
         resident.direction=start.t>.5?-1:1;resident.heading=Math.atan2((start.edge.b.x-start.edge.a.x)*resident.direction,(start.edge.b.z-start.edge.a.z)*resident.direction);}
@@ -137,35 +230,64 @@ export function createSettlementResidentSimulation(world={}){
     }
     for(const id of residents.keys())if(!alive.has(id))residents.delete(id);revision++;
   }
-  function update(dt){
+  function update(dt,{night=0,dayPhase}={}){
     if(!Number.isFinite(dt)||dt<=0)return;
-    // Consume bounded steps so a long visible frame cannot skip junctions.
-    const elapsed=Math.min(dt,.5);
+    const nextDark=dayPhase?dayPhase==='night':night>(dark?.35:.65);
+    if(nextDark!==dark){dark=nextDark;for(const resident of residents.values()){
+      resident.route=[];resident.arrived=false;resident.destinationId=null;resident.destinationKind=null;
+      resident.nightDelay=dark?random(resident)*6:0;resident.wait=dark?Math.min(resident.wait,resident.nightDelay):1+random(resident)*7;
+      resident.activity=dark?'heading-home':'lingering';
+    }}
+    const elapsed=Math.min(dt,.5);routeBudget=RESIDENT_LIMITS.routeBudget;routeSearches=0;
     for(const resident of residents.values()){
-      let remaining=elapsed,travelled=0;resident.moving=false;
-      while(remaining>epsilon){
+      let remaining=elapsed,travelled=0;resident.moving=false;resident.idleTime+=elapsed;resident.nightDelay=Math.max(0,resident.nightDelay-elapsed);
+      if(dark&&resident.nightDelay===0&&resident.destinationId!==resident.houseId)setDestination(resident,destinations.get(resident.houseId));
+      if(!resident.edge)continue;
+      // A stopped resident remains at the node until their visit or route
+      // request is ready; no zero-distance loops or abrupt sideways movement.
+      while(remaining>epsilon&&!(resident.activity==='resting'&&dark)){
         if(resident.wait>0){const pause=Math.min(resident.wait,remaining);resident.wait-=pause;remaining-=pause;if(remaining<epsilon)break;}
-        if(!resident.edge)break;
-        const edge=resident.edge,available=resident.direction>0?edge.length-resident.along:resident.along;
-        const advance=Math.min(available,resident.speed*remaining);resident.along+=advance*resident.direction;remaining-=advance/resident.speed;travelled+=advance;
+        const edge=resident.edge;if(!edge)break;
+        const available=resident.direction>0?edge.length-resident.along:resident.along;
+        if(available<=epsilon){
+          const oldNode=resident.direction>0?edge.b:edge.a,node=graph.nodes.get(oldNode.id);
+          if(!node){resident.edge=null;break;}
+          if(!leaveNode(resident,node)){if(resident.activity==='resting')break;continue;}
+          resident.activity=dark?'heading-home':'walking';resident.lookHeading=null;continue;
+        }
+        const target=destinations.get(resident.destinationId),toward=resident.direction>0?edge.b:edge.a;
+        const stop=target?.nodeId===toward.id&&!resident.arrived?Math.min(resident.arrivalOffset,edge.length*.65):0;
+        if(stop&&available<=stop+epsilon){arrive(resident,target);continue;}
+        const speed=resident.speed*(dark?.94:1),advance=Math.min(available-stop,speed*remaining);
+        resident.along+=advance*resident.direction;remaining-=advance/speed;travelled+=advance;
         const t=clamp(resident.along/edge.length,0,1);resident.x=edge.a.x+(edge.b.x-edge.a.x)*t;resident.y=edge.a.y+(edge.b.y-edge.a.y)*t;resident.z=edge.a.z+(edge.b.z-edge.a.z)*t;
-        if(available-advance>epsilon)break;
-        let node=resident.direction>0?edge.b:edge.a;
-        // A removed/re-routed road can finish at its old doorstep, but must not
-        // jump to a replacement network on the other side of a building.
-        node=graph.nodes.get(node.id)??null;
-        if(!node){resident.edge=null;break;}
-        enterEdge(resident,node);
-        if(node.edges.length===1||random(resident)<.16)resident.wait=.35+random(resident)*1.55;
       }
       resident.moving=travelled>epsilon;resident.distance+=travelled;resident.phase+=travelled*Math.PI*2/.43;
-      if(resident.edge){const edge=resident.edge,target=Math.atan2((edge.b.x-edge.a.x)*resident.direction,(edge.b.z-edge.a.z)*resident.direction);
-        resident.heading+=wrap(target-resident.heading)*(1-Math.exp(-elapsed*10));}
+      const edge=resident.edge,target=resident.lookHeading??(edge?Math.atan2((edge.b.x-edge.a.x)*resident.direction,(edge.b.z-edge.a.z)*resident.direction):resident.heading);
+      resident.heading+=wrap(target-resident.heading)*(1-Math.exp(-elapsed*8));
     }
+    // Conversations use small local bins and at most eight neighbours. They
+    // turn people toward one another without adding actors, props or errands.
+    const waiting=new Map();
+    for(const resident of residents.values())if(!dark&&!resident.moving&&resident.wait>.2&&resident.arrived){
+      resident.activity='lingering';
+      const key=`${resident.cityId}:${Math.floor(resident.x/2)}:${Math.floor(resident.z/2)}`;
+      if(!waiting.has(key))waiting.set(key,[]);if(waiting.get(key).length<8)waiting.get(key).push(resident);
+    }
+    for(const resident of residents.values())if(!dark&&resident.activity==='lingering'&&resident.arrived){
+      let partner=null;const x=Math.floor(resident.x/2),z=Math.floor(resident.z/2);
+      for(let dx=-1;dx<=1&&!partner;dx++)for(let dz=-1;dz<=1&&!partner;dz++)for(const other of waiting.get(`${resident.cityId}:${x+dx}:${z+dz}`)??[]){
+        const gap=distance(resident,other);if(other!==resident&&gap>.12&&gap<1.5){partner=other;break;}
+      }
+      if(partner){resident.activity='chatting';resident.lookHeading=Math.atan2(partner.x-resident.x,partner.z-resident.z);}
+    }
+    for(const key of Object.keys(activityCounts))activityCounts[key]=0;
+    for(const resident of residents.values())activityCounts[resident.activity==='heading-home'?'walking':resident.activity]=(activityCounts[resident.activity==='heading-home'?'walking':resident.activity]??0)+1;
   }
   return {sync,update,get residents(){return residents;},get graph(){return graph;},get revision(){return revision;},
-    snapshot(){return [...residents.values()].map(({edge,randomState,...resident})=>({...resident,pathIds:edge?[...edge.pathIds]:[],edgeId:edge?.id??null}));},
-    dispose(){residents.clear();graph={nodes:new Map(),edges:new Map()};}};
+    get stats(){return {night:dark,routeSearches,activities:{...activityCounts}};},
+    snapshot(){return [...residents.values()].map(({edge,randomState,route,lookHeading,...resident})=>({...resident,pathIds:edge?[...edge.pathIds]:[],edgeId:edge?.id??null}));},
+    dispose(){residents.clear();destinations.clear();byCity.clear();graph={nodes:new Map(),edges:new Map()};}};
 }
 
 /** Two fixed-capacity instanced draws replace a scene hierarchy per citizen.
@@ -189,8 +311,8 @@ export function createSettlementResidents(parent,world){
     previousFocus={x:focus.x,z:focus.z};previousRadius=radius;selectionAge=0;
   }
   function sync(snapshot){simulation.sync(snapshot);selectionAge=Infinity;}
-  function update(dt,{focus={x:0,z:0},mapBlend=0,walkingWeight=0,visible=true,reducedMotion=false}={}){
-    simulation.update(dt);selectionAge+=dt;
+  function update(dt,{focus={x:0,z:0},mapBlend=0,walkingWeight=0,visible=true,reducedMotion=false,night=0,dayPhase}={}){
+    simulation.update(dt,{night,dayPhase});selectionAge+=dt;
     root.visible=visible&&mapBlend<.98;if(!root.visible){rendered=0;return;}
     const radius=walkingWeight>.5?RESIDENT_LIMITS.walkingRadius:RESIDENT_LIMITS.detailRadius;
     if(selectionAge>=RESIDENT_LIMITS.selectionInterval||!previousFocus||previousRadius!==radius||surfaceDistance(world,focus,previousFocus)>3)select(focus,radius);
@@ -204,7 +326,8 @@ export function createSettlementResidents(parent,world){
         const swing=stride*side;
         part.position.set(side*.055,.32-Math.cos(swing)*.16,-Math.sin(swing)*.16);part.rotation.set(swing,0,0);part.scale.set(.075,.32,.10);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
-        const armSwing=-swing*.65;
+        const greeting=!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
+        const armSwing=-swing*.65+greeting;
         part.position.set(side*.143,.53-Math.cos(armSwing)*.105,-Math.sin(armSwing)*.105);part.rotation.set(armSwing,0,side*-.035);part.scale.set(.052,.21,.075);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
       }
@@ -212,7 +335,7 @@ export function createSettlementResidents(parent,world){
     body.count=rendered=index;limbs.count=limbIndex;body.instanceMatrix.needsUpdate=limbs.instanceMatrix.needsUpdate=true;
   }
   return {root,body,limbs,sync,update,snapshot:()=>simulation.snapshot(),
-    get stats(){return {residents:simulation.residents.size,visible:rendered,edges:simulation.graph.edges.size,revision:simulation.revision,draws:rendered?2:0};},
+    get stats(){return {residents:simulation.residents.size,visible:rendered,edges:simulation.graph.edges.size,revision:simulation.revision,draws:rendered?2:0,...simulation.stats};},
     dispose(){simulation.dispose();root.removeFromParent();body.dispose();limbs.dispose();body.geometry.dispose();limbs.geometry.dispose();
       for(const material of template.userData.ownedMaterials??[])material.dispose();limbMaterial.dispose();Object.values(palette).forEach(material=>material.dispose());selected.length=candidates.length=0;},
   };

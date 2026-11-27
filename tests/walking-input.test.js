@@ -28,14 +28,14 @@ class Surface{
 function fixture(t,{initialActive=false,onKey}={}){
   const document=new Surface(),window=new Surface(),canvas=new Surface();
   document.defaultView=window;canvas.ownerDocument=document;
-  const captured=new Set(),released=[];let focusCount=0,active=initialActive,toggles=0,exits=0,bubbleKeys=[];
+  const captured=new Set(),released=[];let focusCount=0,active=initialActive,looking=true,toggles=0,exits=0,bubbleKeys=[];
   canvas.setPointerCapture=id=>captured.add(id);canvas.hasPointerCapture=id=>captured.has(id);
   canvas.releasePointerCapture=id=>{captured.delete(id);released.push(id);};canvas.focus=()=>focusCount++;
   canvas.addEventListener('keydown',event=>bubbleKeys.push(event.key));
-  const input=createWalkingInput(canvas,{onKey,isActive:()=>active,onToggle:()=>{active=!active;toggles++;},onExit:()=>{active=false;exits++;}});
+  const input=createWalkingInput(canvas,{onKey,canLook:()=>looking,isActive:()=>active,onToggle:()=>{active=!active;toggles++;},onExit:()=>{active=false;exits++;}});
   t.after(()=>input.dispose());
   return {input,canvas,window,document,captured,released,key:(key,properties={})=>canvas.dispatch('keydown',{key,...properties}),
-    get active(){return active;},get toggles(){return toggles;},get exits(){return exits;},get bubbleKeys(){return bubbleKeys;},get focusCount(){return focusCount;}};
+    set active(value){active=value;},set looking(value){looking=value;},get active(){return active;},get toggles(){return toggles;},get exits(){return exits;},get bubbleKeys(){return bubbleKeys;},get focusCount(){return focusCount;}};
 }
 const empty={forward:0,right:0,jump:false,sprint:false,swing:false,lookX:0,lookY:0};
 
@@ -66,9 +66,9 @@ test('walking captures movement, jumping and strategy shortcuts without invoking
   f.key(' ');assert.equal(paused,true,'Space returns to the strategy controller after leaving walking');
 });
 
-test('pointer orbit samples each displacement once and held arrows scale with frame time',t=>{
+test('touch drag samples each displacement once and held arrows scale with frame time',t=>{
   const f=fixture(t,{initialActive:true});
-  assert.equal(f.canvas.dispatch('pointerdown',{pointerId:7,clientX:100,clientY:200}).defaultPrevented,true);
+  assert.equal(f.canvas.dispatch('pointerdown',{pointerId:7,pointerType:'touch',clientX:100,clientY:200}).defaultPrevented,true);
   assert.equal(f.focusCount,1);assert.ok(f.captured.has(7));
   f.canvas.dispatch('pointermove',{pointerId:8,clientX:900,clientY:900});
   f.canvas.dispatch('pointermove',{pointerId:7,clientX:120,clientY:190});
@@ -76,10 +76,10 @@ test('pointer orbit samples each displacement once and held arrows scale with fr
   const sample=f.input.sample();assert.ok(Math.abs(sample.lookX+.15)<1e-12);assert.ok(Math.abs(sample.lookY+.08)<1e-12);
   assert.deepEqual(f.input.sample(),empty);
   f.key('ArrowLeft');f.key('ArrowDown');
-  assert.deepEqual(f.input.sample(.5),{...empty,lookX:.8,lookY:.55});
-  assert.deepEqual(f.input.sample(.25),{...empty,lookX:.4,lookY:.275});
+  assert.deepEqual(f.input.sample(.1),{...empty,lookX:.16000000000000003,lookY:.11000000000000001});
+  assert.deepEqual(f.input.sample(.05),{...empty,lookX:.08000000000000002,lookY:.05500000000000001});
   f.window.dispatch('pointerup',{pointerId:7});assert.deepEqual(f.released,[7]);
-  f.canvas.dispatch('pointermove',{pointerId:7,clientX:1000,clientY:1000});
+  f.canvas.dispatch('pointermove',{pointerId:7,pointerType:'touch',clientX:1000,clientY:1000});
   assert.deepEqual(f.input.sample(),empty);
   assert.equal(f.canvas.dispatch('wheel').defaultPrevented,true);
   assert.equal(f.canvas.dispatch('contextmenu').defaultPrevented,true);
@@ -120,7 +120,7 @@ test('primary clicks and touch taps queue one swing with a five pixel tolerance'
     f.window.dispatch('pointerup',{button:0,clientX:103,clientY:204});
     assert.equal(f.input.sample().swing,true);
     assert.deepEqual(f.input.sample(),empty);
-    assert.deepEqual(f.released,[1]);
+    assert.deepEqual(f.released,pointerType==='touch'?[1]:[]);
   }
 });
 
@@ -146,7 +146,7 @@ test('orbit drags, canceled gestures, secondary buttons and other pointers never
   f.canvas.dispatch('pointerdown');
   f.window.dispatch('pointerup',{clientX:6});
   assert.equal(f.input.sample().swing,false,'release displacement counts even without a final move event');
-  f.canvas.dispatch('pointerdown',{pointerId:1});
+  f.canvas.dispatch('pointerdown',{pointerId:1,pointerType:'touch'});
   f.canvas.dispatch('pointerdown',{pointerId:2,isPrimary:false});
   f.window.dispatch('pointerup',{pointerId:2});
   assert.equal(f.input.sample().swing,false,'another pointer cannot end the active gesture');
@@ -159,7 +159,7 @@ test('blur, hidden pages, exit and disposal clear held controls and release an a
     f.document.hidden=true;f.document.dispatch('visibilitychange');
   },f=>f.key('Home'),f=>f.key('v'),f=>f.input.clear(),f=>f.input.dispose()]){
     const f=fixture(t,{initialActive:true});
-    f.key('w');f.key(' ');f.key('e');f.canvas.dispatch('pointerdown',{pointerId:4});
+    f.key('w');f.key(' ');f.key('e');f.canvas.dispatch('pointerdown',{pointerId:4,pointerType:'touch'});
     f.canvas.dispatch('pointermove',{pointerId:4,clientX:30,clientY:40});
     clear(f);assert.deepEqual(f.input.sample(),empty);assert.equal(f.captured.size,0);assert.deepEqual(f.released,[4]);
     f.window.dispatch('pointerup',{pointerId:4});assert.equal(f.input.sample().swing,false,'release after reset cannot attack');
@@ -183,4 +183,75 @@ test('gameplay keys take priority in both camera modes without leaking into move
     assert.equal(handled.length,5,'browser modifier shortcuts never reach gameplay');
     f.key('v');assert.equal(f.toggles,1,'the camera toggle remains available');
   }
+});
+
+
+test('mouse cursor look needs no drag and does not consume placement hover',t=>{
+  const f=fixture(t,{initialActive:true});let observed=0;
+  f.canvas.addEventListener('pointermove',()=>observed++);
+  f.canvas.dispatch('pointermove',{clientX:100,clientY:200,pointerType:'mouse'});
+  assert.deepEqual(f.input.sample(),empty,'first hover anchors without rotating');
+  const event=f.canvas.dispatch('pointermove',{clientX:130,clientY:180,pointerType:'mouse'});
+  assert.deepEqual(f.input.sample(),{...empty,lookX:-.15,lookY:-.08});
+  assert.equal(event.defaultPrevented,false);assert.equal(observed,2);
+  assert.deepEqual(f.input.sample(),empty,'each cursor displacement is sampled once');
+  f.canvas.dispatch('pointerdown',{clientX:130,clientY:180,pointerType:'mouse'});
+  assert.equal(f.captured.size,0,'mouse can move naturally from world to HUD');
+  f.canvas.dispatch('pointerleave');
+  f.window.dispatch('pointerup',{clientX:130,clientY:180,pointerType:'mouse'});
+  assert.equal(f.input.sample().swing,false,'releasing over HUD cannot swing');
+});
+
+test('mode transitions, UI entry, focus loss and build aiming reset cursor anchors',t=>{
+  const f=fixture(t,{initialActive:true});
+  const move=(x,y=200)=>f.canvas.dispatch('pointermove',{clientX:x,clientY:y,pointerType:'mouse'});
+  move(100);move(120);assert.equal(f.input.sample().lookX,-.1);
+  f.looking=false;
+  const event=move(500);
+  assert.equal(event.defaultPrevented,false,'build placement continues to receive hover');
+  assert.deepEqual(f.input.sample(),empty);
+  f.looking=true;move(600);assert.deepEqual(f.input.sample(),empty);
+  move(620);assert.equal(f.input.sample().lookX,-.1);
+  for(const reset of [()=>f.canvas.dispatch('pointerleave'),()=>f.window.dispatch('blur'),()=>f.input.clear()]){
+    reset();move(1000);assert.deepEqual(f.input.sample(),empty);
+    move(1020);assert.equal(f.input.sample().lookX,-.1);
+  }
+  f.active=false;move(50);assert.deepEqual(f.input.sample(),empty);
+  f.active=true;move(80);assert.deepEqual(f.input.sample(),empty,'entering third person never snaps');
+  move(100);assert.equal(f.input.sample().lookX,-.1);
+  f.canvas.dispatch('pointerleave');
+  f.canvas.dispatch('pointerenter',{clientX:110,clientY:200,pointerType:'mouse'});
+  move(120);assert.equal(f.input.sample().lookX,-.05,'re-entry starts at the edge rather than the old cursor');
+});
+
+test('look stays finite and bounded across bad coordinates, large deltas and suspended frames',t=>{
+  const f=fixture(t,{initialActive:true});
+  f.canvas.dispatch('pointermove',{clientX:0,clientY:0});
+  f.canvas.dispatch('pointermove',{clientX:100000,clientY:-100000});
+  assert.deepEqual(f.input.sample(),{...empty,lookX:-.4,lookY:-.32});
+  f.canvas.dispatch('pointermove',{clientX:Infinity,clientY:NaN});
+  f.canvas.dispatch('pointermove',{clientX:20,clientY:30});
+  assert.deepEqual(f.input.sample(),empty,'invalid browser coordinates reset the reference');
+  for(let i=1;i<8;i++)f.canvas.dispatch('pointermove',{clientX:20+80*i,clientY:30+80*i});
+  assert.deepEqual(f.input.sample(),{...empty,lookX:-.65,lookY:.45});
+  f.key('ArrowRight');f.key('ArrowUp');
+  const delayed=f.input.sample(200);
+  assert.ok(Math.abs(delayed.lookX+.16)<1e-12);assert.ok(Math.abs(delayed.lookY+.11)<1e-12);
+  assert.deepEqual(f.input.sample(NaN),empty);
+});
+
+
+test('touch dragging can pause for placement without accumulating a hidden camera jump',t=>{
+  const f=fixture(t,{initialActive:true});
+  f.canvas.dispatch('pointerdown',{pointerType:'touch',clientX:100,clientY:100});
+  f.canvas.dispatch('pointermove',{pointerType:'touch',clientX:120,clientY:100});
+  assert.equal(f.input.sample().lookX,-.1);
+  f.looking=false;
+  f.canvas.dispatch('pointermove',{pointerType:'touch',clientX:600,clientY:600});
+  assert.deepEqual(f.input.sample(),empty);
+  f.looking=true;
+  f.canvas.dispatch('pointermove',{pointerType:'touch',clientX:610,clientY:600});
+  assert.deepEqual(f.input.sample(),empty);
+  f.canvas.dispatch('pointermove',{pointerType:'touch',clientX:630,clientY:600});
+  assert.equal(f.input.sample().lookX,-.1);
 });

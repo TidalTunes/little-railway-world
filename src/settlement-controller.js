@@ -4,22 +4,25 @@ import {createSettlementArt} from './settlement-art.js';
 import {createSettlementHud} from './settlement-hud.js';
 import {createSettlementResidents} from './settlement-residents.js';
 import {createCityLevelMarkers} from './city-level-markers.js';
+import {createSettlementIncomeEffects} from './settlement-income-effects.js';
 import {surfaceDistance,surfaceOffset} from './world-surface.js';
 
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
-export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,reducedMotion}){
+export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,onDayNight=()=>{},reducedMotion}){
   const game=createSettlementGame(world),art=createSettlementArt(parent,mapParent,world);
   const residents=createSettlementResidents(parent,world),levels=createCityLevelMarkers(markerParent,markerMapParent,world);
+  const incomeEffects=createSettlementIncomeEffects(markerParent,markerMapParent,world);
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
-  let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingHit=null,message='',messageTime=0;
+  let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0;
   let revision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),intersection=new THREE.Vector3();
   const listeners=[],facing=new THREE.Vector3();
   const focusCanvas=()=>canvas.focus({preventScroll:true});
-  function selectTool(next){tool=next;pointer=null;pendingBuild=false;previewKey='';message='';focusCanvas();}
+  function selectTool(next){tool=next;pointer=null;pendingBuild=false;pendingChop=false;previewKey='';message='';focusCanvas();}
   const hud=createSettlementHud({parent:canvas.parentElement,playerColor:'#257d70',
-    onTool:selectTool,onView:()=>{selectTool('axe');onView();},
+    onTool:selectTool,onView:()=>{selectTool('axe');onView();},onDayNight:()=>{onDayNight();focusCanvas();},
+    onChop:()=>{selectTool('axe');pendingChop=true;},
     onBuild:()=>{pendingBuild=true;focusCanvas();},onCancel:()=>selectTool('axe')});
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
   listen(canvas,'pointermove',event=>{
@@ -40,7 +43,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     if(canvas.hasPointerCapture?.(event.pointerId))canvas.releasePointerCapture(event.pointerId);
   });
   listen(canvas,'pointercancel',()=>{press=null;});
-  listen(canvas.ownerDocument.defaultView,'blur',()=>{press=null;pendingBuild=false;pendingHit=null;});
+  listen(canvas.ownerDocument.defaultView,'blur',()=>{press=null;pendingBuild=false;pendingChop=false;pendingHit=null;});
   function synchronize(){
     const changed=game.revision!==revision;
     if(changed){
@@ -96,6 +99,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   synchronize();
   return{
     game,art,hud,residents,
+    get building(){return tool==='house';},
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${revision}`;},
     get cityStreets(){synchronize();return streets;},
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
@@ -109,6 +113,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       return key==='r';
     },
     prepareInput(input){
+      if(pendingChop){input.swing=true;pendingChop=false;}
       if(tool==='house'&&input.swing){pendingBuild=true;input.swing=false;}
       return input;
     },
@@ -118,9 +123,14 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       if(!tree)notify('Step closer and face a tree');
     },
     cancelBuild(){selectTool('axe');},
-    update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0,walkingWeight=Number(walkingNow),focus,viewportHeight=800}={}){
+    update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0,walkingWeight=Number(walkingNow),focus,viewportHeight=800,dayState,night=0,uiDt=dt}={}){
       if(disposed)return;
       walking=walkingNow;transitioning=transitionNow;camera=activeCamera;const player=getPlayer();
+      const income=game.settleIncome(dayState?.completedDays??0);
+      if(income?.amount>0){
+        if(walkingWeight>.5)hud.showIncome(income);else incomeEffects.emit(income.houses);
+        canvas.dataset.lastIncome=String(income.amount);
+      }
       detail.updateTrees(reducedMotion?.matches?1:dt);synchronize();
       ready=!!player?.initialized&&detail.hasCoverageAt(player.position,2);
       // A search may yield its bounded routing budget across frames. Once a
@@ -164,16 +174,17 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       else if(placement&&!placement.connectionHouseId)nearest=null;
       const cityBuildings=(snapshot.buildings??[]).filter(item=>item.cityId===nearest?.id);
       const cityPending=(snapshot.pendingDevelopments??[]).filter(item=>item.cityId===nearest?.id).map(item=>item.type);
-      residents.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches});
+      residents.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches,night,dayPhase:dayState?.phase});
       levels.update({camera,mapBlend,walkingWeight,viewportHeight});
-      hud.update({logs:snapshot.logs,houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
+      incomeEffects.update(uiDt,{camera,mapBlend,walkingWeight,viewportHeight,reducedMotion:reducedMotion?.matches});
+      hud.update({logs:snapshot.logs,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
         canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message});
-      Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
+      Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),gold:String(snapshot.gold),incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects.visibleCount),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(residents.stats?.residents??residents.stats?.count??0),
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();},
+    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();},
   };
 }

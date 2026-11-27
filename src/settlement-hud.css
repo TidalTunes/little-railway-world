@@ -1,131 +1,100 @@
 .settlement-hud {
-  --settlement-ink: oklch(0.95 0.027 95);
-  --settlement-accent: oklch(0.87 0.12 86);
-  --settlement-invalid: oklch(0.76 0.15 32);
-  --settlement-shadow: oklch(0.2 0.035 165 / 0.78);
-  position: absolute;
-  z-index: 10;
-  inset: 0;
-  pointer-events: none;
-  color: var(--settlement-ink);
-  user-select: none;
+  --settlement-ink: oklch(0.29 0.045 165);
+  --settlement-accent: oklch(0.45 0.105 75);
+  --settlement-invalid: oklch(0.43 0.13 35);
+  --settlement-shadow: oklch(0.96 0.028 95 / 0.4);
+  --settlement-key: oklch(0.96 0.028 95 / 0.08);
+  position: absolute; z-index: 10; inset: 0; pointer-events: none;
+  color: var(--settlement-ink); user-select: none;
+  font-family: ui-rounded, 'Avenir Next', 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px var(--settlement-shadow);
+  -webkit-font-smoothing: antialiased;
 }
+.settlement-hud[data-theme="night"] { --settlement-invalid: oklch(0.81 0.13 35); --settlement-ink: oklch(0.96 0.028 95); --settlement-accent: oklch(0.87 0.12 86); --settlement-shadow: oklch(0.2 0.035 165 / 0.78); --settlement-key: oklch(0.22 0.035 165 / 0.16); }
 .settlement-hud[hidden], .settlement-hud [hidden] { display: none !important; }
-.settlement-hud svg { display: block; flex: none; width: 32px; height: 32px; }
-.settlement-owner-fill { fill: var(--settlement-owner, #37a98d); }
 .settlement-inventory {
-  position: absolute;
-  top: max(20px, env(safe-area-inset-top));
-  left: max(20px, env(safe-area-inset-left));
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  filter: drop-shadow(0 1px 1px var(--settlement-shadow));
+  position: absolute; top: max(28px, env(safe-area-inset-top)); left: max(30px, env(safe-area-inset-left));
+  display: flex; align-items: flex-start; gap: 34px;
 }
-.settlement-stockpile { display: flex; align-items: center; gap: 8px; min-height: 46px; }
-.settlement-log-slots { display: grid; grid-template-columns: repeat(5, 17px); grid-template-rows: repeat(2, 20px); gap: 0 1px; }
-.settlement-log svg { width: 20px; height: 23px; }
-.settlement-log { color: oklch(0.95 0.027 95 / 0.17); }
-.settlement-log svg > path:first-child { fill: currentColor; stroke: oklch(0.95 0.027 95 / 0.45); stroke-width: 0.9; }
-.settlement-log-top { fill: transparent; }
-.settlement-log-end { fill: oklch(0.95 0.027 95 / 0.14); }
-.settlement-log-ring { fill: none; }
-.settlement-log[data-filled="true"] { color: oklch(0.48 0.079 65); }
-.settlement-log[data-filled="true"] svg > path:first-child { stroke: none; }
-.settlement-log[data-filled="true"] .settlement-log-top { fill: oklch(0.70 0.10 75); }
-.settlement-log[data-filled="true"] .settlement-log-end { fill: oklch(0.85 0.09 82); }
-.settlement-log[data-filled="true"] .settlement-log-ring { fill: oklch(0.54 0.08 65); }
-.settlement-bundles { display: flex; align-items: center; gap: 2px; }
-.settlement-bundles i { display: block; }
-.settlement-bundles svg { width: 18px; height: 20px; }
-.settlement-bundles:has(i:not([hidden])) { margin-left: 2px; }
-.settlement-homes { display: flex; align-items: center; gap: 8px; }
-.settlement-homes > svg { width: 30px; height: 30px; }
-.settlement-home-marks { display: grid; grid-template-columns: repeat(4, 5px); gap: 4px; }
-.settlement-home-marks i { width: 5px; height: 7px; background: oklch(0.95 0.027 95 / 0.38); clip-path: polygon(0 36%, 50% 0, 100% 36%, 100% 100%, 0 100%); }
-.settlement-home-marks i[data-connected="true"] { background: var(--settlement-ink); }
+.settlement-resource { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 60px; }
+.settlement-resource strong { font-size: 44px; font-weight: 700; line-height: 1; letter-spacing: -1px; }
+.settlement-resource > span, .settlement-label { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.settlement-gold { color: var(--settlement-accent); }
 .settlement-development {
-  position: absolute;
-  top: max(78px, calc(env(safe-area-inset-top) + 58px));
-  left: max(20px, env(safe-area-inset-left));
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-height: 40px;
-  filter: drop-shadow(0 1px 1px var(--settlement-shadow));
+  position: absolute; top: max(116px, calc(env(safe-area-inset-top) + 88px)); left: max(28px, env(safe-area-inset-left));
+  display: flex; align-items: center; gap: 15px;
 }
-.settlement-earned { display: flex; align-items: center; gap: 8px; }
-.settlement-earned:not(:has([data-milestone]:not([hidden]))) { display: none; }
-.settlement-earned svg { width: 21px; height: 25px; }
-.settlement-development[data-complete="true"] .settlement-earned svg { width: 24px; height: 28px; }
-.settlement-next { position: relative; display: grid; place-items: center; width: 40px; height: 40px; }
-.settlement-next > .settlement-progress { position: absolute; inset: 0; width: 40px; height: 40px; transform: rotate(-90deg); }
-.settlement-progress circle { fill: none; stroke-width: 1.5; }
-.settlement-progress-track { stroke: oklch(0.95 0.027 95 / 0.2); }
-.settlement-progress-arc { stroke: var(--settlement-accent); stroke-linecap: butt; }
-.settlement-next-symbol svg { width: 24px; height: 27px; opacity: 0.78; }
-.settlement-next[data-pending="true"] .settlement-next-symbol svg { opacity: 1; }
-.settlement-next > .settlement-space-needed { display: none; position: absolute; right: -6px; bottom: -1px; width: 12px; height: 12px; fill: none; stroke: var(--settlement-accent); stroke-width: 2; }
-.settlement-next[data-pending="true"] > .settlement-space-needed { display: block; }
-.settlement-dock {
-  position: absolute;
-  bottom: max(18px, env(safe-area-inset-bottom));
-  left: max(18px, env(safe-area-inset-left));
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-.settlement-actions, .settlement-build-actions { display: flex; align-items: center; gap: 9px; }
+.settlement-level { position: relative; display: grid; place-items: center; width: 64px; height: 64px; }
+.settlement-level strong { font-size: 33px; line-height: 1; font-weight: 700; }
+.settlement-progress { position: absolute; inset: 0; width: 64px; height: 64px; transform: rotate(-90deg); filter: drop-shadow(0 1px 2px var(--settlement-shadow)); }
+.settlement-progress circle { fill: none; stroke-width: 2.5; }
+.settlement-progress-track { stroke: color-mix(in oklch, var(--settlement-ink) 25%, transparent); }
+.settlement-progress-arc { stroke: var(--settlement-accent); stroke-linecap: round; transition: stroke-dasharray 350ms ease-out; }
+.settlement-growth { display: flex; flex-direction: column; gap: 1px; }
+.settlement-growth .settlement-label { font-size: 13px; opacity: 0.88; }
+.settlement-growth > strong { font-size: 22px; font-weight: 650; line-height: 1.1; }
+.settlement-growth-caption { font-size: 13px; font-weight: 500; opacity: 0.88; }
+.settlement-day-control { position: absolute; top: max(27px, env(safe-area-inset-top)); right: max(26px, env(safe-area-inset-right)); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.settlement-day-control > .settlement-label { font-size: 13px; opacity: 0.88; padding-right: 4px; }
+.settlement-dock { position: absolute; bottom: max(24px, env(safe-area-inset-bottom)); left: max(26px, env(safe-area-inset-left)); display: flex; flex-direction: column; align-items: flex-start; gap: 15px; max-width: calc(100% - 52px); }
+.settlement-actions, .settlement-placement-keys { display: flex; align-items: center; gap: 23px; }
 .settlement-hud button {
-  appearance: none;
-  position: relative;
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-  width: 52px;
-  height: 52px;
-  padding: 9px;
-  margin: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--settlement-ink);
-  pointer-events: auto;
-  cursor: pointer;
-  touch-action: manipulation;
-  transition: background-color 160ms ease-out, transform 160ms ease-out;
+  appearance: none; position: relative; display: inline-flex; justify-content: flex-start; align-items: center; gap: 9px;
+  min-height: 44px; padding: 3px 2px; margin: 0; border: 0; border-radius: 4px; background: transparent;
+  color: inherit; font: inherit; font-size: 15px; font-weight: 650; text-shadow: inherit;
+  pointer-events: auto; cursor: pointer; touch-action: manipulation;
+  transition: color 140ms ease-out, opacity 140ms ease-out;
 }
-.settlement-hud button > svg, .settlement-hud button > span:not(.settlement-target) {
-  filter: drop-shadow(0 1px 1px var(--settlement-shadow));
-}
-.settlement-hud button::after { content: ''; position: absolute; inset: 1px; border: 1.5px solid transparent; border-radius: 50%; pointer-events: none; }
-.settlement-hud button:hover:not(:disabled) { background: oklch(0.20 0.035 165 / 0.14); transform: translateY(-2px); }
-.settlement-hud button:active:not(:disabled) { transform: translateY(0) scale(0.95); }
-.settlement-hud button:focus-visible { outline: 2px solid var(--settlement-ink); outline-offset: 3px; background: oklch(0.20 0.035 165 / 0.5); }
-.settlement-hud button:disabled { opacity: 0.36; cursor: default; }
-.settlement-tool[aria-pressed="true"]::after { border-color: oklch(0.95 0.027 95 / 0.75); }
-.settlement-tool[aria-pressed="true"] { background: oklch(0.20 0.035 165 / 0.18); }
-.settlement-target { position: absolute; width: 7px; height: 7px; right: 4px; top: 4px; border: 1.5px solid oklch(0.26 0.04 165); border-radius: 50%; background: var(--settlement-accent); opacity: 0; }
-.settlement-hud[data-target="true"] .settlement-target { opacity: 1; }
-.settlement-hud[data-affordable="true"] [data-action="house"]::before { content: ''; position: absolute; bottom: 2px; width: 6px; height: 4px; background: var(--settlement-accent); border-radius: 50%; }
-.settlement-placement, .settlement-validity { display: flex; align-items: center; justify-content: center; width: 40px; height: 44px; filter: drop-shadow(0 1px 1px var(--settlement-shadow)); }
-.settlement-placement svg { width: 28px; height: 28px; }
-.settlement-validity { position: relative; color: var(--settlement-invalid); }
-.settlement-validity svg { width: 25px; height: 25px; }
-.settlement-validity[data-valid="false"]::after { content: ''; position: absolute; width: 28px; height: 2px; background: var(--settlement-invalid); transform: rotate(-45deg); }
-.settlement-validity[data-valid="true"] { opacity: 0; }
-.settlement-build-actions button { width: 44px; height: 44px; padding: 12px; }
-.settlement-build-actions button svg { width: 23px; height: 23px; }
-.settlement-build-actions .settlement-build:not(:disabled) { color: var(--settlement-accent); background: oklch(0.20 0.035 165 / 0.18); }
+.settlement-hud kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 33px; height: 34px; padding: 0 7px; box-sizing: border-box; border: 1px solid color-mix(in oklch, var(--settlement-ink) 65%, transparent); border-bottom-width: 3px; border-radius: 5px; color: inherit; background: var(--settlement-key); font: inherit; font-size: 14px; line-height: 1; font-weight: 700; box-shadow: 0 1px 4px oklch(0.2 0.035 165 / 0.18); }
+.settlement-hud button:hover:not(:disabled), .settlement-hud button[aria-pressed="true"] { color: var(--settlement-accent); }
+.settlement-hud button:hover:not(:disabled) kbd, .settlement-hud button[aria-pressed="true"] kbd { border-color: var(--settlement-accent); background: color-mix(in oklch, var(--settlement-accent) 9%, transparent); }
+.settlement-hud button:active:not(:disabled) kbd { border-bottom-width: 1px; padding-top: 2px; }
+.settlement-hud button:focus-visible { outline: 2px solid var(--settlement-ink); outline-offset: 5px; }
+.settlement-hud button:disabled { opacity: 0.38; cursor: default; }
+.settlement-hud[data-target="true"] [data-action="axe"] kbd { box-shadow: 0 0 0 3px oklch(0.87 0.12 86 / 0.15); }
+.settlement-movement { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding-left: 2px; opacity: 0.78; }
+.settlement-movement > span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 550; }
+.settlement-movement kbd { min-width: 0; height: 23px; padding: 0 5px; border-bottom-width: 2px; border-radius: 4px; font-size: 12px; }
+.settlement-build-actions { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; padding: 0 2px 5px; }
+.settlement-placement-note { font-size: 14px; font-weight: 650; }
+.settlement-validity { max-width: 330px; font-size: 13px; color: var(--settlement-invalid); }
+.settlement-validity[data-valid="true"] { color: var(--settlement-accent); }
+.settlement-placement-keys { gap: 24px; margin-top: 8px; }
+.settlement-placement-keys [data-action="build"]:not(:disabled) { color: var(--settlement-accent); }
 .settlement-hud[data-ready="false"] .settlement-inventory, .settlement-hud[data-ready="false"] .settlement-development { opacity: 0.45; }
+.settlement-income { position: absolute; top: 24%; left: 50%; width: min(700px, 82%); display: flex; align-items: center; justify-content: center; gap: 30px; translate: -50% 0; color: var(--settlement-accent); }
+.settlement-income-rule { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--settlement-accent) 65%, transparent)); }
+.settlement-income-rule:last-child { rotate: 180deg; }
+.settlement-income-copy { display: flex; flex-direction: column; align-items: center; flex: none; gap: 4px; }
+.settlement-income-amount { display: flex; align-items: baseline; gap: 10px; }
+.settlement-income-amount strong { font-size: 72px; font-weight: 650; letter-spacing: -2px; line-height: 1; }
+.settlement-income-amount > span { font-size: 18px; font-weight: 650; }
+.settlement-income-label { font-size: 14px; font-weight: 600; }
 .settlement-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-@media (max-width: 420px) {
-  .settlement-inventory { left: max(14px, env(safe-area-inset-left)); top: max(14px, env(safe-area-inset-top)); gap: 16px; }
-  .settlement-development { left: max(14px, env(safe-area-inset-left)); top: max(72px, calc(env(safe-area-inset-top) + 58px)); }
-  .settlement-bundles { gap: 0; }
-  .settlement-bundles svg { width: 14px; }
-  .settlement-dock { left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom)); }
-  .settlement-actions { gap: 4px; }
+@media (max-width: 600px) {
+  .settlement-inventory { top: max(20px, env(safe-area-inset-top)); left: max(20px, env(safe-area-inset-left)); gap: 25px; }
+  .settlement-resource strong { font-size: 37px; }
+  .settlement-resource { min-width: 46px; }
+  .settlement-resource > span { font-size: 13px; }
+  .settlement-development { top: max(99px, calc(env(safe-area-inset-top) + 79px)); left: max(18px, env(safe-area-inset-left)); gap: 12px; }
+  .settlement-day-control { top: max(19px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); }
+  .settlement-day-control button { gap: 7px; font-size: 13px; }
+  .settlement-day-control kbd { min-width: 29px; height: 30px; font-size: 12px; }
+  .settlement-dock { left: max(18px, env(safe-area-inset-left)); bottom: max(20px, env(safe-area-inset-bottom)); max-width: calc(100% - 36px); gap: 12px; }
+  .settlement-actions { gap: 17px; }
+  .settlement-hud button { font-size: 14px; gap: 7px; }
+  .settlement-movement { gap: 13px; }
+  .settlement-income { top: 31%; gap: 16px; width: 90%; }
+  .settlement-income-amount strong { font-size: 58px; }
+  .settlement-income-amount > span { font-size: 16px; }
+  .settlement-income-label { font-size: 13px; }
 }
-@media (prefers-reduced-motion: reduce) { .settlement-hud button { transition: none; } }
+@media (max-height: 500px) {
+  .settlement-development { top: 101px; }
+  .settlement-dock { bottom: 14px; }
+  .settlement-movement { display: none; }
+  .settlement-build-actions { gap: 1px; padding-bottom: 0; }
+  .settlement-placement-keys { margin-top: 2px; }
+}
+@media (prefers-reduced-motion: reduce) { .settlement-hud button, .settlement-progress-arc { transition: none; } }
