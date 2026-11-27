@@ -1,6 +1,6 @@
 /** Keyboard and drag input for the fourth camera layer. Capturing these events
  * prevents Space/jump and WASD/walk from also driving the strategy controls. */
-export function createWalkingInput(canvas,{isActive,onToggle,onExit}){
+export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>false}){
   const keys=new Set(),listeners=[];
   let pointer=null,lookX=0,lookY=0,pendingJump=false,pendingSwing=false;
   const document=canvas.ownerDocument,window=document.defaultView??globalThis.window;
@@ -13,6 +13,7 @@ export function createWalkingInput(canvas,{isActive,onToggle,onExit}){
   function consume(event){event.preventDefault();event.stopImmediatePropagation();}
   listen(canvas,'keydown',event=>{
     if(event.altKey||event.metaKey||event.ctrlKey)return;
+    if(onKey(event)){consume(event);return;}
     const key=event.key.toLowerCase();
     if(key==='v'){
       consume(event);if(!event.repeat){clear();onToggle();}return;

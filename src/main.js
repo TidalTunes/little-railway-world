@@ -23,9 +23,12 @@ import {createWalkingSky} from './walking-sky.js';
 import {createCharacterTransition} from './character-transition.js';
 import {createCharacterMarker} from './character-marker.js';
 import {createClockHands} from './clock-hands.js';
+import {createSettlementController} from './settlement-controller.js';
 import './style.css';
+import './settlement-hud.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
+const artCanvasDescription=canvas.getAttribute('aria-label');
 scene.background=mapScene.background=C.backdrop;
 // Keep fog in the material program from startup. Switching camera layers only
 // changes its uniforms, avoiding a new shader compilation on the first walk.
@@ -49,6 +52,7 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;sc
 
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
+let settlement;
 let transitionMapStart=0,renderedMapBlend=0;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
@@ -73,7 +77,8 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
   },
 });
 const {navigation,controls}=view;
-const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking});
+const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking,
+  onKey:event=>settlement?.keyDown(event)??false});
 const transitionFocus=new THREE.Vector3();
 const smoothStep=(a,b,value)=>{const t=THREE.MathUtils.clamp((value-a)/(b-a),0,1);return t*t*(3-2*t);};
 function walkingTarget(){return walker.cameraTarget.clone();}
@@ -90,6 +95,7 @@ function snapshotCamera(){
   return snapshot;
 }
 function spawnHeading(){
+  if(model.gameplay)return model.gameplay.spawn.heading??0;
   const town=model.cities[0],offset=town&&walkSpawn?surfaceDisplacement(model,town,walkSpawn,{}):null;
   return offset?Math.atan2(offset.x,offset.z):Math.atan2(controls.target.x-navigation.position.x,controls.target.z-navigation.position.z);
 }
@@ -99,7 +105,9 @@ function initializeCharacter(){
   // tree records, even when the player has not entered walking mode yet.
   const scale=worldRoot.scale.y;worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
   if(walker.enter(walkSpawn,spawnHeading())){
-    walker.exit();walker.root.visible=true;walkSpawn={...walker.position};
+    if(settlement){walkingMode=true;view.setInputEnabled(false);entryFrame=true;canvas.style.cursor='grab';}
+    else walker.exit();
+    walker.root.visible=true;walkSpawn={...walker.position};
   }
   worldRoot.scale.y=scale;worldRoot.updateMatrixWorld(true);
 }
@@ -122,6 +130,7 @@ function enterWalking(){
 }
 function leaveWalking(){
   if(!walker||!walkingMode)return;
+  settlement?.cancelBuild();
   const fromCamera=snapshotCamera(),fromTarget=displayedTarget(),heading=walker.heading;
   const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;
   view.setInputEnabled(false);view.overlook(point,{heading,zoom:view.zoomScale*1.35});
@@ -227,22 +236,27 @@ async function loadWorld(input={}){
     walkingMode=false;walkingInput.clear();view.setInputEnabled(true);
     characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
     scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
+    settlement?.dispose();settlement=null;
     walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();clockHands?.dispose();
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
-    walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>detail.getCollisionPlacements(),
-      getTerrainMeshes:()=>detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
+    if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,detail,getPlayer:()=>walker,
+      onView:()=>walkingMode?leaveWalking():enterWalking(),reducedMotion});
+    walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
+      getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
-    walkSpawn=walker.prepareSpawn(model.cities[0]??controls.target);
+    walkSpawn=walker.prepareSpawn(model.gameplay?.spawn??model.cities[0]??controls.target);
     walkingDetail=createWalkingDetail(root,model);walkingBuffersReady=false;
     characterMarker=createCharacterMarker(scene,mapScene,model);
     clockHands=createClockHands(root,model);
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, Q or R to rotate, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. Nearby houses join your settlement. V switches between your traveller and overview; N changes day and night.');
+    else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
     clearMeasurements();return model;
@@ -312,7 +326,11 @@ function frame(now){
       // normally afterward; buffered drag/jump impulses are discarded.
       walkingInput.sample(0);characterTransition.update(dt);
       if(!characterTransition.active)finishCharacterTransition();
-    }else if(walkingMode)walker.update(dt,walkingInput.sample(dt));
+    }else if(walkingMode){
+      const input=walkingInput.sample(dt),swings=walker.stats.swings;
+      walker.update(dt,settlement?settlement.prepareInput(input):input);
+      if(walker.stats.swings>swings)settlement?.onSwing();
+    }
     else view.updateNavigation(dt);
     if(!walkingMode&&!characterTransition.active)view.updatePresentation(dt);
     const groundLayer=walkingMode||characterTransition.active;
@@ -328,8 +346,9 @@ function frame(now){
       groundFocus,groundRadius,groundOnly:groundLayer,
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
+    settlement?.update(dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend});
     if(walker?.initialized)walker.root.visible=true;
-    if(groundFocus)walkingDetail.update(groundFocus,{placements:detail.placements,revision:detail.placementRevision,
+    if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
     // Shader compilation alone does not upload hidden instance attributes.
     // Allocate these fixed GPU pools during startup, before the first dolly.

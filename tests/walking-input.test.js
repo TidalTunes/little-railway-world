@@ -25,14 +25,14 @@ class Surface{
     return event;
   }
 }
-function fixture(t,{initialActive=false}={}){
+function fixture(t,{initialActive=false,onKey}={}){
   const document=new Surface(),window=new Surface(),canvas=new Surface();
   document.defaultView=window;canvas.ownerDocument=document;
   const captured=new Set(),released=[];let focusCount=0,active=initialActive,toggles=0,exits=0,bubbleKeys=[];
   canvas.setPointerCapture=id=>captured.add(id);canvas.hasPointerCapture=id=>captured.has(id);
   canvas.releasePointerCapture=id=>{captured.delete(id);released.push(id);};canvas.focus=()=>focusCount++;
   canvas.addEventListener('keydown',event=>bubbleKeys.push(event.key));
-  const input=createWalkingInput(canvas,{isActive:()=>active,onToggle:()=>{active=!active;toggles++;},onExit:()=>{active=false;exits++;}});
+  const input=createWalkingInput(canvas,{onKey,isActive:()=>active,onToggle:()=>{active=!active;toggles++;},onExit:()=>{active=false;exits++;}});
   t.after(()=>input.dispose());
   return {input,canvas,window,document,captured,released,key:(key,properties={})=>canvas.dispatch('keydown',{key,...properties}),
     get active(){return active;},get toggles(){return toggles;},get exits(){return exits;},get bubbleKeys(){return bubbleKeys;},get focusCount(){return focusCount;}};
@@ -167,4 +167,20 @@ test('blur, hidden pages, exit and disposal clear held controls and release an a
   const f=fixture(t,{initialActive:true});f.input.dispose();
   assert.equal(f.key('v').defaultPrevented,false);assert.equal(f.toggles,0);
   assert.equal(f.canvas.dispatch('wheel').defaultPrevented,false);
+});
+
+
+test('gameplay keys take priority in both camera modes without leaking into movement or strategy',t=>{
+  for(const initialActive of [false,true]){
+    const handled=[];const f=fixture(t,{initialActive,onKey:event=>{
+      if(!['b','e','r','enter','escape'].includes(event.key.toLowerCase()))return false;
+      handled.push(event.key);return true;
+    }});
+    for(const key of ['b','e','r','Enter','Escape'])assert.equal(f.key(key).defaultPrevented,true);
+    assert.deepEqual(f.input.sample(),empty);assert.deepEqual(f.bubbleKeys,[]);
+    assert.equal(f.exits,0);assert.equal(handled.length,5);
+    assert.equal(f.key('b',{metaKey:true}).defaultPrevented,false);
+    assert.equal(handled.length,5,'browser modifier shortcuts never reach gameplay');
+    f.key('v');assert.equal(f.toggles,1,'the camera toggle remains available');
+  }
 });

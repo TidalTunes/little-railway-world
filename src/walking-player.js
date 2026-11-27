@@ -84,8 +84,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       // this conservative selection stable while moving within its padding.
       meshes=nextMeshes.filter(mesh=>{
         const geometry=mesh.geometry;if(!geometry)return false;
+        if(mesh.isInstancedMesh&&!mesh.boundingSphere)mesh.computeBoundingSphere();
         if(!geometry.boundingSphere)geometry.computeBoundingSphere();
-        meshSphere.copy(geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+        meshSphere.copy(mesh.boundingSphere??geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
         return meshSphere.distanceToPoint(meshCenter)<=WALKING.cameraDistance+4;
       });stats.meshes=meshes.length;stats.meshSelections++;
     }
@@ -306,7 +307,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     pitch=clamp(pitch+(Number.isFinite(input.lookY)?input.lookY:0),Math.PI/18,Math.PI*65/180);
     const wantsJump=Boolean(input.jump);if(wantsJump&&!jumpDown&&grounded){velocity.y=WALKING.jumpSpeed;grounded=false;}jumpDown=wantsJump;
     const wantsSwing=Boolean(input.swing);
-    if(wantsSwing&&!swingDown&&swingTime>=swingDuration){swingTime=0;stats.swings++;}
+    if(wantsSwing&&!swingDown&&swingTime>=swingDuration){swingTime=0;bodyTurn=orbit;stats.swings++;}
     swingDown=wantsSwing;swingTime=Math.min(swingDuration,swingTime+dt);
     let forward=clamp(input.forward??0,-1,1),right=clamp(input.right??0,-1,1),length=Math.hypot(forward,right);
     if(length>1){forward/=length;right/=length;}
@@ -330,6 +331,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       }
     }
     interpolatePosition();
+    if(swingTime<swingDuration)bodyTurn=orbit;
     const travelled=surfaceDistance(world,renderOrigin,renderPosition),actualSpeed=dt>0?travelled/dt:0;
     poseSpeed+=(actualSpeed-poseSpeed)*(1-Math.exp(-24*dt));
     setPose(dt,poseSpeed,travelled);updateCamera(dt);

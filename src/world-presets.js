@@ -1,6 +1,6 @@
 import {createStressWorld} from './stress-world.js';
 
-export const DEFAULT_LAYOUT='island';
+export const DEFAULT_LAYOUT='settlement';
 
 /** Keep saved presets explicit and large geography imports off the island's
  * launch path. The old ?cities= shortcut still opens the classic generator. */
@@ -12,6 +12,10 @@ export async function createLaunchWorld(parameters,baseUrl){
   const layout=launchLayout(parameters);
   const options={...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
     ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})};
+  if(layout==='settlement'){
+    const {createSettlementWorld}=await import('./settlement-world.js');
+    return createSettlementWorld(options);
+  }
   if(layout==='island'){
     const {createIslandWorld}=await import('./island-world.js');
     return createIslandWorld(options);

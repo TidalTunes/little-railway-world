@@ -9,6 +9,7 @@ import {indexGeometryExact,geometryAttributeBytes} from './index-geometry.js';
 import {warpGeometryToSurface,SURFACE_MAX_SEGMENT} from './world-surface.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {farmLivestockPlacements} from './farm-livestock.js';
+import {treeId} from './mutable-trees.js';
 
 function segmentInterval(a,b,bounds){
   let lo=0,hi=1;
@@ -38,6 +39,8 @@ export function clipRailRanges(line,bounds){
 /** Runs in a worker: actual terrain, CSG, assets and rail art become plain buffers. */
 export function compileDetailPacket(region,network){
   const bounds=region.bounds;
+  const sourcePlacements=(region.placements??[]).map(p=>network.gameplay&&p.kind==='tree'&&!p.id?{...p,id:treeId(p)}:p);
+  const mutableTrees=network.gameplay?sourcePlacements.filter(p=>p.kind==='tree'):[];
   const islands=clipPolygonsToBounds([[network.outline]],bounds);
   const mountainIds=new Set((region.mountains??[]).map(m=>m.id));
   const lines=(region.lines??network.lines).map(line=>({...line,renderRanges:clipRailRanges(line,bounds),
@@ -50,7 +53,8 @@ export function compileDetailPacket(region,network){
   }
   const root=new THREE.Group(),surfaceRoot=network.surface?.type==='sphere'?new THREE.Group():null,ownedMaterials=new Set();
   const local={...network,...region,lines,terrainChunk:true,terrainSource:network,
-    placements:region.placements??[],cityStreets:region.cityStreets??[],stations:region.stations??[],mountains:region.mountains??[]};
+    placements:network.gameplay?sourcePlacements.filter(p=>p.kind!=='tree'):sourcePlacements,
+    cityStreets:region.cityStreets??[],stations:region.stations??[],mountains:region.mountains??[]};
   if(network.biomes)local.biomes={...network.biomes,
     ocean:network.biomes.ocean?.length?clipPolygonsToBounds(network.biomes.ocean,bounds):[],
     oceanShore:network.biomes.oceanShore?.length?clipPolygonsToBounds(network.biomes.oceanShore,bounds):[]};
@@ -84,15 +88,16 @@ export function compileDetailPacket(region,network){
           roughness:material.roughness??1,metalness:material.metalness??0,side:material.side,flatShading:true,vertexColors:material.vertexColors,sceneStyle:material.userData.sceneStyle??'asset'}};
     });
     const lifeKinds=new Set(['sheep','tree','farmPatch','house','apartment','civic','tower','plaza']);
-    const lifePlacements=(region.placements??[]).flatMap(p=>p.kind==='farm'?farmLivestockPlacements(network,p):lifeKinds.has(p.kind)?[p]:[])
+    const lifePlacements=sourcePlacements.flatMap(p=>p.kind==='farm'?farmLivestockPlacements(network,p):lifeKinds.has(p.kind)?[p]:[])
       .map(p=>({kind:p.kind,id:p.id,x:p.x,y:p.y??0,z:p.z,rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1,
         ...(Number.isFinite(p.roamRadius)?{roamRadius:p.roamRadius}:{})}));
     // Walking mode uses the same authored/generated objects as the overview.
     // Send their small source records alongside the existing geometry, so
     // collisions and nearby embellishments never regenerate a different town.
-    const placements=[...(region.placements??[]),...(region.stations??[]).map(p=>({...p,kind:'station'}))];
+    const placements=[...sourcePlacements,...(region.stations??[]).map(p=>({...p,kind:'station'}))];
     return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,lifePlacements,
-      placements,cityStreets:region.cityStreets??[],renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
+      placements,...(network.gameplay?{mutableTrees}:{}),cityStreets:region.cityStreets??[],
+      renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{if(node.geometry)node.geometry.dispose();
       for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});

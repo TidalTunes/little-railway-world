@@ -3,6 +3,7 @@ import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
 import {surfaceFor,surfaceCoordinates,surfacePoint,surfaceChartRadius,surfaceDistance} from './world-surface.js';
 import {applySceneStyle} from './scene-style.js';
+import {createMutableTrees} from './mutable-trees.js';
 
 export {compileDetailPacket,detailPacketTransfers,clipRailRanges} from './detail-compiler.js';
 
@@ -22,6 +23,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   let frame=0,disposed=false,coverageChecked=false;
   let lifePlacements=[],lifeSignature='',lifeRevision=0;
   let placements=[],collisionPlacements=[],cityStreets=[],terrainMeshes=[],placementRevision=0,residentDirty=true;
+  const trees=world.gameplay?createMutableTrees(world,{onChange(){residentDirty=true;placementRevision++;lifeSignature='';}}):null;
   const solidKinds=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
   const nonSolidStyles=new Set(['water','surf','window','lamp']);
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
@@ -44,6 +46,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     return material;
   };
   function releaseResources(chunk){
+    if(chunk.trees)trees.removeChunk(chunk.key);
     chunk.root.traverse(mesh=>{if(mesh.isMesh)mesh.geometry.dispose();});
     for(const material of chunk.materials.values())material.dispose();
     chunk.depthMaterial?.dispose();
@@ -92,9 +95,13 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         last:frame,bytes:job.bytes,triangles:job.triangles,reveal:job.reveal,progress:0,
         materials:job.materials,depthMaterial:job.depthMaterial,lifePlacements:job.packet.lifePlacements??[],
         placements:job.packet.placements??[],cityStreets:job.packet.cityStreets??[],cellBounds:job.packet.cellBounds??job.packet.bounds};
+      if(trees&&job.packet.mutableTrees?.length){
+        chunk.trees=trees.addChunk(key,chunk.root,job.packet.mutableTrees,{reveal:job.reveal});
+        chunk.bounds.union(chunk.trees.bounds);chunk.bytes+=chunk.trees.bytes;chunk.triangles+=chunk.trees.triangles;
+      }
       root.add(job.root);cache.set(key,chunk);incoming.delete(key);
       residentDirty=true;placementRevision++;
-      stats.bytes+=job.bytes;stats.triangles+=job.triangles;stats.loadedChunks=cache.size;
+      stats.bytes+=chunk.bytes;stats.triangles+=chunk.triangles;stats.loadedChunks=cache.size;
     }
   }
   function releaseIncoming(job){
@@ -275,8 +282,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         else lifeChunks.push(chunk);
       }
     }
-    const signature=lifeChunks.map(chunk=>chunk.key).join('|');
-    if(signature!==lifeSignature){lifeSignature=signature;lifePlacements=lifeChunks.flatMap(chunk=>chunk.lifePlacements);lifeRevision++;}
+    const signature=`${trees?.revision??0}:`+lifeChunks.map(chunk=>chunk.key).join('|');
+    if(signature!==lifeSignature){lifeSignature=signature;lifePlacements=lifeChunks.flatMap(chunk=>chunk.lifePlacements)
+      .filter(p=>p.kind!=='tree'||!trees?.removed.has(p.id));lifeRevision++;}
   }
   function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false,
     groundFocus,groundRadius=45,groundOnly=false}={}){
@@ -366,6 +374,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     if(disposed)return;disposed=true;for(const chunk of [...cache.values()])release(chunk);
     for(const job of incoming.values())releaseIncoming(job);
     for(const task of pending.values())task.controller.abort();
+    trees?.dispose();
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
     lifePlacements=[];lifeSignature='';lifeRevision++;
     placements=[];collisionPlacements=[];cityStreets=[];terrainMeshes=[];residentDirty=false;placementRevision++;
@@ -374,8 +383,8 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     if(!residentDirty)return;
     placements=[];cityStreets=[];terrainMeshes=[];
     for(const chunk of cache.values()){
-      placements.push(...chunk.placements);cityStreets.push(...chunk.cityStreets);
-      terrainMeshes.push(...chunk.root.children.filter(mesh=>!nonSolidStyles.has(mesh.material.userData.sceneStyle)));
+      placements.push(...chunk.placements.filter(p=>p.kind!=='tree'||!trees?.removed.has(p.id)));cityStreets.push(...chunk.cityStreets);
+      terrainMeshes.push(...chunk.root.children.filter(mesh=>mesh.isMesh&&!nonSolidStyles.has(mesh.material.userData.sceneStyle)),...chunk.trees?.meshes??[]);
     }
     collisionPlacements=placements.filter(p=>solidKinds.has(p.kind));residentDirty=false;
   }
@@ -393,6 +402,8 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   }
   function ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}
   return {root,update,updateVisibility,stats,dispose,hasCoverageAt,
+    fellTree:(id,options)=>trees?.fellTree(id,options)??false,removeTree:id=>trees?.removeTree(id)??false,
+    updateTrees:dt=>trees?.update(dt),get removedTreeIds(){return trees?.removed;},get treeRevision(){return trees?.revision??0;},
     get placements(){refreshResidents();return placements;},get placementRevision(){return placementRevision;},
     get cityStreets(){refreshResidents();return cityStreets;},
     getSceneryPlacements(){refreshResidents();return placements;},getCollisionPlacements(){refreshResidents();return collisionPlacements;},

@@ -236,7 +236,7 @@ function makeOutline(width,depth) {
 function assert(condition, message) { if (!condition) throw new TypeError(`Invalid world: ${message}`); }
 function normalizeCities(input, bounds, random) {
   if (input.cities) {
-    assert(Array.isArray(input.cities)&&input.cities.length>=2,'at least two cities are required');
+    assert(Array.isArray(input.cities)&&(input.cities.length>=2||input.gameplay&&input.cities.length===0),'at least two cities are required outside settlement mode');
     const cities=input.cities.map((city,i)=>({...city,id:String(city.id??`city-${i+1}`),...point(city,0),radius:city.radius??cityDevelopment(city.level??3).radius,stationIds:[]}));
     assert(cities.every(c=>finitePoint(c)&&Number.isFinite(c.radius)&&c.radius>0),'cities require finite x/z and positive radii');
     assert(new Set(cities.map(c=>c.id)).size===cities.length,'city IDs must be unique');
@@ -346,6 +346,7 @@ function placeStations(world) {
 
 function canPlace(world,item,{cityId=null,keepOutsideCities=false}={}) {
   const r=item.radius;
+  if(world.gameplay?.reservations?.some(p=>surfaceDistance(world,item,p)<r+p.radius))return false;
   if(!inWorld(world,item.x,item.z))return false;
   if(world.detailRegion&&!cityId){const b=world.detailRegion,edge=footprintRadius(world,item,r+CLEARANCES.objects/2);if(item.x-edge<b.minX||item.x+edge>b.maxX||item.z-edge<b.minZ||item.z+edge>b.maxZ)return false;}
   if(world.biomes&&!fitsBiome(world,['farmland','forest','plains','desert'],item.x,item.z,footprintRadius(world,item)))return false;
@@ -809,6 +810,7 @@ export function generateWorld(input = {}, options = {}) {
   const outline=input.outline?input.outline.map(p=>[Number(p[0]),Number(p[1])]):makeOutline(bounds.width,bounds.depth);
   assert(outline.length>=3&&outline.every(p=>p.every(Number.isFinite)),'outline requires at least three finite points');
   const world={version:2,seed,bounds,outline,geography:input.geography,camera:input.camera,surface:normalizeSurface(input.surface),players,trainOwners,traffic:structuredClone(input.traffic??{}),density:clamp(Number(input.density??1)||0,0,3),detailMode:options.detail??'full',cities,lines:[],stations:[],placements:[],cityStreets:[],junctions:[]};
+  if(input.gameplay)world.gameplay=structuredClone(input.gameplay);
   assert(cities.every(c=>inWorld(world,c.x,c.z,.5)),'cities must be inside the world outline');
   const defaultRiver={points:[[-.64,.015],[-.42,-.025],[-.20,.035],[.02,.00],[.22,.075],[.43,.055],[.64,.015]]
     .map(([x,z])=>[x*bounds.width,z*bounds.depth])};
@@ -833,7 +835,7 @@ export function generateWorld(input = {}, options = {}) {
   const riverWidth=world.river.width;
   const scale=Math.min(bounds.width/130,bounds.depth/95);
   const northPair=[...cities].sort((a,b)=>a.z-b.z).slice(0,2);
-  const mid={x:(northPair[0].x+northPair[1].x)/2,z:(northPair[0].z+northPair[1].z)/2};
+  const mid={x:((northPair[0]?.x??0)+(northPair[1]?.x??0))/2,z:((northPair[0]?.z??0)+(northPair[1]?.z??0))/2};
   const defaultMountains=input.cities?[]:[
     {id:'high-pass',...mid,radius:10*scale,height:13*scale},
     {id:'north-spire',x:mid.x-7*scale,z:mid.z-11*scale,radius:6.8*scale,height:10*scale},
@@ -851,7 +853,7 @@ export function generateWorld(input = {}, options = {}) {
   const defaultConnections=(cities.length===2?cities.slice(0,1):cities).map((city,i)=>({from:city.id,to:cities[(i+1)%cities.length].id}));
   if(cities.length===8){defaultConnections.push({from:cities[7].id,to:cities[2].id},{from:cities[6].id,to:cities[3].id});}
   const rawConnections=input.connections??defaultConnections,colors=['coral','teal','gold','blue','coral','gold','teal','blue','gold','coral'];
-  assert(Array.isArray(rawConnections)&&rawConnections.length>0,'at least one connection is required');
+  assert(Array.isArray(rawConnections)&&(rawConnections.length>0||world.gameplay&&cities.length===0),'at least one connection is required outside settlement mode');
   const connections=rawConnections.map((c,i)=>({...c,id:String(c.id??`line-${i+1}`),from:String(c.from),to:String(c.to),waypoints:(c.points??c.waypoints??[]).map(p=>({...point(p),...(Number.isFinite(p.heading)?{heading:p.heading}:{})}))}));
   assert(connections.every(c=>cities.some(t=>t.id===c.from)&&cities.some(t=>t.id===c.to)&&c.from!==c.to),'connections must reference two different existing city IDs');
   const edgeKeys=connections.map(c=>[c.from,c.to].sort().join('|'));
@@ -920,7 +922,10 @@ export function generateWorld(input = {}, options = {}) {
   world.biomes??=createBiomes(world,input.biomes);
   placeStations(world);
   world.placements=[];
-  if(options.detail!=='network'){placeCityDevelopment(world);placeScenery(world,random,world.density);}
+  if(options.detail!=='network'){
+    placeCityDevelopment(world);placeScenery(world,random,world.density);
+    if(world.gameplay)world.placements.push(...structuredClone(world.gameplay.guaranteedTrees??[]));
+  }
   return world;
 }
 
@@ -934,6 +939,7 @@ export function generateWorldRegion(network,{x=0,z=0,size=192}={}){
   const owned=cities.filter(owns),working={...network,cities,placements:[],cityStreets:[],detailRegion:bounds};
   placeCityDevelopment(working,owned);
   placeScenery(working,seededRandom(`${network.seed}:region:${key}`),network.density??1);
+  if(network.gameplay)working.placements.push(...structuredClone((network.gameplay.guaranteedTrees??[]).filter(owns)));
   const mountains=network.mountains.filter(m=>m.range?boxesOverlap(bounds,m.range.bounds):owns(m))
     .map(m=>m.range?{...m,renderBounds:bounds}:m),stations=network.stations.filter(owns);
   const lines=network.lines.filter(line=>boxesOverlap(bounds,lineTree(line).box));
