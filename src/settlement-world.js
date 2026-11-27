@@ -22,7 +22,7 @@ export function createSettlementWorld({seed='first-settlement-v1'}={}){
   return {...world,name:'First Settlement',cities:[],connections:[],
     players:[...DEFAULT_PLAYERS,FARM_VILLAGE_PLAYER].map(player=>structuredClone(player)),
     traffic:{trainCount:0,circuits:[]},
-    gameplay:{version:1,ownerId:'teal',starterHouse,spawn,guaranteedTrees,farmVillageCount:3,
+    gameplay:{version:1,ownerId:'teal',starterHouse,spawn,guaranteedTrees,farmVillageCount:3,playerBotCount:3,
       // These clear only the footprint of the authored home, spawn and trees.
       // They do not erase the surrounding forest to make a rectangular lot.
       reservations:[{x:starterHouse.x,z:starterHouse.z,radius:starterHouse.radius+.65},

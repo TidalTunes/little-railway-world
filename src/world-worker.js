@@ -3,6 +3,7 @@ import { compileDetailPacket } from './detail-compiler.js';
 import { createMountainContours } from './mountain-contours.js';
 import { prepareMapTerrain } from './map-terrain.js';
 import { compileMapTerrainGeometry } from './map-terrain-geometry.js';
+import {preparePlayerBotScenery} from './player-bot-world.js';
 
 let world;
 function buffersOf(value,result=new Set()){
@@ -33,6 +34,7 @@ self.onmessage=({data:{id,type,payload,port}})=>{
     const start=performance.now();let result;
     if(type==='generate'){
       world=generateWorld(payload,{detail:'network'});
+      preparePlayerBotScenery(world,generateWorldRegion);
       for(const mountain of world.mountains)if(mountain.range)mountain.mapContours=createMountainContours(mountain);
       world.mapTerrain={meshes:compileMapTerrainGeometry(prepareMapTerrain(world),world)};
       const violations=validateWorld(world);

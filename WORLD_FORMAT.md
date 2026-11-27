@@ -30,6 +30,8 @@ const violations = railway.validateWorld(candidate);
 
 `loadWorld` is asynchronous: it validates and compiles the replacement network in a module worker before discarding the displayed world. Invalid configurations reject its promise. Detailed scenery is requested separately as the camera approaches a region. `exportWorld()` and `inspectWorld()` return copies. An empty validation result means no violations were reported by the validator.
 
+The default settlement also exposes `railway.inspectSettlement()`: a copied snapshot containing the human account and each rival's actor state, owned homes, paths, landmarks and resources. This returns `null` in railway art presets. The local session shares tree removal and building occupancy across owners; it does not yet synchronize over a network. `gameplay.playerBotCount` requests up to three rival starts, or zero to disable them. Generated `playerBots` and the worker's bounded `botScenery` catalog are derived data; the authoring export retains the requested count.
+
 ## Coordinates and configuration
 
 Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, railway centre height is `0.42`, and river and ocean water are at `-1.2`. Route elevations supplied in coordinate arrays are ignored; tracks are level in this version.

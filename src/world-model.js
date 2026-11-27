@@ -5,6 +5,7 @@ import { mountainSurfaceHeight, mountainFootprintDistance } from './mountain-sha
 import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
 import { placeFarmland } from './farmland.js';
 import { createFarmVillages } from './farm-villages.js';
+import {createPlayerBotStarts,playerBotReservations} from './player-bot-world.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
 import {sampleLandscape} from './landscape-field.js';
 import {riversOf,riverBankDistance,riverCenterDistance,createHydrology} from './hydrology.js';
@@ -921,11 +922,17 @@ export function generateWorld(input = {}, options = {}) {
   buildSharedNetwork(world);
   buildJunctions(world);
   world.biomes??=createBiomes(world,input.biomes);
+  if(world.gameplay)world.gameplay.reservations=(world.gameplay.reservations??[]).filter(item=>!item.id?.startsWith('bot:'));
   if(world.gameplay?.farmVillageCount){
     world.gameplay.reservations=(world.gameplay.reservations??[]).filter(item=>!item.id?.startsWith('farm-village:'));
     const villages=createFarmVillages(world,{count:world.gameplay.farmVillageCount});
     world.gameplay.farmVillages=villages;
     world.gameplay.reservations.push(...villages.reservations);
+  }
+  if(world.gameplay&&Object.hasOwn(world.gameplay,'playerBotCount')){
+    world.gameplay.playerBots=createPlayerBotStarts(world,{count:world.gameplay.playerBotCount});
+    world.gameplay.reservations.push(...playerBotReservations(world.gameplay.playerBots));
+    delete world.gameplay.botScenery;
   }
   placeStations(world);
   world.placements=[];

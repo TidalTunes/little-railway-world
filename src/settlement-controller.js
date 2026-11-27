@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import {createSettlementGame,SETTLEMENT} from './settlement-game.js';
+import {SETTLEMENT} from './settlement-game.js';
+import {createSettlementSession} from './settlement-session.js';
+import {createPlayerBotSettlements} from './player-bot-settlements.js';
 import {createSettlementArt} from './settlement-art.js';
 import {createSettlementHud} from './settlement-hud.js';
 import {createSettlementResidents} from './settlement-residents.js';
@@ -10,7 +12,11 @@ import {surfaceDistance,surfaceOffset} from './world-surface.js';
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
 export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,onDayNight=()=>{},reducedMotion}){
-  const game=createSettlementGame(world),art=createSettlementArt(parent,mapParent,world);
+  let bots=null;
+  const session=createSettlementSession(world,{getActors:()=>{
+    const player=getPlayer();return [...(player?.initialized?[player.position]:[]),...bots?.positions??[]];
+  }});
+  const game=session.player,art=createSettlementArt(parent,mapParent,world);
   const residents=createSettlementResidents(parent,world),levels=createCityLevelMarkers(markerParent,markerMapParent,world);
   const incomeEffects=createSettlementIncomeEffects(markerParent,markerMapParent,world);
   // A single gray batch serves all farming villages. They share the scenery
@@ -27,9 +33,10 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     villageResidents=createSettlementResidents(parent,world,ownership);villageResidents.root.name='farm-village-residents';villageResidents.sync(villages);
     villageLevels=createCityLevelMarkers(markerParent,markerMapParent,world,ownership);villageLevels.sync(villages.cities);
   }
+  bots=createPlayerBotSettlements({world,session,parent,mapParent,markerParent,markerMapParent,detail,reducedMotion});
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0;
-  let revision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
+  let revision=-1,sessionRevision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),intersection=new THREE.Vector3();
   const listeners=[],facing=new THREE.Vector3();
   const focusCanvas=()=>canvas.focus({preventScroll:true});
@@ -68,12 +75,13 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       }
       revision=game.revision;
     }
-    if(changed||detail.placementRevision!==detailRevision){
+    if(changed||session.revision!==sessionRevision||detail.placementRevision!==detailRevision){
+      sessionRevision=session.revision;
       detailRevision=detail.placementRevision;
-      scenery=[...detail.placements,...snapshot.houses,...(snapshot.buildings??[]),...villageObjects];
-      collisions=[...detail.getCollisionPlacements(),...snapshot.houses,...(snapshot.buildings??[]),...villageObjects];
-      meshes=[...detail.getTerrainMeshes(),...houseMeshes,...villageArt?.meshes??[]];
-      streets=[...detail.cityStreets,...(snapshot.paths??[]),...villagePaths];
+      scenery=[...detail.placements,...session.buildings,...villageObjects];
+      collisions=[...detail.getCollisionPlacements(),...session.buildings,...villageObjects];
+      meshes=[...detail.getTerrainMeshes(),...houseMeshes,...villageArt?.meshes??[],...bots.meshes];
+      streets=[...detail.cityStreets,...session.paths,...villagePaths];
     }
   }
   function findTree(player){
@@ -112,9 +120,9 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   }
   synchronize();
   return{
-    game,art,hud,residents,villageArt,villageResidents,
+    game,art,hud,residents,villageArt,villageResidents,bots,session,
     get building(){return tool==='house';},
-    get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${revision}`;},
+    get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${sessionRevision}`;},
     get cityStreets(){synchronize();return streets;},
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
     keyDown(event){
@@ -140,6 +148,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0,walkingWeight=Number(walkingNow),focus,viewportHeight=800,dayState,night=0,uiDt=dt}={}){
       if(disposed)return;
       walking=walkingNow;transitioning=transitionNow;camera=activeCamera;const player=getPlayer();
+      bots.simulate(dt,{completedDays:dayState?.completedDays??0});
       const income=game.settleIncome(dayState?.completedDays??0);
       if(income?.amount>0){
         if(walkingWeight>.5)hud.showIncome(income);else incomeEffects.emit(income.houses);
@@ -168,7 +177,9 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       targetTree=ready&&walking&&!transitioning&&tool==='axe'?findTree(player):null;
       if(ready&&tool==='house'&&!transitioning){
         const pose=candidate(player),buildContext=context(player,pose);
-        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${buildContext.heading}:${walking}:${buildContext.ready}:${revision}:${detailRevision}`;
+        const nearbyActors=bots.positions.filter(point=>surfaceDistance(world,point,pose)<4)
+          .map(point=>`${point.x.toFixed(2)},${point.z.toFixed(2)}`).join(';');
+        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${buildContext.heading}:${walking}:${buildContext.ready}:${sessionRevision}:${detailRevision}:${nearbyActors}`;
         // An idle blueprint keeps its route. Re-plan only after aim, world or
         // player changes; the final build still validates the current scene.
         if(key!==previewKey){placement=game.evaluateBuild(pose,buildContext);previewKey=key;}
@@ -192,6 +203,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       villageArt?.update({mapBlend});
       villageResidents?.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches,night,dayPhase:dayState?.phase});
       villageLevels?.update({camera,mapBlend,walkingWeight,viewportHeight});
+      bots.update(dt,{camera,mapBlend,walkingWeight,focus:focus??player?.position,viewportHeight,night,dayPhase:dayState?.phase,uiDt});
       levels.update({camera,mapBlend,walkingWeight,viewportHeight});
       incomeEffects.update(uiDt,{camera,mapBlend,walkingWeight,viewportHeight,reducedMotion:reducedMotion?.matches});
       hud.update({logs:snapshot.logs,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
@@ -200,9 +212,11 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),construction:String(art.construction.count),constructionDust:String(art.construction.dustCount),residentsIndoors:String(residents.stats.indoors??0),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(residents.stats?.residents??residents.stats?.count??0),
         farmVillages:String(villages?.cities?.length??0),villageResidents:String(villageResidents?.stats.residents??0),villageResidentsIndoors:String(villageResidents?.stats.indoors??0),
+        playerBots:String(bots.entries.length),botHouses:bots.entries.map(entry=>entry.houseCount).join(','),
+        botLevels:bots.entries.map(entry=>entry.snapshot.cities[0]?.level??0).join(','),botStates:bots.entries.map(entry=>entry.bot.state).join(','),
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();},
+    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();},
   };
 }

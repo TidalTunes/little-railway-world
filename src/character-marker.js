@@ -3,12 +3,12 @@ import {C} from './palette.js';
 import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
 import {PERSON_HEIGHT} from './person-scale.js';
 
-function badgeGeometry(){
+function badgeGeometry(ownerColor,accent,trim){
   const positions=[],colors=[],segments=40;
   const vertex=(radius,angle,color)=>{positions.push(Math.cos(angle)*radius,Math.sin(angle)*radius,0);colors.push(color.r,color.g,color.b);};
   // Adjacent annuli share their edges: no overlapping coplanar disks, textures,
   // transparent borders or extra draw calls for the three crisp color bands.
-  for(const [inner,outer,color]of [[0,.61,C.redLight],[.61,.87,C.trim],[.87,1,C.teal]]){
+  for(const [inner,outer,color]of [[0,.61,accent],[.61,.87,trim],[.87,1,ownerColor]]){
     for(let i=0;i<segments;i++){
       const a=i/segments*Math.PI*2,b=(i+1)/segments*Math.PI*2;
       vertex(inner,a,color);vertex(outer,a,color);vertex(outer,b,color);
@@ -22,11 +22,11 @@ function badgeGeometry(){
 /** A location pin attached to the same surface position as the traveller.
  * The actual character stays in the world; this small companion dot only
  * becomes necessary when a person would be less than a few pixels tall. */
-export function createCharacterMarker(scene,mapScene,world){
-  const geometry=badgeGeometry();
+export function createCharacterMarker(scene,mapScene,world,{color=C.teal,accent=C.redLight,trim=C.trim,name='character'}={}){
+  const geometry=badgeGeometry(color,accent,trim);
   const material=new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,depthTest:false,depthWrite:false,toneMapped:false});
   const overview=new THREE.Mesh(geometry,material),map=new THREE.Mesh(geometry,material.clone());
-  overview.name='character-overview-marker';map.name='character-map-marker';overview.renderOrder=map.renderOrder=20;
+  overview.name=`${name}-overview-marker`;map.name=`${name}-map-marker`;overview.renderOrder=map.renderOrder=20;
   overview.visible=map.visible=false;scene.add(overview);mapScene.add(map);
   const base=new THREE.Vector3(),normal=new THREE.Vector3(),top=new THREE.Vector3(),eye=new THREE.Vector3(),viewPosition=new THREE.Vector3();
   const projectedBase=new THREE.Vector3(),projectedTop=new THREE.Vector3();
