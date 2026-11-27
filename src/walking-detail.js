@@ -53,7 +53,7 @@ function grassObstacle(item,x,z,margin=.40){
 
 /** Pure deterministic selection, also used by regression tests. Each record is
  * local to its real source asset; transforms are composed exactly once later. */
-export function walkingDetailPlan(world,placements,focus,{cityStreets=world.cityStreets??empty,groundCache}={}){
+export function walkingDetailPlan(world,placements,focus,{cityStreets=world.cityStreets??empty,railLines=world.lines??empty,groundCache}={}){
   const result=Object.fromEntries(kinds.map(kind=>[kind,[]])),radius=WALKING_DETAIL_LIMITS.radius+WALKING_DETAIL_LIMITS.padding;
   const nearby=(placements??empty).filter(p=>surfaceDistance(world,p,focus)<radius+radiusOf(p))
     .sort((a,b)=>surfaceDistance(world,a,focus)-surfaceDistance(world,b,focus)||itemKey(a).localeCompare(itemKey(b)));
@@ -124,7 +124,7 @@ export function walkingDetailPlan(world,placements,focus,{cityStreets=world.city
   if(!surfaceFor(world)&&world.biomes){
     const obstacles=new SpatialGrid(5);
     for(const item of [...nearby,...(world.stations??[])])if(item.kind!=='sheep')obstacles.insert(item,pointBox(item.x,item.z,radiusOf(item)+.3));
-    const rails=polylineTree(world.lines??empty),roads=polylineTree(cityStreets),step=.60,groundSampler=walkingGroundSampler(world);
+    const rails=polylineTree(railLines),roads=polylineTree(cityStreets),step=.60,groundSampler=walkingGroundSampler(world);
     // Excavation shoulders are wider than ballast. Covered tunnel roofs can
     // still carry grass, while low portal faces and open cuttings remain clear.
     const nearCut=(x,z,ground)=>ground.nearby.length&&rails.query(pointBox(x,z,2.50)).some(segment=>{
@@ -244,34 +244,34 @@ export function createWalkingDetail(parent,world){
     root.add(batch);batches[kind]=batch;
   }
   const stats={builds:0,instances:0,drawCalls:kinds.length,ready:false};
-  let previousPlacements=null,previousRevision=-1,previousStreets=null,lastFocus={x:Infinity,z:Infinity},disposed=false;
-  let localPlacements=[],localStreets=[];
+  let previousPlacements=null,previousRevision=-1,previousStreets=null,previousRails=null,lastFocus={x:Infinity,z:Infinity},disposed=false;
+  let localPlacements=[],localStreets=[],localRails=[];
   const groundCache=new Map();
   const sameRecords=(a,b)=>{if(a.length!==b.length)return false;const members=new Set(a);return b.every(item=>members.has(item));};
-  function streetsNear(streets,focus){
+  function linesNear(lines,focus,margin=1){
     const radius=WALKING_DETAIL_LIMITS.radius+WALKING_DETAIL_LIMITS.padding;
-    return streets.filter(street=>street.points?.some((point,index)=>surfaceDistance(world,point,focus)<radius+(street.width??1)
-      ||!surfaceFor(world)&&index>0&&distanceToSegment(focus.x,focus.z,{a:street.points[index-1],b:point})<radius+(street.width??1)));
+    return lines.filter(line=>line.points?.some((point,index)=>surfaceDistance(world,point,focus)<radius+Math.max(line.width??1,margin)
+      ||!surfaceFor(world)&&index>0&&distanceToSegment(focus.x,focus.z,{a:line.points[index-1],b:point})<radius+Math.max(line.width??1,margin)));
   }
-  function update(focus,{placements=empty,revision=0,visible=false,visibilityWeight=1,time=0,playerPosition=focus,cityStreets=world.cityStreets??empty}={}){
+  function update(focus,{placements=empty,revision=0,visible=false,visibilityWeight=1,time=0,playerPosition=focus,cityStreets=world.cityStreets??empty,railLines=world.lines??empty}={}){
     if(disposed||!Number.isFinite(focus?.x)||!Number.isFinite(focus?.z))return;
     root.visible=visible;surfacePoint(world,focus.x,focus.y??0,focus.z,focusUniform.value);timeUniform.value=time;
     surfacePoint(world,playerPosition.x,playerPosition.y??0,playerPosition.z,playerUniform.value);
     visibilityUniform.value=THREE.MathUtils.clamp(visibilityWeight,0,1);
-    const sourceChanged=placements!==previousPlacements||revision!==previousRevision||cityStreets!==previousStreets;
+    const sourceChanged=placements!==previousPlacements||revision!==previousRevision||cityStreets!==previousStreets||railLines!==previousRails;
     const moved=!Number.isFinite(lastFocus.x)||surfaceDistance(world,focus,lastFocus)>=WALKING_DETAIL_LIMITS.refreshDistance;
     if(!sourceChanged&&!moved)return;
     const radius=WALKING_DETAIL_LIMITS.radius+WALKING_DETAIL_LIMITS.padding;
     const nextPlacements=placements.filter(item=>surfaceDistance(world,item,focus)<radius+radiusOf(item));
-    const nextStreets=streetsNear(cityStreets,focus);
-    const localChanged=!sameRecords(localPlacements,nextPlacements)||!sameRecords(localStreets,nextStreets);
-    previousPlacements=placements;previousRevision=revision;previousStreets=cityStreets;
+    const nextStreets=linesNear(cityStreets,focus),nextRails=linesNear(railLines,focus,2.50);
+    const localChanged=!sameRecords(localPlacements,nextPlacements)||!sameRecords(localStreets,nextStreets)||!sameRecords(localRails,nextRails);
+    previousPlacements=placements;previousRevision=revision;previousStreets=cityStreets;previousRails=railLines;
     // Publishing an unrelated continent changes the renderer's revision but
     // cannot change this player's detail. Retain both matrices and ground cache.
     if(!moved&&!localChanged&&stats.ready)return;
     if(sourceChanged&&localChanged)groundCache.clear();
-    localPlacements=nextPlacements;localStreets=nextStreets;
-    const plan=walkingDetailPlan(world,localPlacements,focus,{cityStreets:localStreets,groundCache});let count=0;
+    localPlacements=nextPlacements;localStreets=nextStreets;localRails=nextRails;
+    const plan=walkingDetailPlan(world,localPlacements,focus,{cityStreets:localStreets,railLines:localRails,groundCache});let count=0;
     for(const kind of kinds){
       const batch=batches[kind],items=plan[kind];batch.count=items.length;count+=items.length;
       for(const [index,item]of items.entries()){

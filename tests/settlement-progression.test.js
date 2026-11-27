@@ -227,3 +227,16 @@ test('city level remains five after fifteen homes and extra buildings stay reser
   assert.deepEqual(game.buildings.map(building=>building.buildingType),['well','market','waterTower','plaza','hall']);
   assert.deepEqual(game.pendingMilestones,[]);
 });
+
+test('clearing scenery retries an exhausted civic search even when its placement array remains unchanged',()=>{
+  let sceneryRevision=0;const cleared=new Set();
+  const game=createSettlementGame({seed:'progression',gameplay:{ownerId:'teal',starterHouse:{id:'home-1',kind:'house',x:0,y:0,z:0,rotation:0,scale:1}}},
+    {surfaceAt:flat,shared:{isSceneryRemoved:item=>cleared.has(item.id),getSceneryRevision:()=>sceneryRevision}});
+  earn(game);const restricted={isReadyAt:point=>Math.abs(point.z)<2.1&&point.x>=-1.4&&point.x<=11.4};
+  assert.ok(game.build({x:5,z:0},restricted).ok);assert.ok(game.build({x:10,z:0},restricted).ok);finish(game,restricted);
+  const field={id:'wide-field',kind:'farm',x:5,z:0,width:80,depth:80,radius:56.6,rotation:0},context={placements:[field]};
+  finish(game,context);assert.equal(game.buildings.length,0);assert.equal(game.developmentSearching,false);
+  cleared.add(field.id);sceneryRevision++;
+  const result=finish(game,context);assert.equal(game.buildings.length,1);assert.equal(game.buildings[0].buildingType,'well');
+  assert.equal(result.searching,false);assert.ok(game.paths.some(path=>path.fromHouseId===game.buildings[0].id),'the civic access lane ignores the same cleared field');
+});

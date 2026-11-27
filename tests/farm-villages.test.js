@@ -19,11 +19,15 @@ test('three seeded gray level-one hamlets remain separate from player ownership 
   assert.deepEqual(base.players.find(player=>player.id===FARM_VILLAGE_OWNER).color,{l:.59,c:0,h:0});
   for(const city of villages.cities){
     assert.equal(city.level,1);assert.equal(city.ownerId,FARM_VILLAGE_OWNER);assert.equal(city.houseCount,3);assert.equal(city.houseIds.length,3);
-    assert.equal(villages.buildings.filter(building=>building.cityId===city.id&&building.buildingType==='well').length,1);
+    assert.equal(villages.buildings.filter(building=>building.cityId===city.id).length,1);
     assert.deepEqual(villages.houses.filter(home=>home.cityId===city.id).map(home=>home.id),city.houseIds);
   }
   const ids=[...villages.houses,...villages.buildings,...villages.paths,...villages.farms,...villages.destinations].map(item=>item.id);
   assert.equal(new Set(ids).size,ids.length);assert.ok(ids.every(id=>id.startsWith('farm-village:')));
+  assert.equal(new Set(villages.buildings.map(building=>building.buildingType)).size,3,'nearby hamlets have distinct civic silhouettes');
+  assert.equal(new Set(villages.cities.map(city=>city.layout)).size,3,'the default map uses three different lane/frontage arrangements');
+  const civicTypes=new Set(['first-settlement-v1','another-world',19].flatMap(seed=>network(seed).gameplay.farmVillages.buildings.map(building=>building.buildingType)));
+  assert.deepEqual(civicTypes,new Set(['well','chapel','waterTower','market','clock']));
 });
 
 test('village footprints stay on flat farmland, with clear paths and actual cultivated fields at their destinations',()=>{

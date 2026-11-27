@@ -132,3 +132,15 @@ test('successful geometry is reevaluated against the current wallet rather than 
     assert.equal(result.valid,currentGold>=5);assert.equal(f.player.gold,currentGold,'planning never spends gold');
   }
 });
+
+test('edited control points are copied, transported, and adopted only for their own geometry key',async t=>{
+  const f=fixture(t),waypoints=[{x:16,z:7}],pending=f.planner.request('a','b',{waypoints}),worker=f.workers[0],message=plans(worker)[0];
+  waypoints[0].z=99;
+  assert.deepEqual(message.options,{waypoints:[{x:16,z:7}]},'later pointer movement cannot mutate an in-flight plan');
+  worker.reply(message.id,{...route(message),waypoints:message.options.waypoints,handles:message.options.waypoints});
+  const result=await pending;assert.deepEqual(result.result.waypoints,[{x:16,z:7}]);
+  assert.deepEqual(f.adoptions[0][4],message.options);assert.deepEqual(f.evaluations[0][2],message.options);
+  const next=f.planner.request('a','b',{waypoints}),edited=plans(worker).at(-1);
+  worker.reply(edited.id,{...route(edited),waypoints:edited.options.waypoints});assert.deepEqual((await next).result.waypoints,waypoints);
+  assert.notEqual(f.adoptions[0][3],f.adoptions[1][3],'each edit has its own authoritative geometry cache');
+});

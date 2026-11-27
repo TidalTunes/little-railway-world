@@ -61,3 +61,22 @@ test('new railway stations and track corridors reserve land for every owner with
   assert.deepEqual(session.paths,[],'track clearance is not drawn as a village footpath');
   assert.equal(session.player.settleIncome(1).amount,0);
 });
+
+test('cleared scenery releases both house footprints and path planning even with stale offscreen placements',()=>{
+  let infrastructure={revision:0,clearedPlacementIds:[]};
+  const session=createSettlementSession(world(),{surfaceAt:flat,getInfrastructure:()=>infrastructure});
+  const farm={id:'cleared-farm',kind:'farm',x:5,z:0,width:4,depth:5,rotation:0,radius:3.2},stale=[farm];
+  earn(session.player,'player');earn(session.bots[0].game,'bot');
+  assert.equal(session.player.evaluateBuild({x:5,z:0},{placements:stale}).code,'scenery-blocked');
+  assert.equal(session.bots[0].game.evaluateBuild({x:5,z:0},{placements:stale}).code,'scenery-blocked');
+  infrastructure={revision:1,clearedPlacementIds:['cleared-farm']};
+  assert.equal(session.shared.isSceneryRemoved(farm),true);assert.equal(session.shared.isSceneryRemoved('cleared-farm'),true);
+  const playerPreview=session.player.evaluateBuild({x:5,z:0},{placements:stale});
+  assert.ok(playerPreview.valid,playerPreview.reason);assert.ok(playerPreview.links.length,'the lane can enter the cleared farm footprint');
+  assert.ok(session.bots[0].game.evaluateBuild({x:5,z:0},{placements:stale}).valid);
+  const remaining={id:'remaining-rock',kind:'rock',x:5,z:0,radius:.8};
+  assert.equal(session.player.evaluateBuild({x:5,z:0},{placements:[...stale,remaining]}).code,'scenery-blocked');
+  assert.equal(session.shared.isSceneryRemoved(remaining),false);
+  assert.ok(session.player.build({x:5,z:0},{placements:stale}).ok);
+  assert.equal(session.bots[0].game.evaluateBuild({x:5,z:0},{placements:stale}).code,'house-blocked','newly occupied ground remains protected');
+});

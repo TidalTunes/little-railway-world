@@ -2,7 +2,8 @@ import {biomeDistance, fitsBiome} from './biomes.js';
 import {riverBankDistance} from './hydrology.js';
 import {mountainFootprintDistance} from './mountain-shape.js';
 import {createFarmEstate} from './farmland.js';
-import {settlementDoor, sampleSettlementPath} from './settlement-paths.js';
+import {settlementDoor, sampleSettlementPath, houseBlocksSettlementPath} from './settlement-paths.js';
+import {farmFootprintsOverlap} from './farm-footprints.js';
 import {settlementMilestone} from './settlement-progression.js';
 
 export const FARM_VILLAGE_OWNER='village-gray';
@@ -22,36 +23,73 @@ function dryFootprint(world,item){
     &&(world.gameplay.reservations??[]).every(other=>distance(item,other)>=radius+other.radius);
 }
 
-function villageAt(world,region,center,bearing){
+const villageCivics=['well','market','chapel','clock','waterTower'];
+// Different settlement patterns share a working lane, rather than repeating
+// the same three-house fan around a well. Small offsets soften each frontage.
+const villageLayouts=[
+  {homes:[[-4.2,-4.2],[4.1,-5.3],[-4.1,1.2]],civic:[4.3,1.4]},
+  {homes:[[-4.6,-6.2],[4.1,-2.9],[-4.5,1.3]],civic:[4.2,2.3]},
+  {homes:[[-4.6,-3.9],[-.3,-7.6],[4.5,-4.5]],civic:[4.4,1.1]},
+];
+
+function villageAt(world,region,center,bearing,index){
   const random=randomFor(`${world.seed}:${region.id}:village-layout`),cityId=`farm-village:${region.id}`;
+  const variation=Math.floor(randomFor(`${world.seed}:village-variety`)()*15),layoutIndex=(variation+index)%villageLayouts.length,layout=villageLayouts[layoutIndex];
   const cos=Math.cos(bearing),sin=Math.sin(bearing),at=(x,z)=>({x:center.x+x*cos+z*sin,y:0,z:center.z-x*sin+z*cos});
-  const houses=[[-3.7,-3.8],[3.7,-4.6],[random()*.7-.35,-7.5]].map(([x,z],index)=>{
-    const rotation=bearing+Math.atan2(-x,-z),scale=1;
-    return{id:`${cityId}:home:${index+1}`,kind:'house',...at(x,z),rotation,scale,variant:Math.floor(random()*3),
-      width:2.2,depth:2.2,radius:Math.hypot(2.2,2.2)*scale/2,ownerId:FARM_VILLAGE_OWNER,cityId,connected:true};
+  const jitter=()=>random()*.44-.22;
+  const lanes=[[-.4+jitter(),-5.2],[.35+jitter(),-1],[-.55+jitter(),7.7],[.4+jitter(),12.5]];
+  const junctions=lanes.map(([x,z],i)=>({id:`${cityId}:lane:${i}`,...at(x,z)}));
+  const frontages=[];
+  const facing=(position,target)=>Math.atan2(target.x-position.x,target.z-position.z);
+  const nearestJunction=position=>junctions.reduce((best,point)=>distance(position,point)<distance(position,best)?point:best);
+  const houses=layout.homes.map(([x,z],i)=>{
+    const position=at(x+jitter(),z+jitter()),junction=nearestJunction(position),rotation=facing(position,junction);
+    const home={id:`${cityId}:home:${i+1}`,kind:'house',...position,rotation,scale:1,variant:Math.floor(random()*3),
+      width:2.2,depth:2.2,radius:Math.hypot(2.2,2.2)/2,ownerId:FARM_VILLAGE_OWNER,cityId,connected:true};
+    frontages.push([home,junction]);return home;
   });
-  const well={...settlementMilestone('well'),id:`${cityId}:well`,kind:'civic',buildingType:'well',...at(3.4,.2),
-    radius:Math.hypot(2.2,2.2)/2,rotation:bearing-Math.PI/2,scale:1,ownerId:FARM_VILLAGE_OWNER,cityId,connected:true};
-  const hub={id:`${cityId}:green`,...at(0,0)},paths=[];
+  const civicType=villageCivics[(variation+index*2)%villageCivics.length],spec=settlementMilestone(civicType);
+  const position=at(layout.civic[0]+jitter(),layout.civic[1]+jitter()),junction=nearestJunction(position);
+  const civic={...spec,id:`${cityId}:civic`,kind:'civic',buildingType:civicType,...position,
+    radius:Math.hypot(spec.width,spec.depth)/2,rotation:facing(position,junction),scale:1,ownerId:FARM_VILLAGE_OWNER,cityId,connected:true};
+  frontages.push([civic,junction]);
+  const paths=[];
   function path(id,from,to,points,trimStart=false,trimEnd=false){paths.push({id:`${cityId}:path:${id}`,cityId,ownerId:FARM_VILLAGE_OWNER,
     fromHouseId:from.id,toHouseId:to.id,width:.62,trimStart,trimEnd,points:points.map(p=>({...p,y:.015}))});}
-  for(const building of [...houses,well])path(building.id,building,hub,[settlementDoor(world,building),at(
-    (building.x-center.x)*cos-(building.z-center.z)*sin+Math.sin(building.rotation-bearing)*1.6,
-    (building.x-center.x)*sin+(building.z-center.z)*cos+Math.cos(building.rotation-bearing)*1.6),hub],true);
-
+  for(const [building,target]of frontages){
+    const landing=Math.max(building.depth/2+.42,(building.doorOffset??.9)+.35);
+    path(building.id,building,target,[settlementDoor(world,building),settlementDoor(world,building,landing),target],true);
+  }
   const families=[['wheat','pasture','fallow'],['pasture','wheat','orchard'],['vegetables','wheat','pasture']];
   const family=families[Math.floor(random()*families.length)],farms=[],destinations=[];
-  for(const [index,side]of [-1,1].entries()){
-    const width=11.5+random()*1.7,depth=11+random()*1.7,z=8.5+index*.7;
-    const farm=createFarmEstate({id:`${cityId}:farm:${index+1}`,districtId:`${cityId}:farm:${index+1}`,clusterId:cityId,
-      ...at(side*(width/2+2.1),z),width,depth,rotation:bearing,family,seed:`${world.seed}:${cityId}:farm:${index}`});
-    const stop={id:`${cityId}:field-gate:${index+1}`,cityId,kind:'farm',...at(0,5+index*6),farmId:farm.id,lookX:farm.x,lookZ:farm.z};
-    path(`field-${index+1}`,index?destinations[index-1]:hub,stop,[index?destinations[index-1]:hub,stop]);
-    farms.push(farm);destinations.push(stop);
+  for(const [i,side]of [-1,1].entries()){
+    const width=10.6+random()*2.2,depth=9.5+random()*2.6,z=10.5+random()*1.8;
+    const farm=createFarmEstate({id:`${cityId}:farm:${i+1}`,districtId:`${cityId}:farm:${i+1}`,clusterId:cityId,
+      ...at(side*(width/2+2.9),z),width,depth,rotation:bearing+(random()-.5)*.11,family,seed:`${world.seed}:${cityId}:farm:${i}`});
+    const stop={...junctions[i+2],id:`${cityId}:field-gate:${i+1}`,cityId,kind:'farm',farmId:farm.id,lookX:farm.x,lookZ:farm.z};
+    junctions[i+2]=stop;farms.push(farm);destinations.push(stop);
   }
-  const cityCenter=houses.reduce((sum,house)=>({x:sum.x+house.x/3,z:sum.z+house.z/3}),{x:0,z:0});
-  const city={id:cityId,...cityCenter,ownerId:FARM_VILLAGE_OWNER,level:1,houseCount:3,houseIds:houses.map(home=>home.id),radius:7,bot:true};
-  return {houses,buildings:[well],paths,cities:[city],farms,destinations};
+  for(let i=1;i<junctions.length;i++)path(`lane-${i}`,junctions[i-1],junctions[i],[junctions[i-1],junctions[i]]);
+  const cityCenter=houses.reduce((sum,home)=>({x:sum.x+home.x/3,z:sum.z+home.z/3}),{x:0,z:0});
+  const radius=Math.max(...houses.map(home=>distance(home,cityCenter)+home.radius));
+  const city={id:cityId,...cityCenter,ownerId:FARM_VILLAGE_OWNER,level:1,houseCount:3,houseIds:houses.map(home=>home.id),radius,bot:true,layout:layoutIndex};
+  return {houses,buildings:[civic],paths,cities:[city],farms,destinations};
+}
+
+function layoutClear(world,candidate){
+  const occupied=[...candidate.houses,...candidate.buildings,...candidate.farms];
+  for(let i=0;i<occupied.length;i++)for(const other of occupied.slice(0,i))if(farmFootprintsOverlap(world,occupied[i],other,.32))return false;
+  for(const path of candidate.paths){
+    for(const building of [...candidate.houses,...candidate.buildings])
+      if(building.id!==path.fromHouseId&&building.id!==path.toHouseId&&houseBlocksSettlementPath(world,building,path))return false;
+    for(let i=1;i<path.points.length;i++){
+      const a=path.points[i-1],b=path.points[i],length=distance(a,b);
+      const corridor={x:(a.x+b.x)/2,z:(a.z+b.z)/2,width:path.width+.35,depth:length,
+        radius:Math.hypot(path.width+.35,length)/2,rotation:Math.atan2(b.x-a.x,b.z-a.z)};
+      if(candidate.farms.some(farm=>farmFootprintsOverlap(world,corridor,farm)))return false;
+    }
+  }
+  return true;
 }
 
 /** Place whole working hamlets before scenery. Farms, homes and access lanes
@@ -61,7 +99,7 @@ export function createFarmVillages(world,{count=3}={}){
   const result={ownerId:FARM_VILLAGE_OWNER,houses:[],buildings:[],paths:[],cities:[],destinations:[],farms:[],reservations:[]};
   if(world.surface||!world.gameplay||count<=0)return result;
   const regions=(world.biomes?.regions??[]).filter(region=>region.type==='farmland');
-  for(const region of regions){
+  for(const [regionIndex,region]of regions.entries()){
     if(result.cities.length>=count)break;
     const b=bounds(region.polygons.flatMap(polygon=>polygon[0])),random=randomFor(`${world.seed}:${region.id}:village-sites`),candidates=[];
     const baseBearing=(random()-.5)*Math.PI;
@@ -74,7 +112,8 @@ export function createFarmVillages(world,{count=3}={}){
     let selected=null;
     for(const center of candidates){
       for(const rotation of [0,Math.PI/2,Math.PI,Math.PI*1.5]){
-        const candidate=villageAt(world,region,center,baseBearing+rotation),occupied=[...candidate.houses,...candidate.buildings,...candidate.farms];
+        const candidate=villageAt(world,region,center,baseBearing+rotation,regionIndex),occupied=[...candidate.houses,...candidate.buildings,...candidate.farms];
+        if(!layoutClear(world,candidate))continue;
         if(!occupied.every(item=>dryFootprint(world,item)&&result.reservations.every(other=>distance(item,other)>=item.radius+other.radius+.5)))continue;
         if(candidate.paths.some(path=>!sampleSettlementPath(path.points,p=>dryFootprint(world,{...p,radius:path.width/2}))))continue;
         selected=candidate;break;

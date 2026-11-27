@@ -6,18 +6,18 @@ import {createPlayerBotSettlements} from '../src/player-bot-settlements.js';
 import {createMutableTrees} from '../src/mutable-trees.js';
 
 const home=(id,ownerId,x)=>({id,ownerId,kind:'house',x,y:0,z:0,rotation:0,scale:1,variant:0});
-function fixture(t,{tree,loaded=false,count=2}={}){
+function fixture(t,{tree,loaded=false,count=2,scenery=[],getInfrastructure}={}){
   const previous=globalThis.document;
   globalThis.document={createElement:()=>({getContext:()=>({beginPath(){},arc(){},fill(){},fillText(){}})})};
   const world={seed:'rendered-bots',players:[{id:'teal',color:{l:.62,c:.12,h:170}},{id:'coral',color:{l:.63,c:.14,h:22}},{id:'blue',color:{l:.63,c:.14,h:250}}],
     outline:[[-80,-80],[80,-80],[80,80],[-80,80]],mountains:[],cities:[],stations:[],placements:[],lines:[],
     river:{points:[],width:0,y:-1.2},rivers:[],gameplay:{ownerId:'teal',starterHouse:home('home-1','teal',-40),
-      botScenery:tree?[tree]:[],playerBots:['coral','blue'].slice(0,count).map((ownerId,index)=>({id:`bot:${ownerId}`,ownerId,
+      botScenery:[...scenery,...tree?[tree]:[]],playerBots:['coral','blue'].slice(0,count).map((ownerId,index)=>({id:`bot:${ownerId}`,ownerId,
         starterHouse:home(`bot:${ownerId}:home-1`,ownerId,index*24),spawn:{x:index*24,z:2.5,heading:0}}))}};
   const scene=new THREE.Group(),map=new THREE.Group(),treeRoot=new THREE.Group(),trees=createMutableTrees(world);
   if(loaded&&tree)trees.addChunk('loaded',treeRoot,[tree]);
   const calls=[],detail={fellTree(id,options){calls.push(['fall',id]);return trees.fellTree(id,options);},removeTree(id){calls.push(['remove',id]);return trees.removeTree(id);}};
-  const session=createSettlementSession(world),bots=createPlayerBotSettlements({world,session,parent:scene,mapParent:map,markerParent:scene,markerMapParent:map,detail});
+  const session=createSettlementSession(world,{getInfrastructure}),bots=createPlayerBotSettlements({world,session,parent:scene,mapParent:map,markerParent:scene,markerMapParent:map,detail});
   if(previous===undefined)delete globalThis.document;else globalThis.document=previous;
   const camera=new THREE.OrthographicCamera(-45,45,30,-30,.1,400);camera.position.set(12,60,-60);camera.lookAt(12,0,0);camera.updateMatrixWorld(true);
   t.after(()=>{bots.dispose();trees.dispose();});return{world,scene,map,treeRoot,trees,calls,session,bots,camera};
@@ -68,4 +68,17 @@ test('growth publishes replacement collision batches and disposing the manager r
   bots.update(.2,{camera,focus:{x:12,z:0},mapBlend:1});
   for(const entry of bots.entries){assert.equal(entry.art.root.visible,false);assert.equal(entry.art.mapRoot.visible,true);assert.equal(entry.actor.root.visible,false);}
   bots.dispose();assert.equal(scene.children.length,0);assert.equal(map.children.length,0);
+});
+
+test('bots release cleared offscreen farm obstacles from their permanent navigation catalogue',t=>{
+  let infrastructure={revision:0,clearedPlacementIds:[]};
+  const tree={id:'orchard-tree',kind:'tree',variant:'round',x:0,y:0,z:7,scale:1};
+  const farm={id:'offscreen-farm',kind:'farm',x:0,z:7,y:0,width:8,depth:7,radius:5.4,rotation:0};
+  const {bots,session,world}=fixture(t,{tree,scenery:[farm],count:1,getInfrastructure:()=>infrastructure});
+  for(let frame=0;frame<900;frame++)bots.simulate(1/60);
+  assert.equal(session.shared.removedTreeIds.has(tree.id),false,'the farmer cannot walk into the uncleared field to reach the tree');
+  infrastructure={revision:1,clearedPlacementIds:[farm.id]};
+  for(let frame=0;frame<900&&!session.shared.removedTreeIds.has(tree.id);frame++)bots.simulate(1/60);
+  assert.ok(session.shared.removedTreeIds.has(tree.id),'offscreen navigation refreshes immediately after clearing');
+  assert.ok(world.gameplay.botScenery.some(item=>item.id===farm.id),'the authored source remains intact for deterministic streaming');
 });

@@ -43,7 +43,10 @@ self.onmessage=({data:{id,type,payload,port}})=>{
     }else if(type==='chunk'){
       if(!world)throw new Error('Generate a world before requesting detail');
       const region=generateWorldRegion(world,payload);
-      result=compileDetailPacket(region,world);
+      // Keep original scenery generation stable. New railways affect only
+      // excavation; their own renderer owns the committed track geometry.
+      const renderWorld=payload.railwayLines?.length?{...world,lines:[...world.lines,...payload.railwayLines]}:world;
+      result=compileDetailPacket(region,renderWorld);
       result.milliseconds=performance.now()-start;
     }else throw new Error(`Unknown world request: ${type}`);
     self.postMessage({id,result},type==='chunk'?[...buffersOf(result)]

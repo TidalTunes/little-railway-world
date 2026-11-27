@@ -259,3 +259,14 @@ test('the fountain garden leaves its entrances open while benches and planters r
     }finally{sidePlayer.dispose();}
   }
 });
+
+test('third-person yaw remains continuous through repeated full-circle turns',()=>{
+  const player=createWalkingPlayer(new Group(),flat());player.enter({x:0,z:0});
+  const start=player.camera.quaternion.clone(),position={...player.position};
+  for(let frame=0;frame<720;frame++){
+    const before=player.camera.quaternion.clone();player.update(0,{lookX:Math.PI/90});
+    assert.ok(before.angleTo(player.camera.quaternion)<.04,'crossing the ±pi seam does not snap the camera');
+    assert.ok(Number.isFinite(player.heading)&&Math.abs(player.heading)<=Math.PI);
+  }
+  assert.ok(start.angleTo(player.camera.quaternion)<1e-6);assert.deepEqual(player.position,position,'looking around never moves the character');player.dispose();
+});

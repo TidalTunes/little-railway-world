@@ -4,6 +4,7 @@ import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
 import {surfaceFor,surfaceCoordinates,surfacePoint,surfaceChartRadius,surfaceDistance} from './world-surface.js';
 import {applySceneStyle} from './scene-style.js';
 import {createMutableTrees} from './mutable-trees.js';
+import {createMutableScenery,sceneryPlacementId} from './mutable-scenery.js';
 
 export {compileDetailPacket,detailPacketTransfers,clipRailRanges} from './detail-compiler.js';
 
@@ -20,10 +21,12 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const surface=surfaceFor(world),ray=new THREE.Ray(),hit=new THREE.Vector3(),chart={};
   const shell=surface?new THREE.Sphere(new THREE.Vector3(0,-surface.radius,0),surface.radius):null;
   const patchBounds=new THREE.Box3(),cellSphere=new THREE.Sphere(),pole=new THREE.Vector3();
-  let frame=0,disposed=false,coverageChecked=false;
+  let frame=0,disposed=false,coverageChecked=false,geometryBytes=0;
   let lifePlacements=[],lifeSignature='',lifeRevision=0;
   let placements=[],collisionPlacements=[],cityStreets=[],terrainMeshes=[],placementRevision=0,residentDirty=true;
   const trees=world.gameplay?createMutableTrees(world,{onChange(){residentDirty=true;placementRevision++;lifeSignature='';}}):null;
+  const scenery=world.gameplay?createMutableScenery(world,{onChange(){residentDirty=true;placementRevision++;lifeSignature='';}}):null;
+  let railwayLines=[];
   const solidKinds=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
   const nonSolidStyles=new Set(['water','surf','window','lamp']);
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
@@ -33,7 +36,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const geographicFeatures=new Set(world.mountains);
   const featureRadii=new Map(features.map(feature=>[feature,geographicFeatures.has(feature)?feature.radius??4
     :surfaceChartRadius(world,feature.x,feature.z,feature.radius??4)]));
-  const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,bytes:0,errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0,revealingChunks:0};
+  // Ownership tags, vertex lists and temporary removal snapshots remain on the
+  // CPU after packet upload, and must participate in the same resident budget.
+  const stats={loadedChunks:0,visibleChunks:0,pendingChunks:0,requestedChunks:0,triangles:0,get bytes(){return geometryBytes+(scenery?.bytes??0);},errors:0,requiredChunks:0,prefetchChunks:0,coverageLimited:false,budgetOverflow:false,maxBytes,uploadedMeshes:0,uploadingChunks:0,revealingChunks:0};
   const materialFor=(description,job)=>{
     const key=JSON.stringify(description);let material=job.materials.get(key);
     if(!material){
@@ -47,13 +52,14 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   };
   function releaseResources(chunk){
     if(chunk.trees)trees.removeChunk(chunk.key);
+    if(chunk.scenery)scenery.removeChunk(chunk.key);
     chunk.root.traverse(mesh=>{if(mesh.isMesh)mesh.geometry.dispose();});
     for(const material of chunk.materials.values())material.dispose();
     chunk.depthMaterial?.dispose();
   }
   function release(chunk){
     releaseResources(chunk);
-    root.remove(chunk.root);cache.delete(chunk.key);stats.bytes-=chunk.bytes;stats.triangles-=chunk.triangles;
+    root.remove(chunk.root);cache.delete(chunk.key);geometryBytes-=chunk.bytes;stats.triangles-=chunk.triangles;
     residentDirty=true;placementRevision++;
   }
   function hydrate(deadline){
@@ -95,13 +101,17 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         last:frame,bytes:job.bytes,triangles:job.triangles,reveal:job.reveal,progress:0,
         materials:job.materials,depthMaterial:job.depthMaterial,lifePlacements:job.packet.lifePlacements??[],
         placements:job.packet.placements??[],cityStreets:job.packet.cityStreets??[],cellBounds:job.packet.cellBounds??job.packet.bounds};
+      // Keep the old chunk visible until its excavated replacement is ready.
+      // Discard its records before publishing the same deterministic IDs.
+      if(cache.has(key)){chunk.progress=cache.get(key).progress;chunk.reveal.value=cache.get(key).reveal.value;release(cache.get(key));}
+      if(scenery&&job.packet.mutableScenery?.length)chunk.scenery=scenery.addChunk(key,chunk.root.children,job.packet.mutableScenery,job.packet.meshes);
       if(trees&&job.packet.mutableTrees?.length){
         chunk.trees=trees.addChunk(key,chunk.root,job.packet.mutableTrees,{reveal:job.reveal});
         chunk.bounds.union(chunk.trees.bounds);chunk.bytes+=chunk.trees.bytes;chunk.triangles+=chunk.trees.triangles;
       }
       root.add(job.root);cache.set(key,chunk);incoming.delete(key);
       residentDirty=true;placementRevision++;
-      stats.bytes+=chunk.bytes;stats.triangles+=chunk.triangles;stats.loadedChunks=cache.size;
+      geometryBytes+=chunk.bytes;stats.triangles+=chunk.triangles;stats.loadedChunks=cache.size;
     }
   }
   function releaseIncoming(job){
@@ -133,7 +143,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   function request(key,coordinates){
     stats.requestedChunks++;
     const controller=new AbortController(),task={controller};
-    const job=Promise.resolve().then(()=>requestChunk(coordinates,{signal:controller.signal}));
+    const job=Promise.resolve().then(()=>requestChunk({...coordinates,...(railwayLines.length?{railwayLines}: {})},{signal:controller.signal}));
     task.promise=job;pending.set(key,task);stats.pendingChunks=pending.size+incoming.size;
     Promise.resolve(job).then(packet=>{
       if(pending.get(key)!==task)return;
@@ -282,9 +292,9 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
         else lifeChunks.push(chunk);
       }
     }
-    const signature=`${trees?.revision??0}:`+lifeChunks.map(chunk=>chunk.key).join('|');
+    const signature=`${trees?.revision??0}:${scenery?.revision??0}:`+lifeChunks.map(chunk=>chunk.key).join('|');
     if(signature!==lifeSignature){lifeSignature=signature;lifePlacements=lifeChunks.flatMap(chunk=>chunk.lifePlacements)
-      .filter(p=>p.kind!=='tree'||!trees?.removed.has(p.id));lifeRevision++;}
+      .filter(p=>(p.kind!=='tree'||!trees?.removed.has(p.id))&&!scenery?.removed.has(sceneryPlacementId(p))&&!scenery?.removed.has(p.farmId));lifeRevision++;}
   }
   function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false,
     groundFocus,groundRadius=45,groundOnly=false}={}){
@@ -357,7 +367,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
       if(pending.size+incoming.size>=maxPending||performance.now()-started>=budgetMs)break;
       const estimate=cache.size?stats.bytes/cache.size:4*1024*1024;
       if(!required.has(key)&&stats.bytes+estimate*(1+pending.size+incoming.size)>maxBytes*.90)continue;
-      if(!cache.has(key)&&!pending.has(key)&&!incoming.has(key)&&!failures.has(key))request(key,coordinates);
+      if((!cache.has(key)||cache.get(key).obsolete)&&!pending.has(key)&&!incoming.has(key)&&!failures.has(key))request(key,coordinates);
     }
     if(cache.size>maxChunks||stats.bytes>maxBytes){
       const removable=[...cache.values()].filter(chunk=>!required.has(chunk.key)&&!(retainVisible&&chunk.root.visible)).sort((a,b)=>{
@@ -374,7 +384,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     if(disposed)return;disposed=true;for(const chunk of [...cache.values()])release(chunk);
     for(const job of incoming.values())releaseIncoming(job);
     for(const task of pending.values())task.controller.abort();
-    trees?.dispose();
+    trees?.dispose();scenery?.dispose();
     root.removeFromParent();wanted.clear();required.clear();pending.clear();incoming.clear();stats.loadedChunks=stats.pendingChunks=0;
     lifePlacements=[];lifeSignature='';lifeRevision++;
     placements=[];collisionPlacements=[];cityStreets=[];terrainMeshes=[];residentDirty=false;placementRevision++;
@@ -383,7 +393,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     if(!residentDirty)return;
     placements=[];cityStreets=[];terrainMeshes=[];
     for(const chunk of cache.values()){
-      placements.push(...chunk.placements.filter(p=>p.kind!=='tree'||!trees?.removed.has(p.id)));cityStreets.push(...chunk.cityStreets);
+      placements.push(...chunk.placements.filter(p=>(p.kind!=='tree'||!trees?.removed.has(p.id))&&!scenery?.removed.has(sceneryPlacementId(p))));cityStreets.push(...chunk.cityStreets);
       terrainMeshes.push(...chunk.root.children.filter(mesh=>mesh.isMesh&&!nonSolidStyles.has(mesh.material.userData.sceneStyle)),...chunk.trees?.meshes??[]);
     }
     collisionPlacements=placements.filter(p=>solidKinds.has(p.kind));residentDirty=false;
@@ -402,8 +412,20 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   }
   function ready(){return !disposed&&coverageChecked&&!stats.coverageLimited&&(required.size>0||terrainBounds!==null)&&[...required.keys()].every(key=>cache.has(key));}
   return {root,update,updateVisibility,stats,dispose,hasCoverageAt,
+    clearScenery:(items,options)=>scenery?.clear(items,options)??false,
+    setRailways(lines){
+      railwayLines=lines;
+      const ids=new Set(lines.flatMap(line=>(line.cuts??[]).map(cut=>cut.mountainId)));
+      if(!ids.size)return;
+      for(const task of pending.values())task.controller.abort();pending.clear();
+      for(const job of incoming.values())releaseIncoming(job);incoming.clear();
+      for(const chunk of cache.values())if(world.mountains.some(m=>ids.has(m.id)&&
+        (m.range?.bounds?m.range.bounds.minX<=chunk.cellBounds.maxX&&m.range.bounds.maxX>=chunk.cellBounds.minX&&m.range.bounds.minZ<=chunk.cellBounds.maxZ&&m.range.bounds.maxZ>=chunk.cellBounds.minZ:
+          m.x>=chunk.cellBounds.minX&&m.x<chunk.cellBounds.maxX&&m.z>=chunk.cellBounds.minZ&&m.z<chunk.cellBounds.maxZ)))chunk.obsolete=true;
+      failures.clear();
+    },
     fellTree:(id,options)=>trees?.fellTree(id,options)??false,removeTree:id=>trees?.removeTree(id)??false,
-    updateTrees:dt=>trees?.update(dt),get removedTreeIds(){return trees?.removed;},get treeRevision(){return trees?.revision??0;},
+    updateTrees:dt=>{trees?.update(dt);scenery?.update(dt);},get removedTreeIds(){return trees?.removed;},get treeRevision(){return trees?.revision??0;},
     get placements(){refreshResidents();return placements;},get placementRevision(){return placementRevision;},
     get cityStreets(){refreshResidents();return cityStreets;},
     getSceneryPlacements(){refreshResidents();return placements;},getCollisionPlacements(){refreshResidents();return collisionPlacements;},

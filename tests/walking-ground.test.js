@@ -98,3 +98,31 @@ test('open railway cuttings and low tunnel portals keep their wider excavated sh
   }
   assert.ok(count>5);mesh.geometry.dispose();mesh.material.dispose();
 });
+
+test('new rail cuts invalidate nearby cached grass without rebuilding for distant rail construction',()=>{
+  const mountain=hillside(),scene=world([mountain]),layer=createWalkingDetail(new Group(),scene),focus={x:0,z:0};
+  const points=[{x:0,y:.42,z:-50},{x:0,y:.42,z:50}];
+  const cut={id:'built-cut',points,distances:[0,100],length:100,cuts:[{mountainId:mountain.id,start:10,end:90}],tunnels:[]};
+  const streets=[{id:cut.id,width:2.54,points}],placements=[];
+  try{
+    // The narrow building reservation already clears the ballast. Excavated
+    // mountain shoulders need the richer live railway geometry as well.
+    layer.update(focus,{placements,cityStreets:streets,railLines:[],visible:true});
+    const grass=layer.root.getObjectByName('walking-grass'),matrix=new Matrix4(),position=new Vector3();
+    const locations=()=>Array.from({length:grass.count},(_,i)=>{
+      grass.getMatrixAt(i,matrix);position.setFromMatrixPosition(matrix);return position.clone();
+    });
+    assert.ok(locations().some(p=>Math.abs(p.x)>1.67&&Math.abs(p.x)<2.50),'cached grass initially occupies the future open-cut shoulders');
+    const builds=layer.stats.builds;
+    layer.update(focus,{placements,cityStreets:streets,railLines:[cut],visible:true});
+    assert.equal(layer.stats.builds,builds+1,'a live cut rebuilds even without a placement revision');
+    for(const p of locations())assert.ok(Math.abs(p.x)>=2.50-1e-6,'cached blades cannot float above removed mountain shoulders');
+    assert.ok(grass.count>1000,'the surviving green mountain remains covered');
+    assert.deepEqual(scene.lines,[],'the saved world remains unchanged');
+    const version=grass.instanceMatrix.version,before=Array.from(grass.instanceMatrix.array);
+    const remote={id:'distant-rail',points:[{x:1000,z:-100},{x:1000,z:100}],cuts:[],tunnels:[]};
+    layer.update(focus,{placements,cityStreets:streets,railLines:[cut,remote],visible:true});
+    assert.equal(layer.stats.builds,builds+1,'a distant network addition keeps the warm local detail');
+    assert.equal(grass.instanceMatrix.version,version);assert.deepEqual(Array.from(grass.instanceMatrix.array),before);
+  }finally{layer.dispose();}
+});

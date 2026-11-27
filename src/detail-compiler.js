@@ -10,6 +10,7 @@ import {warpGeometryToSurface,SURFACE_MAX_SEGMENT} from './world-surface.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {farmLivestockPlacements} from './farm-livestock.js';
 import {treeId} from './mutable-trees.js';
+import {sceneryPlacementId,REMOVABLE_SCENERY} from './mutable-scenery.js';
 
 function segmentInterval(a,b,bounds){
   let lo=0,hi=1;
@@ -41,6 +42,8 @@ export function compileDetailPacket(region,network){
   const bounds=region.bounds;
   const sourcePlacements=(region.placements??[]).map(p=>network.gameplay&&p.kind==='tree'&&!p.id?{...p,id:treeId(p)}:p);
   const mutableTrees=network.gameplay?sourcePlacements.filter(p=>p.kind==='tree'):[];
+  const mutableScenery=network.gameplay?sourcePlacements.filter(p=>REMOVABLE_SCENERY.has(p.kind)).map((p,i)=>({...p,id:sceneryPlacementId(p),sceneryIndex:i+1})):[];
+  const sceneryIndices=network.gameplay?new Map(sourcePlacements.filter(p=>REMOVABLE_SCENERY.has(p.kind)).map((p,i)=>[p,i+1])):null;
   const islands=clipPolygonsToBounds([[network.outline]],bounds);
   const mountainIds=new Set((region.mountains??[]).map(m=>m.id));
   const lines=(region.lines??network.lines).map(line=>({...line,renderRanges:clipRailRanges(line,bounds),
@@ -60,7 +63,8 @@ export function compileDetailPacket(region,network){
     oceanShore:network.biomes.oceanShore?.length?clipPolygonsToBounds(network.biomes.oceanShore,bounds):[]};
   try{
     for(const island of islands)buildTerrain(root,{...local,outline:island[0]});
-    buildWorld(root,local,{terrain:false,rigidAssets:surfaceRoot,animatedLife:true});
+    buildWorld(root,local,{terrain:false,rigidAssets:surfaceRoot,animatedLife:true,mutablePlacements:sceneryIndices});
+    if(sceneryIndices)root.traverse(node=>{if(node.isMesh&&!node.geometry.attributes.sceneryIndex){node.geometry=node.geometry.clone();node.geometry.setAttribute('sceneryIndex',new THREE.Float32BufferAttribute(new Float32Array(node.geometry.attributes.position.count),1));}});
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{for(const material of node.userData.ownedMaterials??[])ownedMaterials.add(material);});
     // Geographic terrain needs the exact chart-to-sphere mapping. Rigid
     // assets and physical-width rails are already in surface coordinates:
@@ -83,20 +87,20 @@ export function compileDetailPacket(region,network){
       else indexed.dispose();
       const geometry=mesh.geometry,material=mesh.material;
       geometry.computeBoundingBox();renderBounds.union(geometry.boundingBox);
-      return {position:geometry.attributes.position.array,normal:geometry.attributes.normal?.array,color:geometry.attributes.color?.array,
+      return {position:geometry.attributes.position.array,normal:geometry.attributes.normal?.array,color:geometry.attributes.color?.array,sceneryIndex:geometry.attributes.sceneryIndex?.array,
         index:geometry.index?.array,bvh:serializeGeometryBVH(geometry),material:{name:material.name,color:material.color.toArray(),
           roughness:material.roughness??1,metalness:material.metalness??0,side:material.side,flatShading:true,vertexColors:material.vertexColors,sceneStyle:material.userData.sceneStyle??'asset'}};
     });
     const lifeKinds=new Set(['sheep','tree','farmPatch','house','apartment','civic','tower','plaza']);
-    const lifePlacements=sourcePlacements.flatMap(p=>p.kind==='farm'?farmLivestockPlacements(network,p):lifeKinds.has(p.kind)?[p]:[])
-      .map(p=>({kind:p.kind,id:p.id,x:p.x,y:p.y??0,z:p.z,rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1,
+    const lifePlacements=sourcePlacements.flatMap(p=>p.kind==='farm'?farmLivestockPlacements(network,p).map(animal=>({...animal,farmId:network.gameplay?sceneryPlacementId(p):animal.farmId})):lifeKinds.has(p.kind)?[p]:[])
+      .map(p=>({kind:p.kind,id:p.id,farmId:p.farmId,x:p.x,y:p.y??0,z:p.z,rotation:p.rotation??0,radius:p.radius??0,scale:p.scale??1,
         ...(Number.isFinite(p.roamRadius)?{roamRadius:p.roamRadius}:{})}));
     // Walking mode uses the same authored/generated objects as the overview.
     // Send their small source records alongside the existing geometry, so
     // collisions and nearby embellishments never regenerate a different town.
     const placements=[...sourcePlacements,...(region.stations??[]).map(p=>({...p,kind:'station'}))];
     return {key:region.key??`${bounds.minX}:${bounds.minZ}`,bounds:region.cullBounds??bounds,cellBounds:bounds,meshes,lifePlacements,
-      placements,...(network.gameplay?{mutableTrees}:{}),cityStreets:region.cityStreets??[],
+      placements,...(network.gameplay?{mutableTrees,mutableScenery}:{}),cityStreets:region.cityStreets??[],
       renderBounds:renderBounds.isEmpty()?null:{min:renderBounds.min.toArray(),max:renderBounds.max.toArray()}};
   }finally{
     for(const group of [root,surfaceRoot].filter(Boolean))group.traverse(node=>{if(node.geometry)node.geometry.dispose();
@@ -106,5 +110,5 @@ export function compileDetailPacket(region,network){
 }
 
 export function detailPacketTransfers(packet){
-  return [...new Set(packet.meshes.flatMap(mesh=>[mesh.position?.buffer,mesh.normal?.buffer,mesh.color?.buffer,mesh.index?.buffer,...geometryBVHTransfers(mesh.bvh)]).filter(Boolean))];
+  return [...new Set(packet.meshes.flatMap(mesh=>[mesh.position?.buffer,mesh.normal?.buffer,mesh.color?.buffer,mesh.sceneryIndex?.buffer,mesh.index?.buffer,...geometryBVHTransfers(mesh.bvh)]).filter(Boolean))];
 }

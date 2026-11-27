@@ -55,7 +55,7 @@ let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShel
 let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
 let settlement;
 function refreshCanvasCursor(){
-  const mode=settlement?.building?'build':walkingMode?'hidden':'overview';
+  const mode=settlement?.building?'build':walkingMode&&canvas.dataset.pointerLocked!=='false'?'hidden':'overview';
   if(canvas.dataset.cursor!==mode)canvas.dataset.cursor=mode;
 }
 let transitionMapStart=0,renderedMapBlend=0;
@@ -86,7 +86,7 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
 });
 const {navigation,controls}=view;
 const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking,
-  canLook:()=>!settlement?.building,
+  onLockChange:locked=>{canvas.dataset.pointerLocked=String(locked);refreshCanvasCursor();},
   onKey:event=>{
     if(event.key.toLowerCase()==='n'){if(!event.repeat)advanceDayNight();return true;}
     return settlement?.keyDown(event)??false;
@@ -255,7 +255,7 @@ async function loadWorld(input={}){
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
-      onView:()=>walkingMode?leaveWalking():enterWalking(),onDayNight:advanceDayNight,reducedMotion});
+      onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},onDayNight:advanceDayNight,reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
       getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
@@ -266,7 +266,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. Move the cursor to look around. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths and sleep indoors at night. Gray level-one farming villages have their own residents who visit nearby fields. Rival coral, gold and blue settlers chop real trees and build their own cities to level five, then stop. Their resources and income are separate from yours. V switches between your traveller and overview. In overview, T selects railway building: choose one of your cities, choose another city, then Enter builds the previewed route and stations for five gold. Escape cancels. Each player-owned city home earns one gold at sunset; gray village homes earn you no income. Day and night each last five minutes; N or the day/night button advances to the next phase for testing.');
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. Move the cursor to look around. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; look to aim directly in front of you, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths and sleep indoors at night. Gray level-one farming villages have their own residents who visit nearby fields. Rival coral, gold and blue settlers chop real trees and build their own cities to level five, then stop. Their resources and income are separate from yours. V switches between your traveller and overview. Houses can only be built in third person. Tab releases the mouse for controls. In overview, T selects railway building: choose one of your cities, hover a destination to preview, click to select it, drag route dots to shape the line, then Enter builds the route and stations for five gold. Escape cancels. Each player-owned city home earns one gold at sunset; gray village homes earn you no income. Day and night each last five minutes; N or the day/night button advances to the next phase for testing.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
@@ -362,7 +362,8 @@ function frame(now){
     settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,zoom:navigation.zoom,dayState,night:daylight.night,uiDt:dt});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
-      cityStreets:settlement?.cityStreets??detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
+      cityStreets:settlement?.cityStreets??detail.cityStreets,railLines:settlement?.railwayLines??model.lines,
+      visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
     // Shader compilation alone does not upload hidden instance attributes.
     // Allocate these fixed GPU pools during startup, before the first dolly.
     if(walkingDetail.stats.ready&&!walkingBuffersReady){

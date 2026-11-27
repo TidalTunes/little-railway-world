@@ -6,9 +6,9 @@ export function createSettlementRailwayPlanner(world,railways,session,{getPlacem
   function finish(result){
     const request=active;active=null;
     if(!request)return;
-    const current=request.key===railways.geometryKey(request.from,request.to);
-    const adopted=!result.error&&current&&railways.adoptPreview(request.from,request.to,result.result,request.key);
-    request.resolve(adopted?{result:railways.evaluate(request.from,request.to)}:result.error?{error:result.error}:{stale:true});
+    const current=request.key===railways.geometryKey(request.from,request.to,request.options);
+    const adopted=!result.error&&current&&railways.adoptPreview(request.from,request.to,result.result,request.key,request.options);
+    request.resolve(adopted?{result:railways.evaluate(request.from,request.to,request.options)}:result.error?{error:result.error}:{stale:true});
     if(queued){const next=queued;queued=null;dispatch(next);}
   }
   function dispatch(request){
@@ -21,16 +21,17 @@ export function createSettlementRailwayPlanner(world,railways,session,{getPlacem
         const {mapTerrain,...terrain}=world;worker.postMessage({type:'initialize',world:terrain});
       }
       active=request;
-      worker.postMessage({type:'plan',id:request.id,from:request.from,to:request.to,network:railways.snapshot(),placements:getPlacements(),
+      worker.postMessage({type:'plan',id:request.id,from:request.from,to:request.to,options:request.options,network:railways.snapshot(),placements:getPlacements(),
         state:{player:session.player.snapshot(),bots:session.bots.map(bot=>bot.game.snapshot()),buildings:session.buildings,
           actors:session.shared.getActors?.()??[]}});
     }catch(error){worker?.terminate();worker=null;active=request;finish({error:'Route planning is unavailable. Try selecting the cities again.'});}
   }
   return{
-    request(from,to){
+    request(from,to,options={}){
       if(disposed)return Promise.resolve({stale:true});
       return new Promise(resolve=>{
-        const request={id:++nextId,from,to,key:railways.geometryKey(from,to),resolve};
+        const route={waypoints:structuredClone(options.waypoints??[])};
+        const request={id:++nextId,from,to,options:route,key:railways.geometryKey(from,to,route),resolve};
         if(active){queued?.resolve({stale:true});queued=request;}else dispatch(request);
       });
     },

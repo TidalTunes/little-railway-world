@@ -1,10 +1,10 @@
 # Railway world format
 
-The planner accepts a JSON-compatible authoring configuration and produces a deterministic scene plan. Cities, tracks, terrain, and scenery share coordinates and clearance rules. The browser renders that plan without text or editor controls. This is an art and simulation prototype; it has no playable economy or world-editor UI.
+The planner accepts a JSON-compatible authoring configuration and produces a deterministic scene plan. Cities, tracks, terrain and scenery share coordinates and clearance rules. The default settlement adds a session economy, individual construction and editable railway previews; saved art presets retain their world-only presentation. There is no general world-editor UI.
 
 ## Load and inspect
 
-The browser opens the compact flat island by default, also available as `?layout=island`. `src/island-world.js` exports `createIslandWorld({seed, trainCount})`. It supplies eight towns, a continuous railway circuit, coastal geography, an inland lake, river crossings and a mountain pass. Its authored coordinates remain fixed across seeds; scenery varies. There is no spherical surface. `camera.startInDetail: true` keeps the fitted initial view in detailed isometric mode regardless of the map's projected size.
+The browser opens the flat settlement island from `createSettlementWorld({seed})`, with one player home, neutral farm villages and rival settlers. It begins in third person without railways or trains. The earlier populated island remains at `?layout=island`: `createIslandWorld({seed, trainCount})` supplies eight towns, a continuous railway circuit and the same coastal geography, lake, river and mountain spine. Its authored coordinates remain fixed across seeds while scenery varies. Neither island has a spherical surface. In the saved island preset, `camera.startInDetail: true` keeps the fitted initial view in detailed isometric mode.
 
 The saved Earth preset remains available as `?layout=earth`. `src/earth-world.js` exports `createEarthWorld({seed, trainCount: 250})` and `projectEarth(longitude, latitude)`. It includes 96 selected cities, ten independent rail circuits, global coastlines, rivers, lakes, permanent polar ice, and stylized mountain ranges. Its sphere radius is 1600 world units; longitude and latitude provide the internal generation chart (`x = R × longitudeRadians`, `z = −R × latitudeRadians`). This chart is never displayed as a flat world. The [source notes](data/earth-geography-sources.md) explain selection and simplification. Git tag `earth-art-v1` preserves its source, renderer and data before the default changed.
 
@@ -12,7 +12,7 @@ The fifty-city Europe preset remains available as `?layout=europe`. It uses a cu
 
 The pure `generateWorld()` function and `railway.loadWorld({})` still default to the classic eight-city generator. Loading the browser preset is a separate startup choice. A seed override changes generated variation while retaining an authored preset's city coordinates and levels.
 
-With the canvas focused, **R** changes the seed while preserving the current authoring settings. **Space** pauses motion in strategy views. **V** zooms to or from a persistent third-person traveller, whose position remains visible in the overview; there, **WASD** walks, **Shift** runs and **Space** jumps. Walking uses the same generated terrain and asset placements, with bounded additive detail around the traveller. The browser console exposes:
+With the canvas focused, **R** changes the seed in saved art presets while preserving authoring settings; settlement mode disables regeneration to preserve session progress. **Space** pauses motion in strategy views. **V** zooms to or from a persistent third-person traveller, whose position remains visible in the overview; there, **WASD** walks, **Shift** runs and **Space** jumps. Walking uses the same generated terrain and asset placements, with bounded additive detail around the traveller. The browser console exposes:
 
 ```js
 // Compile in a worker and display the coarse world; resolve to a copy of its plan.
@@ -21,7 +21,6 @@ await railway.loadWorld({ seed: 42, cityCount: 12 });
 // Export the small authoring configuration or inspect the full generated plan.
 const configuration = railway.exportWorld();
 const plan = railway.inspectWorld();
-railway.setNight(true); // Lighting only; preserves the world and simulation.
 
 // Generate and validate without replacing the displayed scene.
 const candidate = railway.generateWorld(configuration);
@@ -30,7 +29,7 @@ const violations = railway.validateWorld(candidate);
 
 `loadWorld` is asynchronous: it validates and compiles the replacement network in a module worker before discarding the displayed world. Invalid configurations reject its promise. Detailed scenery is requested separately as the camera approaches a region. `exportWorld()` and `inspectWorld()` return copies. An empty validation result means no violations were reported by the validator.
 
-The default settlement also exposes `railway.inspectSettlement()`: a copied snapshot containing the human account, each rival's actor state, owned homes, paths, landmarks and resources, and a `railway` snapshot of committed stations, track pieces, connections and access paths. This returns `null` in railway art presets. The local session shares tree removal and building occupancy across owners; it does not yet synchronize over a network. `gameplay.playerBotCount` requests up to three rival starts, or zero to disable them. Generated `playerBots` and the worker's bounded `botScenery` catalog are derived data; the authoring export retains the requested count.
+The default settlement also exposes `railway.inspectSettlement()`: a copied snapshot containing the human account, each rival's actor state, owned homes, paths, landmarks and resources, and a `railway` snapshot of committed stations, track pieces, connections and access paths. This returns `null` in railway art presets. The local session shares removed trees, cleared scenery and building occupancy across owners; it does not yet synchronize over a network. `gameplay.playerBotCount` requests up to three rival starts, or zero to disable them. Generated `playerBots` and the worker's bounded `botScenery` catalog are derived data; the authoring export retains the requested count.
 
 ## Coordinates and configuration
 
@@ -53,7 +52,7 @@ Coordinates use metres in the horizontal `x`/`z` plane. Ground is at `y = 0`, ra
 | `mountains` | Array of `{ id?, x, z, radius, height }`. Positive radius and height bound an irregular faceted mountain. Use `[]` for none. |
 | `biomes` | Optional `{ sites?, ocean? }` configuration, described below. |
 | `outline` | Simple island polygon as `[[x, z], ...]`. Omit for the default twelve-sided tile. |
-| `density` | Scenery and cultivated-area multiplier, clamped to 0–3; default 1. City buildings are retained independently; zero omits farms and other scenery. |
+| `density` | Scenery and cultivated-area multiplier, clamped to 0–3; default 1. City buildings and authored village fields are retained independently; zero omits other generated farms and scenery. |
 
 Connection `points` are intermediate waypoints in travel order; city centres are added automatically at both ends. The alias `waypoints` is also accepted. Points can be `[x, z]` pairs or `{ x, z }` objects. Legacy route colors are `coral`, `teal`, `gold`, and `blue`; owner palettes determine the current train colors.
 
@@ -93,7 +92,7 @@ Run `node --expose-gc scripts/benchmark-generation.mjs 3` for generation, valida
 
 ## Players and city development
 
-Players provide a shared identity for cities and trains. The default IDs are `coral`, `teal`, `gold`, and `blue`. Custom player colors are normalized to serializable OKLCH: `l` is 0–1, `c` is 0–0.4, and finite hue values wrap into 0–360 degrees. Six-digit hexadecimal colors are converted to that format. Names remain metadata; the world displays no labels.
+Players provide a shared identity for cities and trains. The default IDs are `coral`, `teal`, `gold`, and `blue`. Custom player colors are normalized to serializable OKLCH: `l` is 0–1, `c` is 0–0.4, and finite hue values wrap into 0–360 degrees. Six-digit hexadecimal colors are converted to that format. Names remain metadata in saved art presets; settlement railway previews use short city labels.
 
 Each city has an `ownerId` referencing a player and an integer `level` from 1 through 10. Omitted ownership is chosen deterministically from the city ID and seed. Explicit cities without levels receive stable seeded levels; the classic generator uses level 3 and retains its layout-scaled neighborhood radii. An authored city's omitted radius comes from its level; a positive explicit radius overrides it.
 
@@ -266,6 +265,15 @@ Full-globe `biomes.ice` is a MultiPolygon mask, with `ice: true` on polar color 
 
 ## Session railway construction
 
-`src/settlement-railways.js` owns the mutable local infrastructure separately from the immutable generated art network. `createSettlementRailways(world, {session})` exposes city discovery, route evaluation, an atomic five-gold build command and copied snapshots. Stations retain their physical location as cities grow or merge. Connections reference cities and stations; unique line pieces contain the same arc-length alignment and sampled geometry consumed by the existing railway renderer. Shared approaches have one render owner. New lines use tangent-continuous straights and arcs with an eight-unit minimum radius. River spans carry bridge records; blocked ocean, mountain and occupied ground reject the preview.
+`src/settlement-railways.js` owns the mutable local infrastructure separately from the immutable generated art network. `createSettlementRailways(world, {session})` exposes city discovery, route evaluation, an atomic five-gold build command and copied snapshots. Stations retain their physical location as cities grow or merge. Connections reference cities and stations; unique line pieces contain the same arc-length alignment and sampled geometry consumed by the existing railway renderer. Shared approaches have one render owner. New lines favor direct feasible tangent-continuous straights and arcs with an eight-unit minimum radius. Both physical station ends remain available, alongside tangent junctions on existing approaches. Water and shore spans carry bridge records. Mountain intersections produce `cuts` and fully backed `tunnels`, reused by the terrain renderer. Buildings and unrelated track crossings remain protected; ordinary scenery can be cleared.
 
-The browser sends read-only world and settlement snapshots to a dedicated planning worker. The main-thread authority accepts results only when the occupied-building and railway revision still matches, then rechecks funds and actor clearance at confirmation. Construction reservations protect stations and track corridors for all owners. Tree removals share the existing authoritative removed-tree set; clearing a railway grants no logs. Gameplay railways remain session state and are included in `inspectSettlement()`, rather than altering the saved art authoring returned by `exportWorld()`.
+The browser sends read-only world and settlement snapshots to a dedicated planning worker. The main-thread authority accepts results only when the occupied-building and railway revision still matches, then rechecks funds and actor clearance at confirmation. Construction reservations protect stations and track corridors for all owners. Tree removals share the authoritative removed-tree set. Other intersected scenery, including whole farm estates, is recorded in `clearedPlacements` / `clearedPlacementIds`; clearing a railway grants no logs. Gameplay railways remain session state and are included in `inspectSettlement()`, rather than altering the saved art authoring returned by `exportWorld()`.
+
+
+Route evaluation accepts `{waypoints: [{x, z}, ...]}`. Preview results expose `handles` sampled at equal arc-length intervals, plus stations, access paths and cleared-placement records. The overview controller previews a destination on hover, locks that destination on click, and sends dragged handle positions back as waypoints. Only Enter or the confirmation control can spend gold; hovering, selecting and editing are read-only. Stale worker responses cannot replace a newer edit.
+
+## Settlement villages and walking controls
+
+`gameplay.farmVillageCount` requests neutral farmland hamlets. The compiled `gameplay.farmVillages` snapshot contains gray owner identity, houses, civic buildings, cities, paths, farms, destinations and reservations. Each village has exactly three homes and level 1; seeded lane/frontage layouts and one well, market, chapel, clock tower or water tower vary its appearance. Farm destinations are explicitly connected path endpoints. These homes never enter player progression or income, and generated reservations remain available even while scenery chunks are unloaded.
+
+House placement is restricted to third person. `walkingBuildAim` uses the camera heading for a point directly ahead and pitch for a smoothly bounded distance of 2.2–7 physical units, independent of camera obstruction. Click/Enter commits a valid house and Escape cancels. Mouse capture uses relative displacements for continuous look; Tab releases capture and retains focus navigation. Touch/pen drag, arrow keys, and cursor/edge-look fallback remain available. The HUD uses compact colored action icons and keycaps, with accessible names and contextual costs and guidance.

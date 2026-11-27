@@ -24,3 +24,13 @@ export function railwayCityLabel(city,ownerId){
   const owner=city.ownerId===ownerId?'Your':['neutral','village-gray'].includes(city.ownerId)?'Village':`${String(city.ownerId??'').replace(/^./,letter=>letter.toUpperCase())}`;
   return `${owner} city · ${city.level}`;
 }
+
+export function pickRailwayHandle(world,handles,camera,pointer,{width,height}={}){
+  if(!camera||!pointer||!width||!height)return -1;
+  camera.updateMatrixWorld(true);const point=new Vector3();let best=15,selected=-1;
+  handles.forEach((handle,index)=>{surfacePoint(world,handle.x,.8,handle.z,point).project(camera);
+    if(point.z< -1||point.z>1)return;
+    const distance=Math.hypot((point.x-pointer.x)*width/2,(point.y-pointer.y)*height/2);
+    if(distance<best){best=distance;selected=index;}
+  });return selected;
+}

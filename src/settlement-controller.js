@@ -10,8 +10,9 @@ import {createSettlementIncomeEffects} from './settlement-income-effects.js';
 import {createSettlementRailways} from './settlement-railways.js';
 import {createSettlementRailwayArt} from './settlement-railway-art.js';
 import {createSettlementRailwayPlanner} from './settlement-railway-planner.js';
-import {pickRailwayCity,railwayCityLabel} from './settlement-railway-input.js';
-import {surfaceDistance,surfaceOffset} from './world-surface.js';
+import {pickRailwayCity,pickRailwayHandle,railwayCityLabel} from './settlement-railway-input.js';
+import {surfaceDistance} from './world-surface.js';
+import {walkingBuildAim} from './walking-build-aim.js';
 
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
@@ -43,62 +44,70 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const railwayArt=createSettlementRailwayArt(parent,mapParent,world);
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
   let railSource=null,railTarget=null,railPreview=null,railPreviewKey='',railClick=null,pendingRailBuild=false,railRevision=-1;
-  let railSnapshot=railways.snapshot();
-  let railPlanning=false,railPlanToken=0,railWallet=-1;
+  let railSnapshot=railways.snapshot(),railLines=world.lines??[];
+  const committedRailLines=new Map();
+  let railPlanning=false,railPlanToken=0,railWallet=-1,railHover=null,railWaypoints=null,railDrag=null;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0;
   let revision=-1,sessionRevision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
-  const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),intersection=new THREE.Vector3();
-  const listeners=[],facing=new THREE.Vector3();
+  const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),-.8),intersection=new THREE.Vector3();
+  const listeners=[];
   const focusCanvas=()=>canvas.focus({preventScroll:true});
   function selectTool(next){
-    if(next==='rail'&&(walking||transitioning))return;
+    if(next==='rail'&&(walking||transitioning)||next==='house'&&(!walking||transitioning))return;
     tool=next;pointer=null;pendingBuild=false;pendingChop=false;previewKey='';message='';
     railSource=railTarget=railPreview=railClick=null;railPreviewKey='';pendingRailBuild=false;press=null;focusCanvas();
-    railPlanToken++;railPlanning=false;
+    railPlanToken++;railPlanning=false;railHover=null;railWaypoints=null;railDrag=null;
   }
   const hud=createSettlementHud({parent:canvas.parentElement,playerColor:'#257d70',
     onTool:selectTool,onView:()=>{selectTool('axe');onView();},onDayNight:()=>{onDayNight();focusCanvas();},
     onChop:()=>{selectTool('axe');pendingChop=true;},
     onBuild:()=>{pendingBuild=true;focusCanvas();},onRailBuild:()=>{pendingRailBuild=!railPlanning&&!!railPreview?.valid;focusCanvas();},onCancel:()=>selectTool('axe')});
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
+  const eventPointer=event=>{const box=canvas.getBoundingClientRect();return {x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};};
+  function dragRail(event){
+    pointer=eventPointer(event);ndc.set(pointer.x,pointer.y);ray.setFromCamera(ndc,camera);
+    if(ray.ray.direction.y<-.01&&ray.ray.intersectPlane(groundPlane,intersection)){
+      railDrag.points[railDrag.index]={x:intersection.x,z:intersection.z};
+      railWaypoints=railDrag.points.map(point=>({...point}));
+    }
+  }
   listen(canvas,'pointermove',event=>{
+    if(railDrag?.id===event.pointerId){event.preventDefault();event.stopImmediatePropagation();dragRail(event);return;}
     if(press?.id===event.pointerId&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>=5)press.moved=true;
-    if(!['house','rail'].includes(tool)||event.buttons)return;
-    const box=canvas.getBoundingClientRect();pointer={x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};
-  });
-  // The HUD's Build button must commit the last visible preview, not silently
-  // move it back in front of the traveller when the pointer leaves the canvas.
-  listen(canvas,'pointerleave',event=>{if(!event.relatedTarget?.closest?.('.settlement-hud'))pointer=null;});
+    if(tool==='rail')pointer=eventPointer(event);
+  },true);
+  listen(canvas,'pointerleave',event=>{if(!event.relatedTarget?.closest?.('.settlement-hud')&&!railDrag)pointer=null;});
   listen(canvas,'pointerdown',event=>{
-    if(walking||transitioning||!['house','rail'].includes(tool)||event.button!==0)return;
+    if(walking||transitioning||tool!=='rail'||event.button!==0)return;
+    pointer=eventPointer(event);
+    const handles=railPlanning&&railWaypoints?railWaypoints:railPreview?.handles??[],index=railTarget?pickRailwayHandle(world,handles,camera,pointer,canvas.getBoundingClientRect()):-1;
+    if(index>=0){
+      event.preventDefault();event.stopImmediatePropagation();focusCanvas();
+      railDrag={id:event.pointerId,index,points:handles.map(({x,z})=>({x,z}))};
+      canvas.setPointerCapture?.(event.pointerId);return;
+    }
     if(press){press=null;return;}
-    // Rail selection coexists with overview dragging. Only a stationary tap
-    // chooses a city; changing the viewpoint never spends money.
-    if(tool==='house'){event.preventDefault();event.stopImmediatePropagation();}
     focusCanvas();press={id:event.pointerId,x:event.clientX,y:event.clientY,tool};
-    if(tool==='house')canvas.setPointerCapture?.(event.pointerId);
   },true);
   listen(canvas.ownerDocument.defaultView,'pointerup',event=>{
+    if(railDrag?.id===event.pointerId){dragRail(event);railDrag=null;if(canvas.hasPointerCapture?.(event.pointerId))canvas.releasePointerCapture(event.pointerId);return;}
     if(press?.id!==event.pointerId)return;
-    const tap=!press.moved&&Math.hypot(event.clientX-press.x,event.clientY-press.y)<5;
-    if(tap&&press.tool===tool){
-      if(tool==='house')pendingBuild=true;
-      if(tool==='rail'){
-        const box=canvas.getBoundingClientRect();
-        railClick={x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};
-      }
-    }
+    if(!press.moved&&Math.hypot(event.clientX-press.x,event.clientY-press.y)<5&&tool==='rail')railClick=eventPointer(event);
     press=null;
-    if(canvas.hasPointerCapture?.(event.pointerId))canvas.releasePointerCapture(event.pointerId);
   });
-  listen(canvas,'pointercancel',()=>{press=null;});
-  listen(canvas.ownerDocument.defaultView,'blur',()=>{press=null;pendingBuild=false;pendingChop=false;pendingHit=null;pendingRailBuild=false;railClick=null;});
+  listen(canvas,'pointercancel',()=>{press=null;railDrag=null;});
+  listen(canvas.ownerDocument.defaultView,'blur',()=>{press=null;railDrag=null;pendingBuild=false;pendingChop=false;pendingHit=null;pendingRailBuild=false;railClick=null;});
   listen(canvas,'dblclick',event=>{if(tool==='rail'){event.preventDefault();event.stopImmediatePropagation();}},true);
   function synchronize(){
     if(railRevision!==railways.revision){
       railSnapshot=railways.snapshot();railRevision=railways.revision;railwayArt.sync(railSnapshot);
+      detail.setRailways?.(railSnapshot.lines);
+      // Committed track geometry is immutable. Keep its identity across copied
+      // network snapshots so distant construction cannot rebuild local grass.
+      for(const line of railSnapshot.lines)if(!committedRailLines.has(line.id))committedRailLines.set(line.id,line);
+      railLines=[...world.lines??[],...railSnapshot.lines.map(line=>committedRailLines.get(line.id))];
       railInfrastructure={revision:railRevision,buildings:railSnapshot.stations,paths:railSnapshot.paths??[],
-        corridors:railSnapshot.reservations.filter(item=>item.kind==='rail-corridor')};
+        clearedPlacementIds:railSnapshot.clearedPlacementIds??[],corridors:railSnapshot.reservations.filter(item=>item.kind==='rail-corridor')};
     }
     const changed=game.revision!==revision;
     if(changed){
@@ -115,7 +124,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       scenery=[...detail.placements,...session.buildings,...villageObjects];
       collisions=[...detail.getCollisionPlacements(),...session.buildings,...villageObjects];
       meshes=[...detail.getTerrainMeshes(),...houseMeshes,...villageArt?.meshes??[],...bots.meshes,...railwayArt.meshes];
-      streets=[...detail.cityStreets,...session.paths,...villagePaths,...railInfrastructure.corridors];
+      streets=[...detail.cityStreets,...session.paths,...villagePaths];
     }
   }
   function findTree(player){
@@ -131,68 +140,56 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     }
     return selected;
   }
-  function candidate(player){
-    let point;
-    if(pointer&&camera){
-      ndc.set(pointer.x,pointer.y);ray.setFromCamera(ndc,camera);
-      if(ray.ray.intersectPlane(groundPlane,intersection)&&ray.ray.direction.y<-.01)point={x:intersection.x,z:intersection.z};
-    }
-    if(!point)point=surfaceOffset(world,player.position.x,player.position.z,Math.sin(player.heading)*3.8,Math.cos(player.heading)*3.8);
-    return point;
-  }
-  // Overview lifts the arm's-reach limit, but the traveller still occupies a
-  // real footprint. Never allow a new house to trap the persistent character.
+  function candidate(player){return walkingBuildAim(world,player,{maxDistance:SETTLEMENT.buildReach});}
   const isReadyAt=point=>detail.hasCoverageAt(point,1);
-  function context(player,pose){
-    const heading=walking||!camera?player.heading:Math.atan2(camera.getWorldDirection(facing).x,facing.z);
-    return {player:player.position,heading,enforceReach:walking,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
+  function context(player,pose){return {player:player.position,heading:player.heading,enforceReach:true,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
   function notify(text){message=text;messageTime=3.2;}
   function updateRailways(){
     if(tool!=='rail'||walking||transitioning){railClick=null;pendingRailBuild=false;railwayArt.preview(null,{visible:false});return null;}
-    const cities=railways.cities,hasCity=cities.some(city=>city.ownerId===game.ownerId);
+    const cities=railways.cities,hasCity=cities.some(city=>city.ownerId===game.ownerId),box=canvas.getBoundingClientRect();
     if(railClick){
-      const box=canvas.getBoundingClientRect(),city=pickRailwayCity(world,cities,camera,railClick,box);railClick=null;
+      const city=pickRailwayCity(world,cities,camera,railClick,box);railClick=null;
       if(city){
-        if(!railSource){
-          if(city.ownerId===game.ownerId){railSource=city.id;message='';}
-          else notify('Start at one of your cities');
-        }else if(city.id===railSource){railSource=railTarget=null;railPreview=null;railPreviewKey='';}
-        else{railTarget=city.id;railPreviewKey='';message='';}
+        if(!railSource){if(city.ownerId===game.ownerId){railSource=city.id;message='';}else notify('Choose your city first');}
+        else if(city.id===railSource){railSource=railTarget=railHover=null;railWaypoints=null;railPreview=null;railPreviewKey='';}
+        else{if(railTarget!==city.id)railWaypoints=null;railTarget=city.id;railHover=null;message='';}
       }
     }
-    if(railSource&&!cities.some(city=>city.id===railSource)){railSource=railTarget=null;railPreview=null;railPreviewKey='';}
-    if(railTarget&&!cities.some(city=>city.id===railTarget)){railTarget=null;railPreview=null;railPreviewKey='';}
-    if(railSource&&railTarget){
-      const key=railways.geometryKey(railSource,railTarget);
+    if(railSource&&!cities.some(city=>city.id===railSource)){railSource=railTarget=railHover=null;railWaypoints=null;}
+    if(railTarget&&!cities.some(city=>city.id===railTarget)){railTarget=null;railWaypoints=null;}
+    if(railSource&&!railTarget&&!press){const hover=pickRailwayCity(world,cities,camera,pointer,box);railHover=hover?.id!==railSource?hover?.id??null:null;}
+    const destination=railTarget??railHover,options={waypoints:railWaypoints??undefined};
+    if(railSource&&destination){
+      const key=railways.geometryKey(railSource,destination,options);
       if(key!==railPreviewKey){
-        railPreview=null;railPreviewKey=key;railPlanning=true;const token=++railPlanToken;
-        railPlanner.request(railSource,railTarget).then(response=>{
+        // Keep the existing curve and the dragged dots visible while the worker
+        // fits the latest edit. A new destination must not show the old route.
+        if(!railDrag&&(!railWaypoints||railPreview?.toCityId!==destination))railPreview=null;
+        railPreviewKey=key;railPlanning=true;const token=++railPlanToken;
+        railPlanner.request(railSource,destination,options).then(response=>{
           if(disposed||token!==railPlanToken)return;
           railPlanning=false;
           if(response.stale){railPreviewKey='';return;}
-          railPreview=response.result??{valid:false,code:'planning-failed',reason:response.error,lines:[],stations:[]};
-          railWallet=game.gold;
+          railPreview=response.result??{valid:false,code:'planning-failed',reason:response.error,lines:[],stations:[]};railWallet=game.gold;
         });
       }else if(railPreview&&railWallet!==game.gold){
-        // Currency changes cannot invalidate geometry or restart the worker.
         railWallet=game.gold;
-        if(railPreview.siteValid)railPreview={...railPreview,affordable:game.gold>=5,valid:game.gold>=5,
-          code:game.gold>=5?'ready':'not-enough-gold',reason:game.gold>=5?'Connect these cities':'A railway costs 5 gold'};
+        if(railPreview.siteValid)railPreview={...railPreview,affordable:game.gold>=5,valid:game.gold>=5,code:game.gold>=5?'ready':'not-enough-gold',reason:game.gold>=5?'Ready':'Requires 5 gold'};
       }
-    }else{railPreview=null;if(railPlanning){railPlanToken++;railPlanning=false;}}
-    if(pendingRailBuild&&railSource&&railTarget&&!railPlanning&&railPreview?.valid){
-      const result=railways.build(railSource,railTarget,{requireCached:true});
+    }else{railPreview=null;railPreviewKey='';if(railPlanning){railPlanToken++;railPlanning=false;}}
+    if(pendingRailBuild&&railSource&&railTarget&&!railPlanning&&!railDrag&&railPreview?.valid){
+      const result=railways.build(railSource,railTarget,{...options,requireCached:true});
       if(result.ok){
-        for(const id of result.clearedTreeIds??[])detail.removeTree(id);
-        synchronize();notify('Railway built · −5 gold');railSource=railTarget=railPreview=null;railPreviewKey='';
-      }else{railPreview=result;if(result.code==='world-changed')railPreviewKey='';notify(result.reason??'This route cannot be built');}
+        for(const id of result.clearedTreeIds??[])if(reducedMotion?.matches||!detail.fellTree(id))detail.removeTree(id);
+        detail.clearScenery?.(result.clearedPlacements??result.clearedPlacementIds??[],{animate:!reducedMotion?.matches});
+        synchronize();notify('−5 gold');railSource=railTarget=railHover=railPreview=null;railWaypoints=null;railPreviewKey='';
+      }else{railPreview=result;if(result.code==='world-changed')railPreviewKey='';notify(result.reason??'Choose another route');}
     }
     pendingRailBuild=false;
-    railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:railTarget,visible:true});
-    return {stage:railPlanning?'planning':railPreview?'preview':railSource?'destination':'source',hasCity,cost:5,
-      canBuild:!!railPreview?.valid,reason:railPreview?.reason??message,
-      sourceLabel:railwayCityLabel(cities.find(city=>city.id===railSource),game.ownerId),
-      targetLabel:railwayCityLabel(cities.find(city=>city.id===railTarget),game.ownerId)};
+    railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:destination,visible:true,editable:!!railTarget,handles:railDrag?.points??(railPlanning&&railWaypoints?railWaypoints:railPreview?.handles)??[],activeHandle:railDrag?.index??-1});
+    return {stage:railPlanning?'planning':railTarget&&railPreview?'preview':railSource?'destination':'source',hasCity,cost:5,hovering:!!railHover,siteValid:!!railPreview?.siteValid,
+      canBuild:!!railTarget&&!railDrag&&!railPlanning&&!!railPreview?.valid,reason:railPreview?.reason??message,
+      sourceLabel:railwayCityLabel(cities.find(city=>city.id===railSource),game.ownerId),targetLabel:railwayCityLabel(cities.find(city=>city.id===destination),game.ownerId)};
   }
   function develop(player){
     if(!snapshot.pendingMilestones?.length)return;
@@ -205,6 +202,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     get building(){return tool==='house'||tool==='rail';},
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${sessionRevision}`;},
     get cityStreets(){synchronize();return streets;},
+    get railwayLines(){synchronize();return railLines;},
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
     keyDown(event){
       const key=event.key.toLowerCase();
@@ -233,14 +231,14 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0,walkingWeight=Number(walkingNow),focus,viewportHeight=800,zoom=1,dayState,night=0,uiDt=dt}={}){
       if(disposed)return;
       walking=walkingNow;transitioning=transitionNow;camera=activeCamera;const player=getPlayer();
-      if(walking&&tool==='rail')selectTool('axe');
+      if(walking&&tool==='rail'||!walking&&tool==='house')selectTool('axe');
       bots.simulate(dt,{completedDays:dayState?.completedDays??0});
       const income=game.settleIncome(dayState?.completedDays??0);
       if(income?.amount>0){
         if(walkingWeight>.5)hud.showIncome(income);else incomeEffects.emit(income.houses);
         canvas.dataset.lastIncome=String(income.amount);
       }
-      detail.updateTrees(reducedMotion?.matches?1:dt);synchronize();
+      detail.updateTrees(reducedMotion?.matches?1:uiDt);synchronize();
       ready=!!player?.initialized&&detail.hasCoverageAt(player.position,2);
       // A search may yield its bounded routing budget across frames. Once a
       // pass is exhausted, only new terrain, clearing or a moved player retries it.
@@ -261,7 +259,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         }
       }
       targetTree=ready&&walking&&!transitioning&&tool==='axe'?findTree(player):null;
-      if(ready&&tool==='house'&&!transitioning){
+      if(ready&&walking&&tool==='house'&&!transitioning){
         const pose=candidate(player),buildContext=context(player,pose);
         const nearbyActors=bots.positions.filter(point=>surfaceDistance(world,point,pose)<4)
           .map(point=>`${point.x.toFixed(2)},${point.z.toFixed(2)}`).join(';');
@@ -278,7 +276,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       pendingBuild=false;
       const railwayHud=updateRailways();
       railwayArt.update({mapBlend,camera,viewportHeight,walkingWeight,zoom});
-      art.preview(placement,{visible:tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend,dt:uiDt,reducedMotion:reducedMotion?.matches,night});
+      art.preview(placement,{visible:walking&&tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend,dt:uiDt,reducedMotion:reducedMotion?.matches,night});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
       const target=placement?.house??player?.position??{x:0,z:0};
       let nearest=null,distance=Infinity;
@@ -302,7 +300,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         farmVillages:String(villages?.cities?.length??0),villageResidents:String(villageResidents?.stats.residents??0),villageResidentsIndoors:String(villageResidents?.stats.indoors??0),
         playerBots:String(bots.entries.length),botHouses:bots.entries.map(entry=>entry.houseCount).join(','),
         railMode:String(tool==='rail'),railConnections:String(railSnapshot.connections.length),railStations:String(railSnapshot.stations.length),
-        railSource:railSource??'',railTarget:railTarget??'',railPlanning:String(railPlanning),railValid:String(!!railPreview?.valid),railReason:railPreview?.code??'',
+        railSource:railSource??'',railTarget:railTarget??'',railHover:railHover??'',railHandles:String(railPreview?.handles?.length??0),railEditing:String(!!railDrag),railPlanning:String(railPlanning),railValid:String(!!railPreview?.valid),railReason:railPreview?.code??'',
         botLevels:bots.entries.map(entry=>entry.snapshot.cities[0]?.level??0).join(','),botStates:bots.entries.map(entry=>entry.bot.state).join(','),
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});

@@ -12,7 +12,9 @@ export function createPlayerBotSettlements({world,session,parent,mapParent,marke
   const permanent=[...world.gameplay.botScenery??[],...village?.houses??[],...village?.buildings??[]];
   let scenery=[],sceneryRevision=-1,meshRevision=-1,meshes=[];
   function getPlacements(){
-    if(sceneryRevision!==session.revision){scenery=[...permanent,...session.buildings];sceneryRevision=session.revision;}
+    if(sceneryRevision!==session.revision){
+      scenery=[...permanent.filter(item=>!session.shared.isSceneryRemoved?.(item)),...session.buildings];sceneryRevision=session.revision;
+    }
     return scenery;
   }
   const entries=session.bots.map(({config,game})=>{

@@ -255,3 +255,76 @@ test('touch dragging can pause for placement without accumulating a hidden camer
   f.canvas.dispatch('pointermove',{pointerType:'touch',clientX:630,clientY:600});
   assert.equal(f.input.sample().lookX,-.1);
 });
+
+function pointerLock(f,{deferred=false,reject=false}={}){
+  let requests=0,exits=0;f.document.pointerLockElement=null;
+  const acquire=()=>{f.document.pointerLockElement=f.canvas;f.document.dispatch('pointerlockchange');};
+  f.canvas.requestPointerLock=()=>{requests++;if(reject)return Promise.reject(new Error('Pointer lock unavailable'));if(!deferred)acquire();};
+  f.document.exitPointerLock=()=>{exits++;f.document.pointerLockElement=null;f.document.dispatch('pointerlockchange');};
+  return{acquire,get requests(){return requests;},get exits(){return exits;}};
+}
+
+test('pointer lock is requested only from gestures and relative movement can turn through multiple full circles',t=>{
+  const f=fixture(t,{initialActive:true}),lock=pointerLock(f);
+  for(let i=0;i<10;i++){f.canvas.dispatch('pointermove',{clientX:300+i});f.input.sample(.016);}
+  assert.equal(lock.requests,0,'sampling and hover never ask for pointer lock');
+  f.canvas.dispatch('pointerdown',{clientX:500,clientY:300});f.window.dispatch('pointerup',{clientX:500,clientY:300});f.input.sample();
+  assert.equal(lock.requests,1);assert.equal(f.input.locked,true);
+  let angle=0;
+  for(let frame=0;frame<80;frame++){
+    f.canvas.dispatch('pointermove',{clientX:500,clientY:300,movementX:40,movementY:0});
+    f.document.dispatch('mousemove',{clientX:500,clientY:300,movementX:40,movementY:0});
+    const sample=f.input.sample(1/60);assert.equal(sample.lookX,-.2,'pointer and mouse events do not double-count locked movement');angle+=sample.lookX;
+  }
+  assert.ok(Math.abs(angle)>Math.PI*4,'frozen screen coordinates cannot stop full-circle yaw');
+  f.document.dispatch('mousemove',{movementX:0,movementY:-20});assert.equal(f.input.sample().lookY,-.08);
+  f.document.dispatch('mousemove',{movementX:Infinity,movementY:NaN});assert.deepEqual(f.input.sample(),empty);
+});
+
+test('Escape and Tab free the cursor for the HUD without leaving the character view',t=>{
+  for(const key of ['Escape','Tab']){
+    const f=fixture(t,{initialActive:true}),lock=pointerLock(f);f.canvas.dispatch('pointerdown');f.window.dispatch('pointerup');f.input.sample();
+    f.key('w');f.key('e');const event=f.key(key);assert.equal(lock.exits,1);assert.equal(f.input.locked,false);assert.equal(f.active,true);assert.equal(f.exits,0);
+    assert.equal(event.defaultPrevented,key==='Escape');assert.deepEqual(f.input.sample(),empty);
+    f.document.dispatch('mousemove',{movementX:50,movementY:20});assert.deepEqual(f.input.sample(),empty,'released pointer events cannot keep turning');
+    f.canvas.dispatch('pointermove',{clientX:800,clientY:500});assert.deepEqual(f.input.sample(),empty,'HUD return establishes a fresh cursor anchor');
+    f.canvas.dispatch('pointerdown',{clientX:800,clientY:500});assert.equal(lock.requests,2,'a later explicit canvas click can reacquire look');
+  }
+});
+
+test('overview, HUD focus, hidden pages and explicit release safely cancel relative input',t=>{
+  for(const release of [f=>{f.active=false;f.input.sample();},f=>f.document.dispatch('focusin',{target:{}}),f=>f.document.dispatch('pointerdown',{target:{}}),f=>{f.document.hidden=true;f.document.dispatch('visibilitychange');},f=>f.input.releaseLook(),f=>f.window.dispatch('blur')]){
+    const f=fixture(t,{initialActive:true}),lock=pointerLock(f);f.canvas.dispatch('pointerdown');f.key('w');f.key('e');
+    f.document.dispatch('mousemove',{movementX:20,movementY:10});release(f);assert.equal(f.input.locked,false);assert.equal(lock.exits,1);
+    f.window.dispatch('pointerup');assert.deepEqual(f.input.sample(),empty,'release cannot queue a latent swing or movement');
+  }
+});
+
+test('late lock acquisition after a mode exit is released and V requests lock only on entry',t=>{
+  const f=fixture(t),lock=pointerLock(f,{deferred:true});f.key('v');assert.equal(lock.requests,1);
+  f.key('v');assert.equal(lock.requests,1,'leaving during the visual transition must not relock');lock.acquire();
+  assert.equal(f.input.locked,false);assert.equal(lock.exits,1);assert.deepEqual(f.input.sample(),empty);
+});
+
+test('denied pointer lock falls back without an unhandled rejection or losing keyboard controls',async t=>{
+  const f=fixture(t,{initialActive:true}),lock=pointerLock(f,{reject:true});f.canvas.dispatch('pointerdown');f.window.dispatch('pointerup');f.input.sample();
+  await Promise.resolve();assert.equal(f.input.locked,false);assert.equal(lock.requests,1);
+  f.canvas.dispatch('pointermove',{clientX:100,clientY:200});f.canvas.dispatch('pointermove',{clientX:120,clientY:200});assert.equal(f.input.sample().lookX,-.1);
+  f.key('w');assert.equal(f.input.sample().forward,1);f.input.releaseLook();
+  f.canvas.requestPointerLock=()=>{throw new Error('unsupported');};assert.equal(f.input.requestLook(),false);
+});
+
+test('unlocked edge turning keeps full-circle look possible when pointer lock is unavailable',t=>{
+  const f=fixture(t,{initialActive:true});f.canvas.getBoundingClientRect=()=>({left:0,top:0,width:1000,height:600});
+  f.canvas.dispatch('pointerenter',{clientX:999,clientY:300,pointerType:'mouse'});
+  let angle=0;for(let frame=0;frame<60;frame++)angle+=f.input.sample(.1).lookX;assert.ok(angle<-Math.PI*2);
+  f.canvas.dispatch('pointerleave');assert.deepEqual(f.input.sample(.1),empty,'edge turning stops as soon as the cursor enters the HUD');
+  f.canvas.dispatch('pointerenter',{clientX:500,clientY:300,pointerType:'mouse'});assert.deepEqual(f.input.sample(.1),empty,'central cursor has no automatic drift');
+});
+
+test('relative mouse movement cancels a drag click even when client coordinates remain fixed',t=>{
+  const f=fixture(t,{initialActive:true});pointerLock(f);f.canvas.dispatch('pointerdown',{clientX:500,clientY:300});
+  f.document.dispatch('mousemove',{movementX:8,movementY:0});f.window.dispatch('pointerup',{clientX:500,clientY:300});assert.equal(f.input.sample().swing,false);
+  f.canvas.dispatch('pointerdown',{clientX:500,clientY:300});f.window.dispatch('pointerup',{clientX:500,clientY:300});assert.equal(f.input.sample().swing,true);
+  assert.equal(f.input.sample().swing,false,'a locked click still delivers one action');
+});
