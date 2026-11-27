@@ -12,6 +12,20 @@ export function settlementHudProgress(houseCount){
   return {houses,level,complete,progress:complete?1:(houses-level*3)/3,next:complete?null:(level+1)*3};
 }
 
+/** Timber alone is no longer proof that a house is affordable. Keep unknown
+ * tool stock explicit until the controller supplies the local depot balance. */
+export function settlementHudConstruction({economic=false,logs=0,resources,buildCost={timber:10,tools:0}}={}){
+  const cost=count(buildCost.timber),toolsCost=count(buildCost.tools),wood=economic?'timber':'logs';
+  const tools=Number.isFinite(resources?.tools)?count(resources.tools):null;
+  const missingWood=Math.max(0,cost-count(logs)),missingTools=tools===null?null:Math.max(0,toolsCost-tools);
+  const missing=[];if(missingWood)missing.push(`${missingWood} more ${wood==='logs'&&missingWood===1?'log':wood}`);if(missingTools)missing.push(`${missingTools} more ${missingTools===1?'tool':'tools'}`);
+  const affordable=!missingWood&&(!toolsCost||missingTools===0);
+  const costLabel=`${cost} ${wood}${toolsCost?` + ${toolsCost} tools`:''}`;
+  const readiness=missing.length?`Need ${missing.join(' and ')}.`:toolsCost&&tools===null?`Timber ready; ${toolsCost} tools also required.`:toolsCost?'Timber and tools ready.':`Enough ${wood} gathered.`;
+  const shortage=missing.length?`Need ${missing.join(' and ')}`:toolsCost&&tools===null?`${toolsCost} tools required`:'';
+  return {cost,costLabel,wood,tools,affordable,readiness,shortage};
+}
+
 /** Choosing endpoints never confirms a purchase. Only a valid, affordable
  * preview exposes the separate build action. These are presentation guards;
  * the controller still validates and spends the gold on confirmation. */
@@ -60,7 +74,7 @@ const symbols={
   jump:symbol('<path stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M16 22V4m-6 6 6-6 6 6M4 26l5 3h14l5-3"/>'),
 };
 
-const actionIcon={axe:'axe',house:'house',rail:'rail',view:'map',build:'check',cancel:'close','rail-build':'check','rail-cancel':'close','day-night':'moon'};
+const actionIcon={axe:'axe',house:'house',rail:'rail',view:'map',build:'check',cancel:'close','rail-build':'check','rail-cancel':'close'};
 const keyAction=(action,key,label,extra='')=>`<button type="button" data-action="${action}" title="${label} · ${key}" ${extra.includes('aria-label=')?'':`aria-label="${label}"`} ${extra}><span class="settlement-action-icon" data-action-icon aria-hidden="true">${symbols[actionIcon[action]]}</span><kbd>${key}</kbd><span class="settlement-action-label" data-action-label aria-hidden="true">${label}</span></button>`;
 
 /** Numeric resources, nearby city growth and keyboard controls share the world
@@ -72,14 +86,14 @@ const keyAction=(action,key,label,extra='')=>`<button type="button" data-action=
  */
 export function createSettlementHud({
   parent=document.body,playerColor='#37a98d',onTool=()=>{},onView=()=>{},
-  onBuild=()=>{},onCancel=()=>{},onDayNight=()=>{},onChop=null,onRailBuild=()=>{},
+  onBuild=()=>{},onCancel=()=>{},onChop=null,onRailBuild=()=>{},
 }={}){
   const root=document.createElement('aside');
   root.className='settlement-hud';root.setAttribute('aria-label','Settlement controls');
   root.style.setProperty('--settlement-owner',playerColor);
   root.innerHTML=`
     <div class="settlement-inventory" role="group" aria-label="Resources">
-      <div class="settlement-resource settlement-wood" data-hud="wood-stock" aria-label="No logs. Ten logs builds a house."><strong data-hud="logs">0</strong><span class="settlement-resource-caption">${symbols.log}<span>Logs</span></span></div>
+      <div class="settlement-resource settlement-wood" data-hud="wood-stock" aria-label="Building materials"><strong data-hud="logs">0</strong><span class="settlement-resource-caption">${symbols.log}<span data-hud="timber-label">Logs</span></span></div>
       <div class="settlement-resource settlement-gold" data-hud="gold-stock" aria-label="No gold"><strong data-hud="gold">0</strong><span class="settlement-resource-caption">${symbols.coin}<span>Gold</span></span></div>
     </div>
     <div class="settlement-development" data-hud="development" role="group" aria-label="Settlement development">
@@ -90,7 +104,7 @@ export function createSettlementHud({
       </span>
       <span class="settlement-growth"><span class="settlement-label" data-hud="city-label">Outpost</span><strong data-hud="city-progress">1 / 3</strong><span class="settlement-growth-caption" data-hud="growth-caption">toward city</span></span>
     </div>
-    <div class="settlement-day-control"><span class="settlement-phase-label"><span data-hud="phase-symbol" data-kind="sun">${symbols.sun}</span><span class="settlement-label" data-hud="day-phase">Daytime</span></span>${keyAction('day-night','N','Night','aria-keyshortcuts="N" aria-label="Skip to night and collect daily income"')}</div>
+    <div class="settlement-day-control"><span class="settlement-phase-label"><span data-hud="phase-symbol" data-kind="sun">${symbols.sun}</span><span class="settlement-label" data-hud="day-phase">Daytime</span></span></div>
     <div class="settlement-income" data-hud="income" role="status" aria-live="polite" aria-atomic="true" hidden>
       <span class="settlement-income-rule" aria-hidden="true"></span>
       <span class="settlement-income-copy"><span class="settlement-income-amount"><strong data-hud="income-amount">+0</strong><span class="settlement-income-currency">${symbols.coin}<span>Gold</span></span></span><span class="settlement-income-label" data-hud="income-label">Day's earnings</span></span>
@@ -98,7 +112,7 @@ export function createSettlementHud({
     </div>
     <div class="settlement-dock">
       <div class="settlement-build-actions" data-hud="build-actions" role="group" aria-label="House placement" hidden>
-        <span class="settlement-placement-note"><span class="settlement-cost" aria-label="Ten logs">${symbols.log}<strong>10</strong></span><span data-hud="placement">Joins city</span></span>
+        <span class="settlement-placement-note"><span class="settlement-cost" aria-label="House cost">${symbols.log}<strong data-hud="house-cost">10</strong></span><span data-hud="placement">Joins city</span></span>
         <span class="settlement-validity" data-hud="validity"></span>
         <div class="settlement-placement-keys">${keyAction('build','Enter','Place','aria-keyshortcuts="Enter"')}${keyAction('cancel','Esc','Cancel','aria-keyshortcuts="Escape"')}</div>
       </div>
@@ -109,8 +123,8 @@ export function createSettlementHud({
       </div>
       <div class="settlement-actions" role="group" aria-label="Tools and camera">
         ${keyAction('axe','E','Chop','class="settlement-tool" aria-pressed="true" aria-keyshortcuts="E" aria-label="Select axe. E or click to chop a nearby tree."')}
-        ${keyAction('house','B','Build','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="B" aria-label="Place a house. Costs ten logs."')}
-        ${keyAction('rail','T','Railway','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="T" aria-label="Plan a railway. Costs five gold. Start from one of your cities." hidden')}
+        ${keyAction('house','B','Build','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="B" aria-label="Place a house."')}
+        ${keyAction('rail','T','Railway','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="T" aria-label="Plan a railway. Start from your city or its connected network." hidden')}
         ${keyAction('view','V','Overview','aria-keyshortcuts="V" aria-label="Switch to overview"')}
       </div>
       <div class="settlement-movement" data-hud="movement" aria-label="WASD moves, Shift runs, Space jumps"><span title="Move · WASD">${symbols.move}<kbd>WASD</kbd></span><span title="Run · Shift">${symbols.run}<kbd>Shift</kbd></span><span title="Jump · Space">${symbols.jump}<kbd>Space</kbd></span></div>
@@ -119,9 +133,9 @@ export function createSettlementHud({
   parent.append(root);
   const nodes=Object.fromEntries([...root.querySelectorAll('[data-hud]')].map(node=>[node.dataset.hud,node]));
   const buttons=Object.fromEntries([...root.querySelectorAll('[data-action]')].map(node=>[node.dataset.action,node]));
-  const viewLabel=buttons.view.querySelector('[data-action-label]'),phaseLabel=buttons['day-night'].querySelector('[data-action-label]');
+  const viewLabel=buttons.view.querySelector('[data-action-label]');
   let current={},announced='',rendered='',incomeTimer=null,incomeAnimation=null,disposed=false;
-  const handlers={axe:()=>{onTool('axe');onChop?.();},house:()=>onTool('house'),rail:()=>onTool('rail'),view:onView,build:onBuild,cancel:onCancel,'rail-build':onRailBuild,'rail-cancel':onCancel,'day-night':onDayNight};
+  const handlers={axe:()=>{onTool('axe');onChop?.();},house:()=>onTool('house'),rail:()=>onTool('rail'),view:onView,build:onBuild,cancel:onCancel,'rail-build':onRailBuild,'rail-cancel':onCancel};
   function activate(event){const button=event.target.closest('button[data-action]');if(button&&!button.disabled)handlers[button.dataset.action]?.();event.stopPropagation();}
   const stop=event=>event.stopPropagation();
   root.addEventListener('click',activate);
@@ -131,18 +145,20 @@ export function createSettlementHud({
     if(disposed)return;
     current={...current,...next};
     const {logs:rawLogs=0,gold:rawGold=0,houses=1,connectedHouses=houses,cityHouses=connectedHouses,tool='axe',walking=true,
-      ready=true,canBuild=false,connected=true,reason='',targetTree=false,message='',visible=true,dayPhase='day',nightAmount,railway=null}=current;
+      ready=true,canBuild=false,connected=true,reason='',targetTree=false,message='',visible=true,dayPhase='day',nightAmount,railway=null,economic=false,resources,buildCost={timber:10,tools:0}}=current;
     const logs=count(rawLogs),gold=count(rawGold),growth=settlementHudProgress(cityHouses),night=dayPhase==='night';
+    const construction=settlementHudConstruction({economic,logs,resources,buildCost}),{cost,costLabel}=construction;
     const rail=settlementHudRailway(railway,{gold,ready}),railPlanning=tool==='rail'&&!walking;
     const lowLight=Number.isFinite(nightAmount)?nightAmount>=.45:night;
-    const signature=JSON.stringify([logs,gold,houses,growth.houses,tool,walking,ready,Boolean(canBuild),Boolean(connected),reason,Boolean(targetTree),message,visible,night,lowLight,rail]);
+    const signature=JSON.stringify([logs,gold,houses,growth.houses,tool,walking,ready,Boolean(canBuild),Boolean(connected),reason,Boolean(targetTree),message,visible,night,lowLight,rail,economic,construction]);
     if(signature===rendered)return;rendered=signature;
     const building=tool==='house'&&walking;
-    root.hidden=!visible;Object.assign(root.dataset,{tool,ready:String(Boolean(ready)),valid:String(Boolean(canBuild)),affordable:String(logs>=10),target:String(Boolean(targetTree)&&walking&&tool==='axe'),phase:night?'night':'day',theme:lowLight?'night':'day'});
+    root.hidden=!visible;Object.assign(root.dataset,{tool,ready:String(Boolean(ready)),valid:String(Boolean(canBuild)),affordable:String(construction.affordable),target:String(Boolean(targetTree)&&walking&&tool==='axe'),phase:night?'night':'day',theme:lowLight?'night':'day'});
+    text(nodes['timber-label'],economic?'Timber':'Logs');text(nodes['house-cost'],`${cost}${buildCost.tools?` + ${buildCost.tools} tools`:''}`);nodes['house-cost'].parentElement.setAttribute('aria-label',costLabel);
     text(nodes.logs,inventoryNumber(logs));text(nodes.gold,inventoryNumber(gold));
-    nodes['wood-stock'].title=`${number.format(logs)} logs`;nodes['gold-stock'].title=`${number.format(gold)} gold`;
-    nodes['wood-stock'].setAttribute('aria-label',`${logs} logs. Ten logs builds one house.`);
-    nodes['gold-stock'].setAttribute('aria-label',`${gold} gold. Your city homes earn one gold each at sunset.`);
+    nodes['wood-stock'].title=`${number.format(logs)} ${economic?'available timber':'logs'}`;nodes['gold-stock'].title=`${number.format(gold)} gold`;
+    nodes['wood-stock'].setAttribute('aria-label',`${logs} ${economic?'available timber':'logs'}. A house costs ${costLabel}.`);
+    nodes['gold-stock'].setAttribute('aria-label',`${gold} gold. ${economic?'Fed homes earn income every twenty seconds. Trade transfers gold between towns.':'Your city homes earn one gold each at sunset.'}`);
     text(nodes.level,String(growth.level));text(nodes['city-label'],growth.level?'City level':'Outpost');
     text(nodes['city-progress'],growth.complete?'Max':`${growth.houses} / ${growth.next}`);
     text(nodes['growth-caption'],growth.complete?'fully grown':growth.level?'next level':'toward city');
@@ -150,15 +166,14 @@ export function createSettlementHud({
     nodes.development.dataset.complete=String(growth.complete);
     const development=growth.complete?`City level 5. ${growth.houses} homes. Maximum level.`:`${growth.level?`City level ${growth.level}`:'Outpost'}. ${growth.houses} of ${growth.next} homes toward ${growth.level?'the next level':'forming a city'}.`;
     nodes.development.setAttribute('aria-label',development);
-    text(nodes['day-phase'],night?'Nighttime':'Daytime');text(phaseLabel,night?'Day':'Night');
+    text(nodes['day-phase'],night?'Nighttime':'Daytime');
     const phaseSymbol=night?'moon':'sun';
     if(nodes['phase-symbol'].dataset.kind!==phaseSymbol){nodes['phase-symbol'].innerHTML=symbols[phaseSymbol];nodes['phase-symbol'].dataset.kind=phaseSymbol;}
-    buttons['day-night'].setAttribute('aria-label',night?'Skip to day':'Skip to night and collect daily income');
     nodes['build-actions'].hidden=!building;
     text(nodes.placement,connected?'Joins city':'New home');
-    nodes.placement.setAttribute('aria-label',connected?'Spend ten logs. Joins a city with a path.':'Spend ten logs. Paths form at three nearby homes.');
-    const invalidReason=reason||(logs<10?`${10-logs} more logs needed`:'Choose clear, level ground');
-    text(nodes.validity,!ready?'Preparing…':canBuild?'':logs<10?`${10-logs} logs short`:invalidReason.replace(/[.!]$/,''));
+    nodes.placement.setAttribute('aria-label',`Spend ${costLabel}. ${connected?'Joins a city with a path.':'Paths form at three nearby homes.'}`);
+    const invalidReason=reason||construction.shortage||'Choose clear, level ground';
+    text(nodes.validity,!ready?'Preparing…':canBuild?'':invalidReason.replace(/[.!]$/,''));
     nodes.validity.hidden=ready&&canBuild;
     nodes.validity.dataset.valid=String(Boolean(canBuild));
     nodes['rail-actions'].hidden=!railPlanning;nodes['rail-actions'].dataset.stage=rail.stage;
@@ -170,18 +185,17 @@ export function createSettlementHud({
     buttons.rail.hidden=walking;buttons.axe.hidden=!walking;buttons.house.hidden=!walking;
     buttons.rail.setAttribute('aria-label',`Plan a railway. Costs ${rail.cost} gold. ${rail.hasCity?'Select one of your cities, then a destination.':'Grow to 3 homes first.'}`);
     buttons.axe.setAttribute('aria-pressed',String(tool==='axe'));buttons.house.setAttribute('aria-pressed',String(building));buttons.rail.setAttribute('aria-pressed',String(railPlanning));
-    buttons.house.setAttribute('aria-label',`Place a house. Costs ten logs. ${logs>=10?'Enough logs gathered.':`${10-logs} more logs needed.`}`);
-    for(const key of ['axe','house','rail','view','cancel','rail-cancel','day-night'])buttons[key].disabled=!ready;
+    buttons.house.setAttribute('aria-label',`Place a house. Costs ${costLabel}. ${construction.readiness}`);
+    buttons.house.title=`Build · B · ${costLabel}. ${construction.readiness}`;
+    for(const key of ['axe','house','rail','view','cancel','rail-cancel'])buttons[key].disabled=!ready;
     buttons.axe.disabled=!ready||!walking;buttons.house.disabled=!ready||!walking;
     buttons.build.disabled=!ready||!canBuild||!building;
-    buttons.build.setAttribute('aria-label',canBuild?`Build house. Spend ten logs. ${connected?'Joins a city.':'Paths form at three nearby homes.'}`:`Cannot build here. ${invalidReason}`);
+    buttons.build.setAttribute('aria-label',canBuild?`Build house. Spend ${costLabel}. ${connected?'Joins a city.':'Paths form at three nearby homes.'}`:`Cannot build here. ${invalidReason}`);
     text(viewLabel,walking?'Overview':'Walk');buttons.view.title=`${walking?'Overview':'Walk'} · V`;buttons.view.setAttribute('aria-label',walking?'Switch to overview':'Return to your traveller');
     const viewIcon=walking?'map':'walk';if(buttons.view.dataset.icon!==viewIcon){buttons.view.querySelector('[data-action-icon]').innerHTML=symbols[viewIcon];buttons.view.dataset.icon=viewIcon;}
-    const toggleIcon=night?'sun':'moon';if(buttons['day-night'].dataset.icon!==toggleIcon){buttons['day-night'].querySelector('[data-action-icon]').innerHTML=symbols[toggleIcon];buttons['day-night'].dataset.icon=toggleIcon;}
-    buttons['day-night'].title=`${night?'Day':'Night'} · N`;
     nodes.movement.hidden=!walking||building;
     const toolAnnouncement=railPlanning?`Railway selected. ${rail.cost} gold. ${rail.selection}. ${rail.status}. ${rail.showConfirm&&railway?.code!=='out-of-range'?'Drag route dots to adjust. ':''}${rail.canBuild?'Enter confirms the purchase. ':''}Escape cancels.`:building?'House placement selected. Aim at clear ground. Enter places; Escape cancels.':walking?'Axe selected. E or click chops a nearby tree.':'T plans a railway. V returns to your traveller to build houses.';
-    const announcement=[ready?`${logs} logs. ${gold} gold.`:'Preparing your clearing.',development,toolAnnouncement,walking?'':'Overview.',message].filter(Boolean).join(' ');
+    const announcement=[ready?`${logs} ${economic?'available timber':'logs'}. ${gold} gold.`:'Preparing your clearing.',development,toolAnnouncement,walking?'':'Overview.',message].filter(Boolean).join(' ');
     if(announcement!==announced){text(nodes.announcements,announcement);announced=announcement;}
   }
   function showIncome({amount,days=1}={}){

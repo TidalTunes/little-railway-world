@@ -24,7 +24,7 @@ export function settlementTreeId(tree){
   return tree?.id!=null?String(tree.id):`tree:${tree?.x}:${tree?.z}:${tree?.variant??0}`;
 }
 
-export function treeLogYield(seed,tree){return 2+hash(`${seed}:${settlementTreeId(tree)}:logs`)%3;}
+export function treeLogYield(seed,tree,economic=false){return (economic?4:2)+hash(`${seed}:${settlementTreeId(tree)}:logs`)%3;}
 
 function houseFootprint(pose){
   const width=pose.width??SETTLEMENT.houseWidth,depth=pose.depth??SETTLEMENT.houseDepth;
@@ -63,9 +63,29 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   // retain their reservations while their scenery chunk is off screen.
   const villages=copy(config.farmVillages??{});
   const villageBuildings=[...villages.houses??[],...villages.buildings??[]],villagePaths=villages.paths??[];
-  let cities=[],clusters=[];
-  let logs=0,gold=0,lastIncomeDay=0,revision=0,nextHouse=2,developmentSearching=false;
+  const economic=Boolean(world.gameplay?.economy);
+  let cities=[],clusters=[],economy=null,establishedCity=false;
+  let logs=economic?12:0,gold=economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
+
+  // Dispersed early outposts must still be able to form their first depot.
+  // Requiring tools before any city exists would make them unobtainable.
+  const constructionCost=()=>({timber:economic?8:SETTLEMENT.houseCost,tools:economic&&establishedCity?2:0});
+  function resourcesAt(point){
+    const resources=economic&&economy&&finitePoint(point)?economy.resourcesAt(point):{timber:logs,grain:0,tools:0};
+    return Object.fromEntries(['timber','grain','tools'].map(key=>[key,Number.isSafeInteger(resources?.[key])&&resources[key]>=0?resources[key]:0]));
+  }
+  function resourceFailure(cost,resources){
+    const missing=Object.entries(cost).filter(([key,amount])=>amount>resources[key]).map(([key,amount])=>[key,amount-resources[key]]);
+    if(!missing.length)return null;
+    if(!economic)return {code:'not-enough-logs',reason:`Collect ${missing[0][1]} more ${missing[0][1]===1?'log':'logs'}`};
+    return {code:missing.some(([key])=>key==='tools')?'not-enough-tools':'not-enough-timber',
+      reason:`Need ${missing.map(([key,amount])=>`${amount} more ${key}`).join(' and ')}`};
+  }
+  function setEconomy(adapter){
+    if(adapter!==null&&(!adapter||typeof adapter.resourcesAt!=='function'||typeof adapter.spendConstruction!=='function'))throw new TypeError('Economy requires resource and construction methods');
+    economy=adapter;revision++;
+  }
 
   function homeComponents(items=homes,edges=links){
     const groups=new Map(items.map(home=>[home.id,home.id])),order=new Map(items.map((home,index)=>[home.id,index]));
@@ -93,6 +113,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
       const oldIds=new Set(cluster.map(home=>previous.get(home.id)).filter(Boolean));
       for(const building of buildings)if(oldIds.has(building.cityId))building.cityId=cityId;
       cities.push(record);
+      establishedCity=true;
     }
     const byId=new Map([...homes,...buildings].map(item=>[item.id,item]));
     for(const path of paths)path.cityId=byId.get(path.fromHouseId)?.cityId??byId.get(path.toHouseId)?.cityId??null;
@@ -151,7 +172,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const cityHouseCount=neighbours.length+1,connected=cityHouseCount>=3;
     const cityId=connected?cityIdFor(neighbours[0].id):null;
     house.cityId=cityId;house.connected=connected;
-    const base={house,cost:SETTLEMENT.houseCost,affordable:logs>=SETTLEMENT.houseCost,
+    const costs=constructionCost(),resources=resourcesAt(pose),shortage=resourceFailure(costs,resources);
+    const base={house,cost:costs.timber,costs,resources,affordable:!shortage,
       connected,cityId,cityHouseCount,cityLevel:settlementCityLevel(cityHouseCount),connectionHouseId,distanceToCity,path:null,paths:[],links:[]};
     const invalid=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(!finitePoint(house)||!Number.isFinite(house.rotation))return invalid('invalid-position','Choose a place for your house');
@@ -187,20 +209,27 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
       }
     }
     base.path=base.paths[0]??null;
-    if(!base.affordable)return {...base,valid:false,siteValid:true,code:'not-enough-logs',reason:`Collect ${SETTLEMENT.houseCost-logs} more ${SETTLEMENT.houseCost-logs===1?'log':'logs'}`};
+    if(!base.affordable)return {...base,valid:false,siteValid:true,...shortage};
     return {...base,valid:true,siteValid:true,code:'ready',reason:connected?'Joins your city':neighbours.length?'Grows your settlement':'Starts a new outpost'};
   }
 
   function build(pose,context){
     const evaluation=evaluateBuild(pose,context);
     if(!evaluation.valid)return {ok:false,...evaluation};
+    // The adapter atomically checks and spends carried/depot timber and tools.
+    // A stale preview or failed payment cannot reserve a home or a road.
+    if(economic&&economy){
+      const payment=economy.spendConstruction(pose,evaluation.costs);
+      if(!payment?.ok)return {...evaluation,...payment,ok:false,valid:false,affordable:false,
+        code:payment?.code??'resources-changed',reason:payment?.reason??'Construction resources changed'};
+    }else logs-=evaluation.cost;
     const house={...evaluation.house};nextHouse++;
     delete house.width;delete house.depth;
     homes.push(house);links.push(...evaluation.links);
-    paths.push(...evaluation.paths);logs-=SETTLEMENT.houseCost;refreshConnections();revision++;
+    paths.push(...evaluation.paths);refreshConnections();revision++;spatialRevision++;
     const developed=develop(context);
     return {ok:true,house:copy(house),paths:copy(evaluation.paths),addedBuildings:developed.buildings,addedPaths:developed.paths,
-      developmentSearching:developed.searching,cost:SETTLEMENT.houseCost,connected:house.connected,cityId:house.cityId,
+      developmentSearching:developed.searching,cost:evaluation.cost,costs:evaluation.costs,connected:house.connected,cityId:house.cityId,
       cityHouseCount:evaluation.cityHouseCount,cityLevel:evaluation.cityLevel,totalLogs:logs};
   }
 
@@ -244,7 +273,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
       }
       else developmentSearching=true;
     }
-    if(addedBuildings.length)revision++;
+    if(addedBuildings.length){revision++;spatialRevision++;}
     return {buildings:copy(addedBuildings),paths:copy(addedPaths),searching:developmentSearching,
       pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments())};
   }
@@ -254,14 +283,16 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const treeId=settlementTreeId(tree);
     if(removed.has(treeId))return {ok:false,code:'already-chopped'};
     if(player&&(!finitePoint(player)||surfaceDistance(world,player,tree)>SETTLEMENT.chopReach))return {ok:false,code:'out-of-reach'};
-    const gained=treeLogYield(world.seed,tree);
-    removed.add(treeId);logs+=gained;revision++;
+    const gained=treeLogYield(world.seed,tree,economic);
+    if(!Number.isSafeInteger(logs+gained))return {ok:false,code:'resource-overflow'};
+    removed.add(treeId);logs+=gained;revision++;spatialRevision++;
     return {ok:true,treeId,logs:gained,totalLogs:logs};
   }
 
   /** Residents never enter this calculation. Only owned homes belonging to a
    * formed city earn income. Repeated frames or view changes cannot pay twice. */
   function settleIncome(completedDays){
+    if(economic)return null;
     if(!Number.isSafeInteger(completedDays)||completedDays<=lastIncomeDay)return null;
     const days=completedDays-lastIncomeDay;
     const eligible=homes.filter(home=>home.ownerId===ownerId&&home.connected&&home.cityId!=null);
@@ -278,13 +309,28 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     gold-=amount;revision++;return {ok:true,cost:amount,totalGold:gold};
   }
 
+  function spendLogs(amount){
+    if(!Number.isSafeInteger(amount)||amount<0)return {ok:false,code:'invalid-cost'};
+    if(logs<amount)return {ok:false,code:'not-enough-timber',cost:amount,totalLogs:logs};
+    if(amount){logs-=amount;revision++;}return {ok:true,cost:amount,totalLogs:logs};
+  }
+  function addLogs(amount){
+    if(!Number.isSafeInteger(amount)||amount<0||!Number.isSafeInteger(logs+amount))return {ok:false,code:'invalid-credit'};
+    if(amount){logs+=amount;revision++;}return {ok:true,amount,totalLogs:logs};
+  }
+  function creditGold(amount){
+    if(!Number.isSafeInteger(amount)||amount<0||!Number.isSafeInteger(gold+amount))return {ok:false,code:'invalid-credit'};
+    if(amount){gold+=amount;revision++;}return {ok:true,amount,totalGold:gold};
+  }
+
   refreshConnections();
   return {
-    get logs(){return logs;},get gold(){return gold;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get ownerId(){return ownerId;},
+    get logs(){return logs;},get gold(){return gold;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get spatialRevision(){return spatialRevision;},get ownerId(){return ownerId;},
+    get economic(){return economic;},get constructionCost(){return constructionCost();},
     get houses(){return copy(homes);},get buildings(){return copy(buildings);},get cities(){return copy(cities);},get clusters(){return copy(clusters);},
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
-    snapshot(){return {logs,gold,lastIncomeDay,revision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
-    evaluateBuild,build,chop,develop,settleIncome,spendGold,
+    snapshot(){return {logs,gold,lastIncomeDay,revision,spatialRevision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
+    evaluateBuild,build,chop,develop,settleIncome,spendGold,spendLogs,addLogs,creditGold,setEconomy,resourcesAt,
   };
 }

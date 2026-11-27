@@ -96,6 +96,6 @@ test('the real starter grove supplies enough timber and clear neighbouring groun
   const preview=game.evaluateBuild(site,context);
   assert.equal(preview.valid,true);assert.equal(preview.connected,false);assert.equal(preview.cityHouseCount,2);
   const result=game.build(site,context);
-  assert.equal(result.ok,true);assert.equal(game.logs,before-10);assert.equal(game.houses.length,2);
+  assert.equal(result.ok,true);assert.equal(game.logs,before-8);assert.equal(game.houses.length,2);
   assert.equal(game.houses.every(home=>!home.connected),true);assert.deepEqual(game.cities,[]);assert.deepEqual(game.paths,[]);
 });

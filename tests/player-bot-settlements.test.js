@@ -40,10 +40,11 @@ test('render integration keeps each owner’s city, resident network and nightti
   }
   for(let step=0;step<600;step++)bots.update(.2,{camera,focus:{x:12,z:0},dayPhase:'night',night:1});
   for(const entry of bots.entries){assert.equal(entry.residents.stats.indoors,3);assert.equal(entry.residents.stats.visible,0);}
-  const artRevisions=bots.entries.map(entry=>entry.art.revision);
+  const artRevisions=bots.entries.map(entry=>entry.art.revision),layouts=bots.entries.map(entry=>entry.snapshot);
   bots.simulate(0,{completedDays:1});bots.simulate(0,{completedDays:1});
   assert.deepEqual(bots.entries.map(entry=>entry.game.gold),[3,3]);assert.equal(session.player.gold,0);
   assert.deepEqual(bots.entries.map(entry=>entry.art.revision),artRevisions,'income does not rebuild building meshes or reset resident graphs');
+  bots.entries.forEach((entry,index)=>assert.equal(entry.snapshot,layouts[index],'wallet changes do not clone the full scenery/resident layout'));
   for(let step=0;step<100;step++)bots.update(.2,{camera,focus:{x:12,z:0},dayPhase:'day',night:0});
   for(const entry of bots.entries){assert.equal(entry.residents.stats.indoors,0);assert.equal(entry.residents.stats.visible,3);}
 });

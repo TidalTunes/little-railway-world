@@ -11,9 +11,10 @@ export function createPlayerBotSettlements({world,session,parent,mapParent,marke
   const village=world.gameplay.farmVillages;
   const permanent=[...world.gameplay.botScenery??[],...village?.houses??[],...village?.buildings??[]];
   let scenery=[],sceneryRevision=-1,meshRevision=-1,meshes=[];
+  const spatialRevision=()=>session.spatialRevision??session.revision;
   function getPlacements(){
-    if(sceneryRevision!==session.revision){
-      scenery=[...permanent.filter(item=>!session.shared.isSceneryRemoved?.(item)),...session.buildings];sceneryRevision=session.revision;
+    if(sceneryRevision!==spatialRevision()){
+      scenery=[...permanent.filter(item=>!session.shared.isSceneryRemoved?.(item)),...session.buildings];sceneryRevision=spatialRevision();
     }
     return scenery;
   }
@@ -24,7 +25,7 @@ export function createPlayerBotSettlements({world,session,parent,mapParent,marke
     const residents=createSettlementResidents(parent,world,owner);
     const levels=createCityLevelMarkers(markerParent,markerMapParent,world,owner);
     const actor=createPlayerBotArt(parent,mapParent,world,{...owner,markerParent,markerMapParent});
-    const bot=createPlayerBot(world,game,{config,getPlacements,getRevision:()=>session.revision,
+    const bot=createPlayerBot(world,game,{config,getPlacements,getRevision:spatialRevision,
       onChop(result,tree,position){
         const direction={x:tree.x-position.x,z:tree.z-position.z};
         if(!detail.fellTree(result.treeId,{direction}))detail.removeTree(result.treeId);
@@ -33,21 +34,22 @@ export function createPlayerBotSettlements({world,session,parent,mapParent,marke
   });
   function synchronize(){
     for(const entry of entries){
-      if(entry.revision===entry.game.revision)continue;
+      const revision=entry.game.spatialRevision??entry.game.revision;
+      if(entry.revision===revision)continue;
       const snapshot=entry.game.snapshot();
       if(entry.houseCount!==snapshot.houses.length||entry.buildingCount!==snapshot.buildings.length){
         entry.art.sync(snapshot.houses,snapshot.paths,snapshot.buildings,{animate:entry.revision>=0,reducedMotion:reducedMotion?.matches});
         entry.residents.sync(snapshot);entry.levels.sync(snapshot.cities);
         entry.houseCount=snapshot.houses.length;entry.buildingCount=snapshot.buildings.length;meshRevision=-1;
       }
-      entry.snapshot=snapshot;entry.revision=entry.game.revision;
+      entry.snapshot=snapshot;entry.revision=revision;
     }
   }
   synchronize();
   return {entries,
     get revision(){return entries.reduce((sum,entry)=>sum+entry.game.revision,0);},
     get positions(){return entries.map(entry=>entry.bot.position);},
-    get meshes(){synchronize();if(meshRevision!==session.revision){meshes=entries.flatMap(entry=>entry.art.meshes);meshRevision=session.revision;}return meshes;},
+    get meshes(){synchronize();if(meshRevision!==spatialRevision()){meshes=entries.flatMap(entry=>entry.art.meshes);meshRevision=spatialRevision();}return meshes;},
     snapshot(){return entries.map(entry=>({...entry.bot.snapshot(),settlement:entry.game.snapshot()}));},
     simulate(dt,{completedDays=0}={}){
       for(const entry of entries){entry.bot.update(dt);entry.game.settleIncome(completedDays);}

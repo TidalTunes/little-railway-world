@@ -66,7 +66,6 @@ const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer});
 const calendar=createDayCalendar();
 let daylightStartedAt;
 const calendarWallTime=()=>daylightStartedAt===undefined?0:(performance.now()-daylightStartedAt)/1000;
-const advanceDayNight=()=>calendar.advance(calendarWallTime());
 const nightSky=createNightSky(scene,mapScene);
 const walkingSky=createWalkingSky(scene),walkingSunDirection=new THREE.Vector3();
 let paused=reducedMotion.matches;
@@ -74,7 +73,7 @@ reducedMotion.addEventListener('change',event=>{paused=event.matches;});
 const compositor=createViewCompositor(renderer);
 const geometryUploader=createGeometryUploader(renderer);
 const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
-  getTrains:()=>trains,getWorldRoot:()=>worldRoot,getWorld:()=>model,
+  getTrains:()=>settlement?[...trains,...settlement.tradeArt?.trains??[]]:trains,getWorldRoot:()=>worldRoot,getWorld:()=>model,
   isDetailReady:()=>!!detail?.ready&&shaderReady,
   onPause:()=>{paused=!paused;},
   onRegenerate:()=>{
@@ -88,7 +87,6 @@ const {navigation,controls}=view;
 const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking,
   onLockChange:locked=>{canvas.dataset.pointerLocked=String(locked);refreshCanvasCursor();},
   onKey:event=>{
-    if(event.key.toLowerCase()==='n'){if(!event.repeat)advanceDayNight();return true;}
     return settlement?.keyDown(event)??false;
   }});
 const transitionFocus=new THREE.Vector3();
@@ -255,7 +253,7 @@ async function loadWorld(input={}){
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
-      onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},onDayNight:advanceDayNight,reducedMotion});
+      onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
       getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
@@ -266,7 +264,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. Move the cursor to look around. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; look to aim directly in front of you, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths and sleep indoors at night. Gray level-one farming villages have their own residents who visit nearby fields. Rival coral, gold and blue settlers chop real trees and build their own cities to level five, then stop. Their resources and income are separate from yours. V switches between your traveller and overview. Houses can only be built in third person. Tab releases the mouse for controls. In overview, T selects railway building: choose one of your cities, hover a destination to preview, click to select it, drag route dots to shape the line, then Enter builds the route and stations for five gold. Escape cancels. Each player-owned city home earns one gold at sunset; gray village homes earn you no income. Day and night each last five minutes; N or the day/night button advances to the next phase for testing.');
+    if(settlement)canvas.setAttribute('aria-label','Build a trading town. WASD moves, Shift runs, Space jumps. E or click chops nearby trees for timber. B aims a house, click or Enter builds, Escape cancels. Three nearby homes form a city. Choose lumber, farming or tools with 1, 2 or 3. Later homes need tools. G stores carried timber in a nearby town. Fed homes earn gold every twenty seconds; spare tools increase their income. V switches to overview; select towns to inspect their depots. T plans a railway: choose your city, choose a partner, drag dots to shape the route, Enter confirms. Trains automatically trade available goods and carry payments. Tab releases the mouse for controls. Day and night each last five minutes.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
@@ -305,11 +303,11 @@ function metrics(now,interval,cpu){
   }
   if(now-measurementAt<1000)return;measurementAt=now;
   const percentile=values=>[...values.subarray(0,sampleCount)].sort((a,b)=>a-b)[Math.floor((sampleCount-1)*.95)]??0;
-  const active=trains.reduce((count,train)=>count+(train.state.active?1:0),0);
+  const active=trains.reduce((count,train)=>count+(train.state.active?1:0),0)+(settlement?.tradeArt?.stats.active??0);
   Object.assign(canvas.dataset,{frameP95:percentile(frameTimes).toFixed(2),cpuP95:percentile(cpuTimes).toFixed(2),
     drawCalls:String(renderer.info.render.calls),triangles:String(renderer.info.render.triangles),
     geometries:String(renderer.info.memory.geometries),activeTrains:String(active),mapNetworkVisibility:mapWorld.stats.networkVisibility.toFixed(3),
-    visibleTrains:String(railway.stats?.visibleTrains??0),detailChunks:String(detail.stats?.chunks??detail.stats?.loadedChunks??0),
+    visibleTrains:String((railway.stats?.visibleTrains??0)+(settlement?.tradeArt?.stats.visible??0)),detailChunks:String(detail.stats?.chunks??detail.stats?.loadedChunks??0),
     detailReady:String(detail.ready),detailSettled:String(detail.settled),detailRevealing:String(detail.stats.revealingChunks),detailBase:String(detailBase.root.visible),detailRequired:String(detail.stats.requiredChunks??0),
     detailPending:String(detail.stats.pendingChunks??0),detailWorkers:String(worker.stats.workers),detailWorkerMs:String(Math.round(worker.stats.lastChunkMs)),detailBytes:String(detail.stats.bytes??0),
     detailLimited:String(detail.stats.coverageLimited??false),detailErrors:String(detail.stats.errors??0),
@@ -423,7 +421,7 @@ frameHandle=requestAnimationFrame(frame);
 
 window.__railway={
   get ready(){return frames>0;},get time(){return time;},get paused(){return paused;},
-  get trains(){return trains.map(t=>({id:t.state.id,ownerId:t.state.ownerId,homeCityId:t.state.homeCityId,
+  get trains(){return [...trains,...settlement?.tradeArt?.trains??[]].map(t=>({id:t.state.id,ownerId:t.state.ownerId,homeCityId:t.state.homeCityId,
     x:t.parts[0].position.x,y:t.parts[0].position.y,z:t.parts[0].position.z,cars:t.parts.length}));},
   get render(){return {...renderer.info.render,geometries:renderer.info.memory.geometries,...railway?.stats,...detail?.stats};},
   get camera(){return {zoom:camera.zoom,width:innerWidth,height:innerHeight,mode:walkingMode?'person':view.mode,mapBlend:renderedMapBlend,following:view.selected,transitioning:characterTransition.active};},
@@ -431,7 +429,7 @@ window.__railway={
 window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),
-  inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot(),railway:settlement.railways.snapshot()}:null,
+  inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot(),railway:settlement.railways.snapshot(),economy:settlement.economy?.snapshot(),strategies:settlement.economicBots?.snapshot()}:null,
   generateWorld,validateWorld,createStressWorld,
 });
 const parameters=new URLSearchParams(location.search);

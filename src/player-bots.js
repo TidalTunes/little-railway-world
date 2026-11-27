@@ -1,5 +1,6 @@
 import {SETTLEMENT,settlementTreeId} from './settlement-game.js';
 import {worldSurface} from './world-model.js';
+import {settlementDoor} from './settlement-paths.js';
 
 export const PLAYER_BOT=Object.freeze({speed:2.3,targetHouses:15,swingDuration:.58,swingImpact:.22,
   constructionTime:2,decisionInterval:.16,radius:.17,searchRadius:38,navigationStep:.65,maxRouteNodes:1100,routeNodeBudget:12});
@@ -21,16 +22,17 @@ class Queue{
  * house, road and milestone; the bot only chooses inputs and walks to them.
  * Its CPU scenery catalogue remains available when no camera is nearby. */
 export function createPlayerBot(world,game,{config,getPlacements=()=>world.gameplay?.botScenery??[],
-  getRevision=()=>game.revision,onChop=()=>{},onBuild=()=>{},surfaceAt=(x,z)=>worldSurface(world,x,z)}={}){
+  getRevision=()=>game.spatialRevision??game.revision,onChop=()=>{},onBuild=()=>{},surfaceAt=(x,z)=>worldSurface(world,x,z),policy:initialPolicy={}}={}){
   if(!finite(config?.spawn)||!finite(config?.starterHouse))throw new TypeError('Player bot requires a spawn and starting house');
   const position={x:config.spawn.x,y:surfaceAt(config.spawn.x,config.spawn.z).height+.035,z:config.spawn.z};
   const anchor=config.starterHouse,phase=hash(`${world.seed}:${config.id}`)*tau,terrainCache=new Map();
   let heading=config.spawn.heading??0,speed=0,gait=0,swingTime=0,state='thinking',cooldown=hash(config.id)*.4;
   let revision=null,placements=[],obstacles=new Map(),route=[],routeIndex=0,job=null,impact=false,stopped=false;
   let siteIndex=0,sites=[],clearingTree=null,treeChoices=[],treeIndex=0,chosenRevision=null,planner=null;
-  let constructionTime=0,elapsed=0,statusRevision=-1,houseCount=1,level=0;
-  function updateStatus(){if(statusRevision!==game.revision){statusRevision=game.revision;houseCount=game.houses.length;level=game.cities[0]?.level??0;}}
-  const stats={distance:0,trees:0,logsEarned:0,houses:0,routeSearches:0,routeNodes:0,siteChecks:0,blocked:0};
+  let constructionTime=0,elapsed=0,statusRevision=-1,houseCount=1,level=0,timberDelivery=null;
+  let policy={targetHouses:PLAYER_BOT.targetHouses,logReserve:0,allowChop:true,paused:false,...initialPolicy};
+  function updateStatus(){if(statusRevision!==(game.spatialRevision??game.revision)){statusRevision=game.spatialRevision??game.revision;houseCount=game.houses.length;level=game.cities[0]?.level??0;}}
+  const stats={distance:0,trees:0,logsEarned:0,logsDeposited:0,deliveries:0,houses:0,routeSearches:0,routeNodes:0,siteChecks:0,blocked:0};
 
   function refresh(){
     const next=getRevision();if(next===revision)return;
@@ -130,6 +132,17 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
   }
   const context=player=>({placements,ready:true,enforceReach:true,heading:job?.heading??heading,...(player?{player}:{})});
   function beginRoute(points,nextJob){route=points;routeIndex=0;job=nextJob;state='walking';cooldown=0;}
+  function* chooseDelivery(){
+    if(game.logs<=timberDelivery.keepCarried){timberDelivery=null;return;}
+    const homes=game.houses.filter(home=>home.cityId===timberDelivery.cityId).sort((a,b)=>distance(a,position)-distance(b,position));
+    if(!homes.length){timberDelivery=null;return;}
+    for(const home of homes.slice(0,3)){
+      const target=settlementDoor(world,home,Math.max(1.52,(home.depth??2.2)/2+.42));
+      const points=yield* navigate(target);
+      if(points){beginRoute(points,{kind:'depot',homeId:home.id,site:target});return;}
+    }
+    state='waiting';cooldown=3;
+  }
   function* chooseTree(preferred=null){
     if(!treeChoices.length||chosenRevision!==revision||preferred){
       treeChoices=placements.filter(item=>item.kind==='tree'&&!game.isTreeRemoved(item)&&distance(item,anchor)<=PLAYER_BOT.searchRadius)
@@ -176,6 +189,9 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
           .sort((a,b)=>distance(a,position)-distance(b,position))[0]??null;
         continue;
       }
+      // Supply is local to this site's city. A full depot in a different town
+      // must not send the traveller to an unpaid construction job.
+      if(!evaluation.affordable)continue;
       const nextJob={kind:'house',site:{...site},heading:facing};
       if(distance(position,site)<SETTLEMENT.buildReach-.3){
         job=nextJob;state='building';constructionTime=0;return true;
@@ -187,20 +203,28 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       }
     }
     if(siteIndex>=sites.length){
-      if(clearingTree){const tree=clearingTree;clearingTree=null;siteIndex=0;return yield* chooseTree(tree);}
+      if(clearingTree&&policy.allowChop){const tree=clearingTree;clearingTree=null;siteIndex=0;return yield* chooseTree(tree);}
       siteIndex=0;cooldown=2;
     }
     return false;
   }
   function* think(){
     refresh();speed=0;
+    if(policy.paused){state='waiting';cooldown=1;return;}
+    if(timberDelivery){yield* chooseDelivery();return;}
     const development=game.develop(context(position));
     if(development.buildings.length){refresh();constructionTime=PLAYER_BOT.constructionTime;state='construction';return;}
-    if(game.houses.length>=PLAYER_BOT.targetHouses){
+    // Production supplies remain useful after reaching the current housing
+    // milestone. This reserve is explicit and bounded by the economic policy.
+    if(game.logs<policy.logReserve){
+      if(policy.allowChop)yield* chooseTree();else{state='waiting';cooldown=1;}
+      return;
+    }
+    if(game.houses.length>=policy.targetHouses){
       if(!game.pendingMilestones.length){stopped=true;state='complete';job=null;return;}
       // Level-five homes stop immediately. A crowded landmark site may need a
       // final tree clearing; the same axe/reach/reward rules apply to that work.
-      if(!development.searching){
+      if(!development.searching&&policy.allowChop){
         const homes=game.houses,center={x:homes.reduce((sum,p)=>sum+p.x,0)/homes.length,z:homes.reduce((sum,p)=>sum+p.z,0)/homes.length};
         const tree=placements.filter(p=>p.kind==='tree'&&!game.isTreeRemoved(p)&&distance(p,center)<18)
           .sort((a,b)=>distance(a,center)-distance(b,center))[0];
@@ -208,7 +232,13 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       }
       return;
     }
-    if(game.logs<SETTLEMENT.houseCost)yield* chooseTree();else yield* chooseHouse();
+    const cost=game.constructionCost??{timber:SETTLEMENT.houseCost,tools:0};
+    const resources=policy.resourcesAt?.(anchor)??game.resourcesAt?.(anchor)??{timber:game.logs,tools:0};
+    if((resources.tools??0)<cost.tools){
+      state='waiting';cooldown=1;
+    }else if((resources.timber??0)<cost.timber){
+      if(policy.allowChop)yield* chooseTree();else{state='waiting';cooldown=1;}
+    }else yield* chooseHouse();
   }
   function planStep(){
     const result=planner.next();
@@ -232,7 +262,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
         travelled+=amount;remaining-=amount;if(amount>=length-1e-8)routeIndex++;
       }
       stats.distance+=travelled;gait+=travelled*tau/1.05;speed=travelled/step;
-      if(routeIndex>=route.length){state=job.kind==='tree'?'chopping':'building';if(state==='chopping'){swingTime=PLAYER_BOT.swingDuration;impact=false;heading=Math.atan2(job.tree.x-position.x,job.tree.z-position.z);}else constructionTime=0;}
+      if(routeIndex>=route.length){state=job.kind==='tree'?'chopping':job.kind==='depot'?'depositing':'building';if(state==='chopping'){swingTime=PLAYER_BOT.swingDuration;impact=false;heading=Math.atan2(job.tree.x-position.x,job.tree.z-position.z);}else constructionTime=0;}
     }else if(state==='chopping'){
       swingTime=Math.max(0,swingTime-step);
       if(!impact&&swingTime<=PLAYER_BOT.swingDuration-PLAYER_BOT.swingImpact){
@@ -240,6 +270,10 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
         if(result.ok){stats.trees++;stats.logsEarned+=result.logs;onChop(result,job.tree,{...position});}
       }
       if(!swingTime){job=null;state='thinking';cooldown=.2;}
+    }else if(state==='depositing'){
+      const delivery=timberDelivery,amount=delivery?Math.min(delivery.amount,Math.max(0,game.logs-delivery.keepCarried)):0;
+      if(amount){const result=delivery.transfer({...position},amount);if(result?.ok){stats.logsDeposited+=result.amount??amount;stats.deliveries++;}}
+      timberDelivery=null;job=null;state='thinking';cooldown=.8;
     }else if(state==='building'){
       heading+=wrap(job.heading-heading)*Math.min(1,step*14);
       const result=game.build(job.site,context(position));
@@ -254,10 +288,22 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
   createSites();refresh();
   return{
     game,config,
+    requestTimberDelivery({cityId,amount,keepCarried=0,transfer}={}){
+      if(!cityId||!Number.isSafeInteger(amount)||amount<=0||!Number.isSafeInteger(keepCarried)||keepCarried<0||typeof transfer!=='function')throw new TypeError('Timber delivery requires a city, integer amount and transfer command');
+      if(timberDelivery)return false;
+      timberDelivery={cityId,amount,keepCarried,transfer};stopped=false;
+      if(state==='complete'||state==='waiting')state='thinking';cooldown=0;return true;
+    },
+    setPolicy(next={}){
+      if(next.targetHouses!==undefined&&(!Number.isSafeInteger(next.targetHouses)||next.targetHouses<1||next.targetHouses>64))throw new TypeError('Bot target must be 1–64 houses');
+      if(next.logReserve!==undefined&&(!Number.isSafeInteger(next.logReserve)||next.logReserve<0))throw new TypeError('Bot reserve must be nonnegative timber');
+      const changed=Object.entries(next).some(([key,value])=>policy[key]!==value);policy={...policy,...next};
+      if(changed){stopped=false;if(state==='complete'||state==='waiting')state='thinking';cooldown=0;}
+    },
     update(dt){if(!Number.isFinite(dt)||dt<=0||stopped)return;let left=Math.min(dt,60);while(left>1e-8&&!stopped){const step=Math.min(left,1/30);advance(step);left-=step;}},
     snapshot(){updateStatus();return{id:config.id,ownerId:game.ownerId,position:{...position},heading,speed,gait,swingTime,state,
-      houseCount,logs:game.logs,level,stopped,elapsed,stats:{...stats},
-      target:job?.kind==='tree'?{kind:'tree',id:settlementTreeId(job.tree),x:job.tree.x,z:job.tree.z}:job?.site?{kind:'house',...job.site}:null};},
-    get position(){return{...position};},get state(){return state;},get stopped(){return stopped;},get stats(){return{...stats};},
+      houseCount,logs:game.logs,level,stopped,elapsed,policy:{targetHouses:policy.targetHouses,logReserve:policy.logReserve,allowChop:policy.allowChop,paused:policy.paused},stats:{...stats},
+      target:job?.kind==='tree'?{kind:'tree',id:settlementTreeId(job.tree),x:job.tree.x,z:job.tree.z}:job?.site?{kind:job.kind==='depot'?'depot':'house',...job.site}:null};},
+    get position(){return{...position};},get state(){return state;},get stopped(){return stopped;},get deliveringTimber(){return Boolean(timberDelivery);},get stats(){return{...stats};},
   };
 }

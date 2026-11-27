@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import {createSettlementEconomy} from './settlement-economy.js';
+import {createEconomicBots} from './economic-bots.js';
+import {createTradeTrains} from './trade-trains.js';
+import {createEconomyHud} from './economy-hud.js';
 import {SETTLEMENT} from './settlement-game.js';
 import {createSettlementSession} from './settlement-session.js';
 import {createPlayerBotSettlements} from './player-bot-settlements.js';
@@ -17,7 +21,7 @@ import {walkingBuildAim} from './walking-build-aim.js';
 
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
-export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,onDayNight=()=>{},reducedMotion}){
+export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,reducedMotion}){
   let bots=null,railInfrastructure={revision:0,buildings:[],paths:[],corridors:[]};
   const session=createSettlementSession(world,{getInfrastructure:()=>railInfrastructure,getActors:()=>{
     const player=getPlayer();return [...(player?.initialized?[player.position]:[]),...bots?.positions??[]];
@@ -41,6 +45,14 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   }
   bots=createPlayerBotSettlements({world,session,parent,mapParent,markerParent,markerMapParent,detail,reducedMotion});
   const railways=createSettlementRailways(world,{session,getPlacements:()=>detail.placements});
+  const economy=world.gameplay.economy?createSettlementEconomy(world,{session,railways}):null;
+  if(economy)for(const account of [game,...session.bots.map(entry=>entry.game)])account.setEconomy({
+    resourcesAt:point=>economy.resourcesAt(account.ownerId,point),
+    spendConstruction:(point,cost)=>economy.spendConstruction(account.ownerId,point,cost)});
+  const tradeArt=economy?createTradeTrains(parent,mapParent,world):null;
+  const botRailPlanner=economy?createSettlementRailwayPlanner(world,railways,session,{getPlacements:()=>detail.placements}):null;
+  const economicBots=economy?createEconomicBots(world,{session,bots,railways,economy,onRailBuild:applyRailBuild,planRoute:(from,to,options)=>botRailPlanner.request(from,to,options)}):null;
+  let inspectedCity=null,industryCity=null,economyView=null,economyViewKey='';
   const railPlanner=createSettlementRailwayPlanner(world,railways,session,{getPlacements:()=>detail.placements});
   const railwayArt=createSettlementRailwayArt(parent,mapParent,world);
   const railPreviewFlow=createRailwayPreview(railways,railPlanner);
@@ -68,9 +80,19 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     railControlPair='';railControlCount=undefined;
   }
   const hud=createSettlementHud({parent:canvas.parentElement,playerColor:'#257d70',
-    onTool:selectTool,onView:()=>{selectTool('axe');onView();},onDayNight:()=>{onDayNight();focusCanvas();},
+    onTool:selectTool,onView:()=>{selectTool('axe');onView();},
     onChop:()=>{selectTool('axe');pendingChop=true;},
     onBuild:()=>{pendingBuild=true;focusCanvas();},onRailBuild:()=>{pendingRailBuild=railConfirmed&&!railPlanning&&!!railPreview?.valid;focusCanvas();},onCancel:()=>selectTool('axe')});
+  function changeIndustry(cityId,type){const result=economy?.setIndustry(cityId,type,game.ownerId);notify(result?.ok?`${type==='lumber'?'Timber yard':type==='farm'?'Market gardens':'Tool workshop'} selected`:result?.reason??(result?.code==='industry-cooldown'?'Let the current workshop finish changing':'Select your own town'));focusCanvas();}
+  function depositTimber(){
+    const position=getPlayer()?.position,local=economy?.resourcesAt(game.ownerId,position),city=economy?.city(local?.cityId);
+    const amount=city?Math.min(game.logs,Math.max(0,city.capacity-city.stock.timber-city.incoming.timber)):game.logs;
+    if(!game.logs)notify('Chop a tree to gather timber');
+    else if(city&&!amount)notify('The timber depot is full');
+    else{const result=economy?.depositTimber(game.ownerId,position,amount);notify(result?.ok?`${result.amount} timber stored in your town`:result?.reason??'Move close to your town to store timber');}
+    focusCanvas();
+  }
+  const economyHud=economy?createEconomyHud({parent:canvas.parentElement,ownerId:game.ownerId,onIndustry:changeIndustry,onDeposit:depositTimber}):null;
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
   const eventPointer=event=>{const box=canvas.getBoundingClientRect();return {x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};};
   function dragRail(event){
@@ -91,9 +113,9 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   },true);
   listen(canvas,'pointerleave',event=>{if(!event.relatedTarget?.closest?.('.settlement-hud')&&!railDrag)pointer=null;});
   listen(canvas,'pointerdown',event=>{
-    if(walking||transitioning||tool!=='rail'||event.button!==0)return;
+    if(walking||transitioning||event.button!==0)return;
     pointer=eventPointer(event);
-    const handles=railPreview?.handles??[],index=railTarget?pickRailwayHandle(world,handles,camera,pointer,canvas.getBoundingClientRect()):-1;
+    const handles=railPreview?.handles??[],index=tool==='rail'&&railTarget?pickRailwayHandle(world,handles,camera,pointer,canvas.getBoundingClientRect()):-1;
     if(index>=0){
       event.preventDefault();event.stopImmediatePropagation();focusCanvas();
       railDrag={id:event.pointerId,index,x:event.clientX,y:event.clientY,moved:false,points:handles.map(point=>({...point}))};
@@ -105,7 +127,10 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   listen(canvas.ownerDocument.defaultView,'pointerup',event=>{
     if(railDrag?.id===event.pointerId){dragRail(event);releaseRailDrag();return;}
     if(press?.id!==event.pointerId)return;
-    if(!press.moved&&Math.hypot(event.clientX-press.x,event.clientY-press.y)<5&&tool==='rail')railClick=eventPointer(event);
+    if(!press.moved&&Math.hypot(event.clientX-press.x,event.clientY-press.y)<5){
+      if(tool==='rail')railClick=eventPointer(event);
+      else inspectedCity=pickRailwayCity(world,railways.cities,camera,eventPointer(event),canvas.getBoundingClientRect())?.id??null;
+    }
     press=null;
   });
   listen(canvas,'pointercancel',()=>{press=null;releaseRailDrag();});
@@ -132,7 +157,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       }
       revision=game.revision;
     }
-    if(changed||session.revision!==sessionRevision||detail.placementRevision!==detailRevision){
+    if(session.revision!==sessionRevision||detail.placementRevision!==detailRevision){
       sessionRevision=session.revision;
       detailRevision=detail.placementRevision;
       scenery=[...detail.placements,...session.buildings,...villageObjects];
@@ -158,13 +183,18 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const isReadyAt=point=>detail.hasCoverageAt(point,1);
   function context(player,pose){return {player:player.position,heading:player.heading,enforceReach:true,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
   function notify(text){message=text;messageTime=3.2;}
+  function applyRailBuild(result){
+    for(const id of result.clearedTreeIds??[])if(reducedMotion?.matches||!detail.fellTree(id))detail.removeTree(id);
+    detail.clearScenery?.(result.clearedPlacements??result.clearedPlacementIds??[],{animate:!reducedMotion?.matches});
+    synchronize();
+  }
   function updateRailways(){
     if(tool!=='rail'||walking||transitioning){railClick=null;pendingRailBuild=false;railwayArt.preview(null,{visible:false});return null;}
     const cities=railways.cities,hasCity=cities.some(city=>city.ownerId===game.ownerId),box=canvas.getBoundingClientRect();
     if(railClick){
       const city=pickRailwayCity(world,cities,camera,railClick,box);railClick=null;
       if(city){
-        if(!railSource){if(city.ownerId===game.ownerId){railSource=city.id;message='';}else notify('Choose your city first');}
+        if(!railSource){if(railways.canExtend(city)){railSource=city.id;message='';}else notify('Choose your city or its connected network');}
         else if(city.id===railSource){railSource=railTarget=railHover=null;railWaypoints=railAttachments=null;railPreview=null;railPreviewFlow.clear();}
         else{if(railTarget!==city.id)railWaypoints=railAttachments=null;railTarget=city.id;railHover=null;message='';}
       }
@@ -185,9 +215,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     if(pendingRailBuild&&railSource&&railTarget&&railConfirmed&&!railPlanning&&!railDrag&&railPreview?.valid){
       const result=railways.build(railSource,railTarget,{...options,requireCached:true});
       if(result.ok){
-        for(const id of result.clearedTreeIds??[])if(reducedMotion?.matches||!detail.fellTree(id))detail.removeTree(id);
-        detail.clearScenery?.(result.clearedPlacements??result.clearedPlacementIds??[],{animate:!reducedMotion?.matches});
-        synchronize();notify('−5 gold');railSource=railTarget=railHover=railPreview=null;railWaypoints=railAttachments=null;railPreviewFlow.clear();railConfirmed=false;
+        applyRailBuild(result);notify(`−${result.cost} gold · automatic freight connected`);railSource=railTarget=railHover=railPreview=null;railWaypoints=railAttachments=null;railPreviewFlow.clear();railConfirmed=false;
       }else{railPreview=result;if(result.code==='world-changed')railPreviewFlow.clear();notify(result.reason??'Choose another route');}
     }
     pendingRailBuild=false;
@@ -195,7 +223,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     // cursor. Interior handles retain their requested edit positions.
     railwayArt.preview(railPreview,{cities,sourceCityId:railSource,targetCityId:destination,maxConnectionDistance:railways.maxConnectionDistance,
       visible:true,editable:!!railTarget&&railPreview?.code!=='out-of-range',handles:railPreview?.handles??[],activeHandle:railDrag?.index??-1});
-    return {stage:railPlanning?'planning':railTarget&&railPreview?'preview':railSource?'destination':'source',hasCity,cost:5,hovering:!!railHover,siteValid:!!railPreview?.siteValid,
+    return {stage:railPlanning?'planning':railTarget&&railPreview?'preview':railSource?'destination':'source',hasCity,cost:railPreview?.cost??(economy?8:5),hovering:!!railHover,siteValid:!!railPreview?.siteValid,
       canBuild:!!railTarget&&railConfirmed&&!railDrag&&!railPlanning&&!!railPreview?.valid,reason:railPreview?.reason??message,code:railPreview?.code??'',
       sourceLabel:railwayCityLabel(cities.find(city=>city.id===railSource),game.ownerId),targetLabel:railwayCityLabel(cities.find(city=>city.id===destination),game.ownerId)};
   }
@@ -206,7 +234,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   }
   synchronize();
   return{
-    game,art,hud,residents,villageArt,villageResidents,bots,session,railways,railwayArt,
+    game,art,hud,residents,villageArt,villageResidents,bots,session,railways,railwayArt,economy,economicBots,tradeArt,
     get building(){return tool==='house'||tool==='rail';},
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${sessionRevision}`;},
     get cityStreets(){synchronize();return streets;},
@@ -214,6 +242,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
     keyDown(event){
       const key=event.key.toLowerCase();
+      if(economy&&key==='g'){if(!event.repeat)depositTimber();return true;}
+      if(economy&&['1','2','3'].includes(key)){if(!event.repeat&&industryCity)changeIndustry(industryCity,['lumber','farm','workshop'][Number(key)-1]);return true;}
       if(key==='t'){if(!event.repeat&&!walking&&!transitioning)selectTool(tool==='rail'?'axe':'rail');return true;}
       if(tool==='rail'&&['escape','enter','e'].includes(key)){
         if(!event.repeat){if(key==='enter')pendingRailBuild=railConfirmed&&!railPlanning&&!!railPreview?.valid;else selectTool('axe');}return true;
@@ -241,6 +271,11 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       walking=walkingNow;transitioning=transitionNow;camera=activeCamera;const player=getPlayer();
       if(walking&&tool==='rail'||!walking&&tool==='house')selectTool('axe');
       bots.simulate(dt,{completedDays:dayState?.completedDays??0});
+      economy?.update(dt);economicBots?.update(dt);
+      const economicEvents=economy?.drainEvents()??[];
+      for(const event of economicEvents)if(event.type==='income'&&event.ownerId===game.ownerId){
+        if(walkingWeight<.5)incomeEffects.emit(event.houses);canvas.dataset.lastIncome=String(event.amount);
+      }
       const income=game.settleIncome(dayState?.completedDays??0);
       if(income?.amount>0){
         if(walkingWeight>.5)hud.showIncome(income);else incomeEffects.emit(income.houses);
@@ -262,7 +297,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
           // Recheck reach at impact, not just when the swing was requested.
           if(walking&&surfaceDistance(world,tree,player.position)<=SETTLEMENT.chopReach&&!game.isTreeRemoved(tree)){
             const result=game.chop(tree,{player:player.position});
-            if(result.ok){detail.fellTree(result.treeId,{direction:{x:tree.x-player.position.x,z:tree.z-player.position.z}});notify(`+${result.logs} logs`);synchronize();develop(player);}
+            if(result.ok){detail.fellTree(result.treeId,{direction:{x:tree.x-player.position.x,z:tree.z-player.position.z}});notify(`+${result.logs} ${economy?'timber':'logs'}`);synchronize();develop(player);}
           }
         }
       }
@@ -271,7 +306,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         const pose=candidate(player),buildContext=context(player,pose);
         const nearbyActors=bots.positions.filter(point=>surfaceDistance(world,point,pose)<4)
           .map(point=>`${point.x.toFixed(2)},${point.z.toFixed(2)}`).join(';');
-        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${buildContext.heading}:${walking}:${buildContext.ready}:${sessionRevision}:${detailRevision}:${nearbyActors}`;
+        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${buildContext.heading}:${walking}:${buildContext.ready}:${sessionRevision}:${detailRevision}:${economy?.revision??game.revision}:${nearbyActors}`;
         // An idle blueprint keeps its route. Re-plan only after aim, world or
         // player changes; the final build still validates the current scene.
         if(key!==previewKey){placement=game.evaluateBuild(pose,buildContext);previewKey=key;}
@@ -284,6 +319,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       pendingBuild=false;
       const railwayHud=updateRailways();
       railwayArt.update({mapBlend,camera,viewportHeight,walkingWeight,zoom});
+      tradeArt?.update(economy.trains,{camera,mapBlend,walkingWeight,viewportHeight,zoom});
       art.preview(placement,{visible:walking&&tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend,dt:uiDt,reducedMotion:reducedMotion?.matches,night});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
       const target=placement?.house??player?.position??{x:0,z:0};
@@ -300,8 +336,19 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       bots.update(dt,{camera,mapBlend,walkingWeight,focus:focus??player?.position,viewportHeight,night,dayPhase:dayState?.phase,uiDt});
       levels.update({camera,mapBlend,walkingWeight,viewportHeight});
       incomeEffects.update(uiDt,{camera,mapBlend,walkingWeight,viewportHeight,reducedMotion:reducedMotion?.matches});
-      hud.update({logs:snapshot.logs,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
-        canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message,railway:railwayHud??{hasCity:game.cities.length>0}});
+      const resources=game.resourcesAt(placement?.house??player?.position);
+      if(economy){
+        const key=`${economy.revision}:${Math.floor(economy.elapsed)}`;
+        if(key!==economyViewKey){economyViewKey=key;economyView=economy.snapshot();}
+        const cityId=railTarget??railHover??railSource??(!walking?inspectedCity:null)??nearest?.id;
+        const city=economyView.cities.find(city=>city.id===cityId);industryCity=city?.ownerId===game.ownerId?city.id:null;
+        economyHud.update({city,houses:snapshot.houses.length,walking,tool,night,time:economyView.time,nextPulse:economyView.nextPulse,
+          delivered:economyView.stats.deliveries,carried:snapshot.logs,localCityId:economy.resourcesAt(game.ownerId,player?.position).cityId,stationCount:railSnapshot.stations.filter(station=>station.ownerId===game.ownerId).length,events:economicEvents,feedback:messageTime>0?message:''});
+        Object.assign(canvas.dataset,{economyTime:String(Math.floor(economy.elapsed)),deliveries:String(economyView.stats.deliveries),
+          freightTrains:String(tradeArt.stats.active??0),localTools:String(resources.tools),localGrain:String(resources.grain),economyCity:city?.id??'',industry:city?.industry??''});
+      }
+      hud.update({logs:economy?resources.timber:snapshot.logs,economic:!!economy,buildCost:game.constructionCost,resources,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
+        canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message,railway:railwayHud??{hasCity:game.cities.length>0,cost:economy?8:5}});
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),gold:String(snapshot.gold),incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects.visibleCount),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),construction:String(art.construction.count),constructionDust:String(art.construction.dustCount),residentsIndoors:String(residents.stats.indoors??0),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(residents.stats?.residents??residents.stats?.count??0),
@@ -313,6 +360,6 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;releaseRailDrag();railPreviewFlow.dispose();railPlanner.dispose();for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
+    dispose(){disposed=true;releaseRailDrag();railPreviewFlow.dispose();railPlanner.dispose();botRailPlanner?.dispose();for(const remove of listeners)remove();hud.dispose();economyHud?.dispose();economicBots?.dispose();tradeArt?.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
   };
 }

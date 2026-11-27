@@ -108,7 +108,7 @@ test('canonical off-screen island scenery supports the actual starter layout and
   const world=generateWorld(createSettlementWorld(),{detail:'network'}),starter=world.gameplay.starterHouse;
   world.gameplay.railwayMaxDistance=1000;
   const city={id:'player-city',x:-84,z:-43-2/3,ownerId:'teal',level:1,houseCount:3};
-  const {session}=fixture({cities:[city]});session.buildings=[[0,0],[-6,3],[0,-5]].map(([x,z],index)=>({...starter,id:`actual-${index}`,x:starter.x+x,z:starter.z+z,cityId:city.id}));
+  const {session}=fixture({cities:[city],gold:40});session.buildings=[[0,0],[-6,3],[0,-5]].map(([x,z],index)=>({...starter,id:`actual-${index}`,x:starter.x+x,z:starter.z+z,cityId:city.id}));
   city.houseIds=session.buildings.map(home=>home.id);const rail=createSettlementRailways(world,{session});
   const targets=world.gameplay.farmVillages.cities;
   const first=rail.build(city.id,targets[0].id);assert.ok(first.ok,first.reason);assert.equal(first.paths.length,2);assert.ok(rail.sceneryCatalog.length>100);
@@ -445,4 +445,17 @@ test('a blocked orbital station stays visibly snapped to its tangent circle',()=
   assert.ok(blocked.lines.at(-1).points.length>2,'the invalid snapped station still has a visible route guide');
   const authoritative=f.rail.evaluate('a','b',options);assert.deepEqual(authoritative.handles,blocked.handles);assert.deepEqual(authoritative.stations,blocked.stations);
   assert.equal(f.rail.build('a','b',{...options,requireCached:true}).ok,false);assert.equal(f.session.player.gold,20);
+});
+
+
+test('economic railway investors pay their own wallet and can extend a shared connected network',()=>{
+  const f=fixture({gold:30});f.world.gameplay.economy=true;
+  for(const bot of f.session.bots){Object.assign(bot.game,{ownerId:bot.game.cities[0].ownerId,gold:30,spendGold:f.session.player.spendGold});}
+  const rail=createSettlementRailways(f.world,{session:f.session,surfaceAt:flat}),owner=f.session.bots[0].game;
+  const preview=rail.evaluate('b','a',{ownerId:owner.ownerId});assert.ok(preview.valid,preview.reason);
+  assert.equal(preview.cost,10);const built=rail.build('b','a',{ownerId:owner.ownerId,requireCached:true});assert.ok(built.ok,built.reason);
+  assert.equal(owner.gold,20);assert.equal(f.session.player.gold,30);assert.ok(built.lines.every(line=>line.ownerId===owner.ownerId));
+  assert.ok(rail.canExtend('b','teal'));const extension=rail.build('b','c');assert.ok(extension.ok,extension.reason);
+  assert.equal(f.session.player.gold,20);assert.equal(extension.connection.ownerId,'teal');
+  assert.equal(rail.preview('a','c',{ownerId:'unknown'}).code,'invalid-owner');
 });

@@ -6,7 +6,7 @@ import {createSettlementGame} from './settlement-game.js';
 export function createSettlementSession(world,{getActors=()=>[],getInfrastructure=()=>null,surfaceAt}={}){
   const games=[],removedTreeIds=new Set();
   let cachedRevision=-1,buildings=[],paths=[],reservedPaths=[],clearedPlacementIds=new Set();
-  const revision=()=>games.reduce((sum,game)=>sum+game.revision,0)+(getInfrastructure()?.revision??0);
+  const revision=()=>games.reduce((sum,game)=>sum+(game.spatialRevision??game.revision),0)+(getInfrastructure()?.revision??0);
   function refresh(){
     const next=revision();if(next===cachedRevision)return;
     const infrastructure=getInfrastructure();
@@ -25,7 +25,7 @@ export function createSettlementSession(world,{getActors=()=>[],getInfrastructur
     return {config,game};
   });
   return {player,bots,shared,
-    get revision(){return revision();},
+    get revision(){return revision();},get spatialRevision(){return revision();},
     get buildings(){refresh();return buildings;},
     get paths(){refresh();return paths;},
   };

@@ -162,12 +162,16 @@ test('authoritative rejection keeps the checked shape invalid even when the wall
 });
 
 test('wallet changes update affordability without rerouting or repeating terrain validation',async t=>{
-  const f=fixture(t),options=initial();f.editor.update('home','village',options,{gold:10});f.complete(0);await tick();
-  const rich=f.editor.update('home','village',options,{gold:10}),geometry=rich.result.lines;
+  const f=fixture(t),options=initial(),preview=f.railways.preview;
+  f.railways.preview=(...args)=>({...preview(...args),cost:11});
+  const draft=f.editor.update('home','village',options,{gold:20}).result;
+  f.complete(0,{result:{...draft,provisional:false}});await tick();
+  const rich=f.editor.update('home','village',options,{gold:20}),geometry=rich.result.lines;
   assert.equal(rich.confirmed,true);assert.equal(rich.result.valid,true);
-  const poor=f.editor.update('home','village',options,{gold:4});
+  const poor=f.editor.update('home','village',options,{gold:10});
   assert.equal(poor.result.affordable,false);assert.equal(poor.result.valid,false);assert.equal(poor.confirmed,true,'geometry can remain checked while the wallet changes');
-  const restored=f.editor.update('home','village',options,{gold:5});assert.equal(restored.result.valid,true);assert.equal(restored.confirmed,true);
+  assert.equal(poor.result.reason,'A railway costs 11 gold');
+  const restored=f.editor.update('home','village',options,{gold:11});assert.equal(restored.result.valid,true);assert.equal(restored.confirmed,true);
   assert.deepEqual(restored.result.lines,geometry);assert.equal(f.previews.length,1);assert.equal(f.requests.length,1);
 });
 

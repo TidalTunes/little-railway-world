@@ -32,7 +32,7 @@ export function createSettlementRailwayPlanner(world,railways,session,{getPlacem
       if(disposed)return Promise.resolve({stale:true});
       return new Promise(resolve=>{
         const route={waypoints:structuredClone(options.waypoints??[]),attachments:structuredClone(options.attachments??{}),
-          ...(options.controlCount!==undefined?{controlCount:options.controlCount}:{})};
+          ...(options.controlCount!==undefined?{controlCount:options.controlCount}:{}),...(options.ownerId!==undefined?{ownerId:options.ownerId}:{})};
         const request={id:++nextId,from,to,options:route,key:railways.geometryKey(from,to,route),resolve};
         if(active){queued?.resolve({stale:true});queued=request;}else dispatch(request);
       });

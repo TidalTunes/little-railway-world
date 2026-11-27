@@ -8,7 +8,7 @@ export function createRailwayPreview(railways,planner){
     if(!result||!Number.isFinite(gold))return;
     const affordable=gold>=(result.cost??5),valid=!!result.siteValid&&affordable;
     if(result.affordable===affordable&&result.valid===valid)return;
-    result={...result,affordable,valid,...(result.siteValid?{code:affordable?'ready':'not-enough-gold',reason:affordable?'Connect these cities':'A railway costs 5 gold'}:{})};
+    result={...result,affordable,valid,...(result.siteValid?{code:affordable?'ready':'not-enough-gold',reason:affordable?'Connect these cities':`A railway costs ${result.cost??5} gold`}:{})};
   }
   function clear(){epoch++;key=requested='';result=null;checking=confirmed=false;}
   return {

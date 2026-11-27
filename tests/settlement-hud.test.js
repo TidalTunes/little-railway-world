@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {settlementHudProgress,settlementHudRailway} from '../src/settlement-hud.js';
+import {settlementHudProgress,settlementHudRailway,settlementHudConstruction} from '../src/settlement-hud.js';
+
+test('construction guidance distinguishes timber and tools instead of claiming timber is enough',()=>{
+  const buildCost={timber:8,tools:2},input={economic:true,logs:8,buildCost};
+  const missing=settlementHudConstruction({...input,resources:{tools:0}});
+  assert.equal(missing.affordable,false);assert.equal(missing.costLabel,'8 timber + 2 tools');assert.equal(missing.readiness,'Need 2 more tools.');
+  const ready=settlementHudConstruction({...input,resources:{tools:2}});assert.equal(ready.affordable,true);assert.equal(ready.readiness,'Timber and tools ready.');
+  const unknown=settlementHudConstruction(input);assert.equal(unknown.affordable,false);assert.equal(unknown.readiness,'Timber ready; 2 tools also required.');
+  const both=settlementHudConstruction({...input,logs:5,resources:{tools:1}});assert.equal(both.shortage,'Need 3 more timber and 1 more tool');assert.ok(!both.readiness.includes('logs'));
+  const legacy=settlementHudConstruction({logs:10});assert.equal(legacy.affordable,true);assert.equal(legacy.costLabel,'10 logs');assert.equal(legacy.readiness,'Enough logs gathered.');
+});
 
 test('HUD city growth uses homes through each of the five three-home milestones',()=>{
   for(let houses=0;houses<=18;houses++){
