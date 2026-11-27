@@ -70,12 +70,12 @@ Measured outcomes after fifteen simulation minutes:
 
 | Spacing | Loop | Gold | Wood | Metal | Food | Completed laps |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Near | Food | 86 | 286 | 0 | 210 | 21 |
-| Near | Metal | 71 | 233 | 160 | 0 | 16 |
-| Near | Mixed | 49 | 193 | 120 | 120 | 12 |
-| Distant | Food | 66 | 226 | 0 | 150 | 15 |
-| Distant | Metal | 57 | 193 | 120 | 0 | 12 |
-| Distant | Mixed | 38 | 163 | 90 | 90 | 9 |
+| Near | Food | 86 | 262 | 0 | 210 | 21 |
+| Near | Metal | 71 | 213 | 160 | 0 | 16 |
+| Near | Mixed | 49 | 173 | 120 | 120 | 12 |
+| Distant | Food | 66 | 202 | 0 | 150 | 15 |
+| Distant | Metal | 57 | 173 | 120 | 0 | 12 |
+| Distant | Mixed | 38 | 143 | 90 | 90 | 9 |
 
 The first completed circuit takes about 43–73 seconds in the near scenario and 58–98 seconds in the distant scenario. These results expose the current tradeoff: short circuits return more frequently, while longer mixed circuits supply a broader resource collection. Metal and food do not yet have spending sinks, so these measurements cannot establish a winning competitive strategy or monetary value for diversification. Military costs and later construction recipes will determine those values.
 
