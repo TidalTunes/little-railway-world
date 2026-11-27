@@ -34,6 +34,18 @@ test('natural vignettes are deterministic, varied and share their terrain batch'
   }
 });
 
+test('meadow plants stay below shoe height and present broad leaves instead of upright spikes',()=>{
+  for(const radius of [2,4,7])for(let variant=1;variant<24;variant++){
+    if(variant%4===0)continue; // These variants also contain a taller stone.
+    const geometry=naturePatch(new Group(),{style:'meadow',radius,variant}).children[0].geometry;
+    const positions=geometry.attributes.position,normals=geometry.attributes.normal;
+    for(let i=0;i<positions.count;i++){
+      assert.ok(positions.getY(i)<=.07,'foliage and blossoms remain close to the ground');
+      assert.ok(normals.getY(i)>.25,'leaf faces catch overhead light rather than standing upright');
+    }
+  }
+});
+
 test('wind-shaped patches vary crest counts and silhouettes rather than repeating a paired stamp',()=>{
   for(const style of ['dune','frost','outcrop']){
     const counts=new Set(),silhouettes=new Set();

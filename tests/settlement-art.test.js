@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Box3,Group,Matrix4,Vector3} from 'three';
+import {Box3,Group,Matrix4,Vector3,Raycaster} from 'three';
 import {createSettlementArt} from '../src/settlement-art.js';
 import {house} from '../src/assets.js';
 import {consolidate} from '../src/geometry.js';
@@ -15,7 +15,7 @@ const homes=()=>Array.from({length:4},(_,variant)=>({id:`home-${variant}`,kind:'
   rotation:variant*Math.PI/5,variant,ownerId:'teal',scale:1}));
 function nearBounds(actual,expected){for(const bound of ['min','max'])for(const axis of ['x','y','z'])
   assert.ok(Math.abs(actual[bound][axis]-expected[bound][axis])<1e-5,`${bound}.${axis}: ${actual[bound][axis]} versus ${expected[bound][axis]}`);}
-function previewMesh(root){return root.children.find(node=>node.isMesh&&node.material.transparent&&node.material.opacity===.30);}
+function previewMesh(root){return root.getObjectByName('settlement-blueprint');}
 
 test('instanced homes preserve all four original house silhouettes and their authored transforms',()=>{
   const {art}=setup();
@@ -38,7 +38,7 @@ test('instanced homes preserve all four original house silhouettes and their aut
   }finally{art.dispose();}
 });
 
-test('blueprints reuse the correct variant geometry and clear valid or invalid colors in both camera layers',()=>{
+test('blueprints use one simple lot cube with valid or invalid colors in both camera layers',()=>{
   const {art}=setup();
   try{
     art.sync(homes());const ghost=previewMesh(art.root),mapGhost=previewMesh(art.mapRoot),geometryByVariant=[];
@@ -50,15 +50,14 @@ test('blueprints reuse the correct variant geometry and clear valid or invalid c
       assert.equal(ghost.material,mapGhost.material);assert.equal(ghost.material.color.getHexString(),'5dd9b4');
       assert.equal(ghost.position.x,item.x);assert.equal(ghost.position.y,item.y);assert.equal(ghost.position.z,item.z);
       assert.equal(mapGhost.position.x,item.x);assert.equal(mapGhost.position.z,item.z);assert.equal(mapGhost.rotation.y,item.rotation);
-      const original=new Group();house(original,{variant});consolidate(original);original.updateMatrixWorld(true);
-      ghost.geometry.computeBoundingBox();nearBounds(ghost.geometry.boundingBox,new Box3().setFromObject(original));
-      for(const mesh of original.children)mesh.geometry.dispose();
+      ghost.geometry.computeBoundingBox();nearBounds(ghost.geometry.boundingBox,new Box3(new Vector3(-1.1,0,-1.1),new Vector3(1.1,2.2,1.1)));
+      assert.equal(ghost.geometry.index.count,36,'only six cube faces, with no roof or window detail');
       geometryByVariant.push(ghost.geometry);
       art.preview({house:item,valid:false,connected:false},{visible:true});
       assert.equal(ghost.material.color.getHexString(),'ec565c');
       assert.equal(ghost.geometry,geometryByVariant[variant]);
     }
-    assert.equal(new Set(geometryByVariant).size,4);
+    assert.equal(new Set(geometryByVariant).size,1);
     for(let i=0;i<80;i++)art.preview({house:{...homes()[i%4],x:i/10},valid:!!(i%2)},{visible:true});
     assert.equal(art.root.children.length,childCount,'moving a blueprint does not add scene objects');
     art.update({mapBlend:1});assert.equal(art.root.visible,false);assert.equal(art.mapRoot.visible,true);assert.equal(mapGhost.visible,true);
@@ -117,4 +116,43 @@ test('disposing settlement art releases every owned visible resource without dis
   assert.equal(art.root.parent,null);assert.equal(art.mapRoot.parent,null);assert.equal(scene.children.length,0);assert.equal(map.children.length,0);
   assert.equal(sharedDisposals,0);
   for(const [resource,count]of counts)assert.equal(count,1,`${resource.type??'resource'} must dispose exactly once`);
+});
+
+
+test('settlement paths merge junctions, sit on the terrain and remain visible in the map',()=>{
+  const {art}=setup();
+  try{
+    const paths=[{id:'lane-a',width:.45,points:[{x:-5,z:0},{x:5,z:0}]},
+      {id:'lane-b',width:.45,points:[{x:0,z:-5},{x:0,z:5}]}];
+    art.sync(homes(),paths);art.root.updateMatrixWorld(true);
+    const lanes=art.root.getObjectByName('settlement-paths'),mapLanes=art.mapRoot.getObjectByName('settlement-map-paths');
+    assert.equal(lanes.children.length,1,'connected paths share a single joined surface');
+    assert.equal(mapLanes.children.length,1);
+    const mesh=lanes.children[0],positions=mesh.geometry.attributes.position;
+    for(let i=0;i<positions.count;i++)assert.ok(Math.abs(positions.getY(i)-.026)<1e-6);
+    const hits=new Raycaster(new Vector3(.03,2,.02),new Vector3(0,-1,0)).intersectObject(mesh);
+    assert.equal(hits.length,1,'the crossing has one surface, not overlapping strips');
+    const flat=mapLanes.children[0].geometry.attributes.position;
+    for(let i=0;i<flat.count;i++)assert.ok(Math.abs(flat.getY(i)-.62)<1e-6);
+    const old=mesh.geometry;let released=0;old.addEventListener('dispose',()=>released++);
+    art.sync(homes(),[]);assert.equal(released,1);assert.equal(lanes.children.length,0);
+  }finally{art.dispose();}
+});
+
+test('the connection preview follows the proposed door path instead of crossing the house centers',()=>{
+  const {art}=setup();
+  try{
+    const points=[{x:1,y:0,z:2},{x:1,y:0,z:4},{x:3,y:0,z:4}];
+    art.preview({house:homes()[0],valid:true,connected:true,path:{points}},{visible:true});
+    const path=art.root.getObjectByName('settlement-path-preview'),position=path.geometry.attributes.position;
+    assert.equal(path.visible,true);assert.equal(path.geometry.drawRange.count,(points.length-1)*2);
+    for(const [i,point] of [points[0],points[1],points[1],points[2]].entries()){assert.equal(position.getX(i),point.x);assert.equal(position.getZ(i),point.z);}
+    const second=[{x:8,y:0,z:2},{x:9,y:0,z:4}];
+    art.preview({house:homes()[0],valid:true,paths:[{points},{points:second}]},{visible:true});
+    for(const root of [art.root,art.mapRoot]){
+      const preview=root.getObjectByName('settlement-path-preview');assert.equal(preview.visible,true);assert.equal(preview.geometry.drawRange.count,6);
+      assert.equal(preview.geometry.attributes.position.getX(4),8);
+    }
+    art.preview({house:homes()[0],valid:true,connected:false},{visible:true});assert.equal(path.visible,false);assert.equal(art.mapRoot.getObjectByName('settlement-path-preview').visible,false);
+  }finally{art.dispose();}
 });

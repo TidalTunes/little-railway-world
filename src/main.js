@@ -255,7 +255,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, Q or R to rotate, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. Nearby houses join your settlement. V switches between your traveller and overview; N changes day and night.');
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. Houses align with your settlement and connect by paths. V switches between your traveller and overview; N changes day and night.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
@@ -349,7 +349,7 @@ function frame(now){
     settlement?.update(dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
-      cityStreets:detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
+      cityStreets:settlement?.cityStreets??detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
     // Shader compilation alone does not upload hidden instance attributes.
     // Allocate these fixed GPU pools during startup, before the first dolly.
     if(walkingDetail.stats.ready&&!walkingBuffersReady){

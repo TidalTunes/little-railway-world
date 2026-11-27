@@ -40,11 +40,29 @@ export function naturePatch(parent,{x=0,y=0,z=0,radius=4,rotation=0,scale=1,vari
       triangle(a.high,peak,b.high,color.clone().multiplyScalar(.94+rng()*.08));
     }
   };
-  const grass=(cx,cz,size,color)=>{
-    for(let blade=0;blade<3;blade++){
-      const a=blade*Math.PI/3+rng()*.2,dx=Math.cos(a)*size*.24,dz=Math.sin(a)*size*.24;
-      const left=[cx-dx,.015,cz-dz],right=[cx+dx,.015,cz+dz],tip=[cx+size*.16,size*(.6+rng()*.5),cz+size*.09];
-      triangle(left,tip,right,color);triangle(right,tip,left,color);
+  // Small broad leaves belong to the ground, rather than competing with the
+  // fine animated grass. A shallow folded surface catches light from above;
+  // there are no crossed billboards, freestanding spikes or tall flower flags.
+  const groundcover=(cx,cz,size,color)=>{
+    const turn=rng()*Math.PI*2;
+    for(let leaf=0;leaf<3;leaf++){
+      const a=turn+leaf*Math.PI*2/3+rng()*.15,ca=Math.cos(a),sa=Math.sin(a);
+      const length=size*(.78+rng()*.22),width=length*.46,lift=length*.22;
+      const point=(along,across,y)=>[cx+ca*along-sa*across,y,cz+sa*along+ca*across];
+      const center=point(length*.56,0,.012+lift);
+      const rim=[point(.01,0,.012),point(length*.40,width,.016),
+        point(length*.86,width*.72,.020),point(length,0,.022),
+        point(length*.86,-width*.72,.020),point(length*.40,-width,.016)];
+      const tone=color.clone().multiplyScalar(.94+rng()*.10);
+      for(let edge=0;edge<rim.length;edge++)triangle(center,rim[edge],rim[(edge+1)%rim.length],tone);
+    }
+  };
+  const blossom=(cx,cz,size,color)=>{
+    const h=.055*unit,center=[cx,h+.008*unit,cz],turn=rng()*Math.PI*2;
+    for(let i=0;i<6;i++){
+      const a=turn-i*Math.PI/3,b=turn-(i+1)*Math.PI/3;
+      triangle(center,[cx+Math.cos(a)*size,h,cz+Math.sin(a)*size],
+        [cx+Math.cos(b)*size,h,cz+Math.sin(b)*size],color);
     }
   };
   // An asymmetric wind crest: a long, gently sloping windward face and a
@@ -85,14 +103,14 @@ export function naturePatch(parent,{x=0,y=0,z=0,radius=4,rotation=0,scale=1,vari
   };
 
   if(style==='meadow'){
-    const color=tint('grassDark','leafLight',.16+rng()*.17);
-    for(let i=0;i<7;i++){
-      const [cx,cz]=place(i,7,.70),size=(.22+rng()*.24)*unit;
-      grass(cx,cz,size,color);
-      if(i%2===0){
-        const h=size*.66,w=.07*unit,flower=i%4===0?C.white:C.leafGold;
-        triangle([cx-w,h,cz],[cx+w,h,cz],[cx,h+.06*unit,cz-w],flower);
-        triangle([cx+w,h,cz],[cx-w,h,cz],[cx,h+.06*unit,cz+w],flower);
+    const color=tint('grass','leafLight',.20+rng()*.16),count=4+Math.floor(rng()*3);
+    let flowers=0;
+    for(let i=0;i<count;i++){
+      const [cx,cz]=place(i,count,.48+rng()*.20),size=(.11+rng()*.07)*unit;
+      groundcover(cx,cz,size,color);
+      if(flowers<2&&rng()<.30){
+        blossom(cx+size*.14,cz-size*.08,(.020+rng()*.009)*unit,
+          flowers++%2===0?tint('white','leafGold',.12):tint('leafGold','grass',.12));
       }
     }
     if(variant%4===0){
@@ -104,13 +122,13 @@ export function naturePatch(parent,{x=0,y=0,z=0,radius=4,rotation=0,scale=1,vari
     for(let i=0;i<5;i++){
       const [cx,cz]=place(i,5,.66),size=(.31+rng()*.27)*unit;
       rock(cx,cz,size,size*.76,size*.70,foliage,rng()*Math.PI);
-      if(i<3)grass(cx+size*.65,cz-size*.1,.28*unit,tint('sand','leafGold',.25));
+      if(i<3)groundcover(cx+size*.65,cz-size*.1,.12*unit,tint('sand','leafGold',.25));
     }
     rock(-radius*.21,-radius*.13,.4*unit,.24*unit,.19*unit,tint('desertRock','sand',.35),.8);
   }else if(style==='dune'){
     const sand=tint('desertLight','desert',.24+rng()*.22),shade=tint('desert','desertRock',.10);
     ridgeDistrict(false,sand,shade);
-    if(variant%3===0)grass(-radius*.52,radius*.17,.27*unit,tint('sage','sand',.52));
+    if(variant%3===0)groundcover(-radius*.52,radius*.17,.12*unit,tint('sage','sand',.52));
   }else if(style==='outcrop'){
     const stone=tint('rock','mountainFloor',.15+rng()*.18);
     const count=2+Math.floor(rng()*3),major=Math.floor(rng()*count);
@@ -123,7 +141,7 @@ export function naturePatch(parent,{x=0,y=0,z=0,radius=4,rotation=0,scale=1,vari
       const [cx,cz]=place(i+1,5,.72);
       rock(cx,cz,.21*unit,.17*unit,.20*unit,tint('rockLight','grassDark',.12),.18);
     }
-    grass(-radius*.12,radius*.43,.25*unit,C.grassDark);
+    groundcover(-radius*.12,radius*.43,.12*unit,C.grassDark);
   }else{
     const snow=tint('snow','blue',.04+rng()*.06),ice=tint('blue','snow',.55);
     ridgeDistrict(true,snow,ice);

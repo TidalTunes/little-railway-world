@@ -1,14 +1,16 @@
 ## First settlement
 
-The default launch is a fresh island with one teal home and a small, irregular grove. The camera starts at the traveller. Trees in axe reach show a small ground ring; the existing horizontal swing fells a tree away from the character and gives a deterministic 2–4 logs. A compact dark-teal resource bar and bottom tool shelf expose the first gameplay controls without covering the scene.
+The default launch is a fresh island with one teal home and a small, irregular grove. The camera starts at the traveller. Trees in axe reach show a small ground ring; the existing horizontal swing fells a tree away from the character and gives a deterministic 2–4 logs. A pictorial woodpile and small faceted tool icons sit transparently in the corners. The controls borrow teal paint, timber and warm ivory from the world, with no visible words, counts, shortcut labels or panels. Accessible names and status announcements remain available to assistive technology.
 
-B chooses a transparent house made from the exact house template. Invalid terrain, overlap, missing logs and walking reach turn it red and produce a specific explanation. A line to a connected neighbor and the message “Joins your settlement” indicate membership. Houses within nine units connect transitively to the starting home; a legal isolated house starts an outpost. Placement costs ten logs. Mouse aim, Q/R rotation, Enter/click confirmation and Escape cancellation work in walking and overview modes. V retains the same traveller, houses and removed trees across layers. The earlier populated island is saved at `?layout=island`.
+B chooses a translucent cube with a thin outline. Invalid terrain, overlap, missing logs and walking reach turn it red; pictographic status indicates blocked placement or settlement connection. Houses inherit their nearest neighbour’s frontage axis. A preview lane shows the actual route from door to door, avoiding trees, foundations and water; committing the house creates a narrow pale earth path. Joined path surfaces have rounded corners and flush junctions, and the close grass layer clears their verges. Nearby houses connect through these paths; a legal isolated house starts an outpost. Placement costs ten logs, shown as a ten-piece woodpile. Mouse aim, Enter/click confirmation and Escape cancellation work in walking and overview modes. V retains the same traveller, houses and removed trees across layers. The earlier populated island is saved at `?layout=island`.
+
+Meadow vignettes use ground-hugging broad leaves and tiny low blossoms around occasional stones. Their quiet shapes add variation without the earlier tall, rigid triangular grass spikes or flag-like flowers. Fine animated walking grass is preserved.
 
 # Little Railway World — art direction
 
 ## Physical scene
 
-A painted miniature railway under warm afternoon light or clear blue moonlight. The viewport is entirely the world: no typography, labels, HUD, or gameplay controls.
+A painted miniature railway under warm afternoon light or clear blue moonlight. The viewport is the world. Gameplay adds only transparent corner icons; the saved art presets have no controls or labels.
 
 ## Composition
 
@@ -62,7 +64,7 @@ Selecting a train brings the camera closer and follows its movement without rota
 
 ## Inspection
 
-Scroll, pinch, and + / − move through the three views. Drag orbits the ground focus in both detailed views, including while following a train. WASD moves that focus across the surface. The fully zoomed-out map uses dragging to pan; two-finger detailed gestures rotate and pinch to zoom. Click or tap a visible train to follow it; F selects the visible train nearest the centre, and [ / ] cycle active trains. Escape, an empty click, or zooming out releases follow. Home and double-click restore the fitted overview. WASD pans in four screen-relative directions, easing into motion and braking smoothly on release. Diagonal travel has the same speed as a single direction. Blur and hidden tabs clear keyboard motion immediately; reduced-motion preferences use direct movement. Arrow keys orbit or pan and Space pauses. R generates another seed in the saved art presets; settlement mode reserves it for blueprint rotation.
+Scroll, pinch, and + / − move through the three views. Drag orbits the ground focus in both detailed views, including while following a train. WASD moves that focus across the surface. The fully zoomed-out map uses dragging to pan; two-finger detailed gestures rotate and pinch to zoom. Click or tap a visible train to follow it; F selects the visible train nearest the centre, and [ / ] cycle active trains. Escape, an empty click, or zooming out releases follow. Home and double-click restore the fitted overview. WASD pans in four screen-relative directions, easing into motion and braking smoothly on release. Diagonal travel has the same speed as a single direction. Blur and hidden tabs clear keyboard motion immediately; reduced-motion preferences use direct movement. Arrow keys orbit or pan and Space pauses. R generates another seed in the saved art presets; settlement mode disables regeneration to preserve the current session.
 
 A JSON authoring API loads and validates layouts, but there is no editor UI or playable economy in this iteration. The canvas has a screen-reader description and a focus outline during keyboard use. Tab moves focus normally, and train selection has keyboard equivalents.
 

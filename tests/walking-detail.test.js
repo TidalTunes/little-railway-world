@@ -161,3 +161,22 @@ test('blade geometry has stationary roots and shared shaders animate only unifor
   assert.doesNotMatch(shader.fragmentShader,/detailDither/,'opaque blades fade their geometry without shimmering alpha masks');
   assert.equal(material.transparent,false);geometry.dispose();material.dispose();
 });
+
+
+test('a newly built settlement lane clears existing grass while keeping the surrounding meadow',()=>{
+  const world=meadow(),layer=createWalkingDetail(new Group(),world),focus={x:0,z:0};
+  try{
+    layer.update(focus,{placements:[],revision:1,cityStreets:[],visible:true});
+    const grass=layer.root.getObjectByName('walking-grass'),before=grass.count,builds=layer.stats.builds;
+    const path={id:'path:home-2:home-1',width:.45,points:[{x:-10,z:0},{x:10,z:0}]};
+    const lanes=[path];layer.update(focus,{placements:[],revision:2,cityStreets:lanes,visible:true});
+    assert.equal(layer.stats.builds,builds+1);assert.ok(grass.count<before);assert.ok(grass.count>before*.94);
+    const point=new Vector3();
+    for(let i=0;i<grass.count;i++){point.setFromMatrixPosition(getMatrix(grass,i));
+      if(point.x>=-10&&point.x<=10)assert.ok(Math.abs(point.z)>=path.width/2+.40-1e-6,'all blade envelopes clear the new path');
+    }
+    const version=grass.instanceMatrix.version;
+    layer.update(focus,{placements:[],revision:3,cityStreets:lanes,visible:true});
+    assert.equal(grass.instanceMatrix.version,version,'unchanged paths do not upload the grass again');
+  }finally{layer.dispose();}
+});

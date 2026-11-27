@@ -8,16 +8,15 @@ import {surfaceDistance,surfaceOffset} from './world-surface.js';
  * art. The rules stay independent of input, animation and the HUD. */
 export function createSettlementController({canvas,world,parent,mapParent,detail,getPlayer,onView,reducedMotion}){
   const game=createSettlementGame(world),art=createSettlementArt(parent,mapParent,world);
-  let snapshot=game.snapshot(),tool='axe',rotation=0,pointer=null,press=null,placement=null,targetTree=null;
+  let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingHit=null,message='',messageTime=0;
-  let revision=-1,detailRevision=-1,scenery=[],collisions=[],meshes=[],houseMeshes=[],disposed=false;
+  let revision=-1,detailRevision=-1,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),intersection=new THREE.Vector3();
   const listeners=[];
   const focusCanvas=()=>canvas.focus({preventScroll:true});
-  function selectTool(next){tool=next;pointer=null;pendingBuild=false;message='';focusCanvas();}
-  function rotate(direction=1){rotation+=direction*Math.PI/2;focusCanvas();}
+  function selectTool(next){tool=next;pointer=null;pendingBuild=false;previewKey='';message='';focusCanvas();}
   const hud=createSettlementHud({parent:canvas.parentElement,playerColor:'#257d70',
-    onTool:selectTool,onView:()=>{selectTool('axe');onView();},onRotate:rotate,
+    onTool:selectTool,onView:()=>{selectTool('axe');onView();},
     onBuild:()=>{pendingBuild=true;focusCanvas();},onCancel:()=>selectTool('axe')});
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
   listen(canvas,'pointermove',event=>{
@@ -43,7 +42,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
     const changed=game.revision!==revision;
     if(changed){
       const previousCount=snapshot.houses.length;snapshot=game.snapshot();
-      if(revision<0||snapshot.houses.length!==previousCount){art.sync(snapshot.houses);houseMeshes=art.meshes;}
+      if(revision<0||snapshot.houses.length!==previousCount){art.sync(snapshot.houses,snapshot.paths??[]);houseMeshes=art.meshes;}
       revision=game.revision;
     }
     if(changed||detail.placementRevision!==detailRevision){
@@ -51,6 +50,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       scenery=[...detail.placements,...snapshot.houses];
       collisions=[...detail.getCollisionPlacements(),...snapshot.houses];
       meshes=[...detail.getTerrainMeshes(),...houseMeshes];
+      streets=[...detail.cityStreets,...snapshot.paths??[]];
     }
   }
   function findTree(player){
@@ -73,25 +73,26 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       if(ray.ray.intersectPlane(groundPlane,intersection)&&ray.ray.direction.y<-.01)point={x:intersection.x,z:intersection.z};
     }
     if(!point)point=surfaceOffset(world,player.position.x,player.position.z,Math.sin(player.heading)*3.8,Math.cos(player.heading)*3.8);
-    return {...point,rotation};
+    return point;
   }
   // Overview lifts the arm's-reach limit, but the traveller still occupies a
   // real footprint. Never allow a new house to trap the persistent character.
-  function context(player,pose){return {player:player.position,enforceReach:walking,placements:scenery,ready:detail.hasCoverageAt(pose,2)};}
+  const isReadyAt=point=>detail.hasCoverageAt(point,1);
+  function context(player,pose){return {player:player.position,enforceReach:walking,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
   function notify(text){message=text;messageTime=3.2;}
   synchronize();
   return{
     game,art,hud,
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${revision}`;},
+    get cityStreets(){synchronize();return streets;},
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
     keyDown(event){
       const key=event.key.toLowerCase();
       if(key==='b'){if(!event.repeat)selectTool(tool==='house'?'axe':'house');return true;}
-      if(tool==='house'&&['escape','q','r','enter','e'].includes(key)){
-        if(!event.repeat){if(key==='escape'||key==='e')selectTool('axe');else if(key==='enter')pendingBuild=true;else rotate(key==='q'?-1:1);}return true;
+      if(tool==='house'&&['escape','enter','e'].includes(key)){
+        if(!event.repeat){if(key==='escape'||key==='e')selectTool('axe');else pendingBuild=true;}return true;
       }
-      // Regenerating the art would discard a session without warning. Keep R
-      // reserved for build rotation while this gameplay mode is active.
+      // Regenerating the art would discard a session without warning.
       return key==='r';
     },
     prepareInput(input){
@@ -123,21 +124,24 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       }
       targetTree=ready&&walking&&!transitioning&&tool==='axe'?findTree(player):null;
       if(ready&&tool==='house'&&!transitioning){
-        const pose=candidate(player);placement=game.evaluateBuild(pose,context(player,pose));
+        const pose=candidate(player),buildContext=context(player,pose);
+        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${walking}:${buildContext.ready}:${revision}:${detailRevision}`;
+        // An idle blueprint keeps its route. Re-plan only after aim, world or
+        // player changes; the final build still validates the current scene.
+        if(key!==previewKey){placement=game.evaluateBuild(pose,buildContext);previewKey=key;}
         if(pendingBuild){
           const result=game.build(pose,context(player,pose));
           if(result.ok){notify(result.connected?'House built · settlement expanded':'House built · new outpost');synchronize();tool='axe';pointer=null;}
           else{message='';messageTime=0;}
         }
-      }else placement=null;
+      }else{placement=null;previewKey='';}
       pendingBuild=false;
-      const connection=placement?.connectionHouseId?snapshot.houses.find(h=>h.id===placement.connectionHouseId):null;
-      art.preview(placement,{visible:tool==='house'&&ready&&!transitioning,connection,targetTree});art.update({mapBlend});
+      art.preview(placement,{visible:tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
       hud.update({logs:snapshot.logs,houses:snapshot.houses.length,connectedHouses,tool,walking,ready,
         canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message});
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
-        choppedTrees:String(snapshot.removedTreeIds.length),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
+        paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',targetTree:targetTree?.id??''});
     },
     dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();},
