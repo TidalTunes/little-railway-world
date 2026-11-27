@@ -198,7 +198,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     const batch=new THREE.InstancedMesh(dotGeometry,dotMaterial,HANDLE_CAPACITY);batch.name=name;batch.count=0;batch.frustumCulled=false;batch.renderOrder=20+index;parent.add(batch);return batch;
   }));
   const pose=new THREE.Matrix4(),scale=new THREE.Vector3(),center=new THREE.Vector3(),corner=new THREE.Vector3(),view=new THREE.Vector3();
-  const seenLines=new Set(),seenStations=new Set(),previewLines=[],invalidLines=[],fallbackSamples=new WeakMap(),guideSamples=[],activeGuidePoints=[],invalidIndices=new Set();
+  const seenLines=new Set(),seenStations=new Set(),previewLines=[],invalidLines=[],fallbackSamples=new WeakMap(),guideSamples=[],activeGuidePoints=[],invalidIndices=new Set(),invalidEndpoints=new Set();
   const stationGeometry=new THREE.BoxGeometry(6.4,.21,2.4);stationGeometry.translate(0,.105,0);
   const stationEdges=new THREE.EdgesGeometry(stationGeometry);
   function dynamicBuffer(size,ribbon=true){
@@ -367,11 +367,15 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     const outOfRange=result?.code==='out-of-range';
     handlePoints=handles;handleCount=outOfRange?0:Math.min(HANDLE_CAPACITY,handles.length);handleIndex=activeHandle;handlesVisible=visible&&editable&&!outOfRange;
     const blocked=wholeRouteBlocked(result),color=blocked?BAD:GOOD;
-    invalidIndices.clear();for(const bend of result?.invalidBends??[])invalidIndices.add(bend.index);
+    invalidIndices.clear();invalidEndpoints.clear();
+    for(const bend of result?.invalidBends??[]){
+      if(Number.isInteger(bend.index))invalidIndices.add(bend.index);
+      if(bend.handleKind)invalidEndpoints.add(bend.handleKind);
+    }
     for(const layers of handleBatches){
       for(const batch of layers)batch.count=handlesVisible?handleCount:0;
       for(let i=0;i<handleCount;i++){
-        const kind=handles[i].kind??handles[i].role,endpoint=kind==='from'||kind==='to',badBend=!endpoint&&invalidIndices.has(handles[i].index??i-1),handleColor=badBend?BAD:color;
+        const kind=handles[i].kind??handles[i].role,endpoint=kind==='from'||kind==='to',badBend=endpoint?invalidEndpoints.has(kind):invalidIndices.has(handles[i].index??i-1),handleColor=badBend?BAD:color;
         layers[0].setColorAt(i,endpoint?HANDLE_PAPER:badBend?BAD:ENDPOINT_INK);layers[1].setColorAt(i,endpoint?handleColor:HANDLE_PAPER);layers[2].setColorAt(i,endpoint?ENDPOINT_INK:handleColor);
       }
       for(const batch of layers)if(batch.instanceColor)batch.instanceColor.needsUpdate=true;

@@ -150,33 +150,67 @@ export function createAlignment(start,end,{radius=8,y=.42,waypoints=[],isAllowed
   return result;
 }
 
-/** Inspect the same exact pose solver after a draft fails. Valid spans retain
- * their real bounded-curvature geometry. Only unsolved spans use a short
- * Hermite guide, which is explicitly preview-only and can never be built. */
+/** Inspect the same exact pose solver after a draft fails. Obstacle failures
+ * retain the shortest radius-safe candidate, so the preview does not invent a
+ * sharp hook that the solver never considered. Only radius failures use an
+ * unbuildable Hermite guide, with its actual curvature inspected below. */
 export function inspectAlignment(start,end,{radius=8,y=.42,waypoints=[],isAllowed=()=>true}={}){
-  const poses=waypointPoses(start,end,waypoints),spans=[],points=[];
+  const poses=waypointPoses(start,end,waypoints),spans=[],points=[],violations=[];
+  const append=(sampled,flags)=>{
+    const offset=points.length?points.length-1:0;
+    points.push(...(points.length?sampled.slice(1):sampled));
+    for(const kind of ['radius','obstacle']){
+      let first=-1;
+      for(let j=0;j<=sampled.length;j++){
+        if(j<sampled.length&&flags[kind]?.[j]){if(first<0)first=j;}
+        else if(first>=0){violations.push({reason:kind,startIndex:offset+first,endIndex:offset+j-1});first=-1;}
+      }
+    }
+    return offset;
+  };
   for(let i=1;i<poses.length;i++){
     const a=poses[i-1],b=poses[i],length=distance(a,b);
     if(length<EPS){
       if(sameHeading(a,b))continue;
       const sampled=[{x:a.x,y,z:a.z},{x:b.x,y,z:b.z}];
-      spans.push({fromIndex:i-1,toIndex:i,alignment:undefined,points:sampled,reason:'radius'});
-      points.push(...(points.length?sampled.slice(1):sampled));continue;
+      const offset=append(sampled,{radius:[true,true]});
+      spans.push({fromIndex:i-1,toIndex:i,alignment:undefined,points:sampled,offset,reason:'radius'});continue;
     }
     const shapes=alignmentCandidates(a,b,{radius,y}).filter(noLoop);
     const alignment=shapes.find(candidate=>sampleAlignmentPoints(candidate,.45).points.every(isAllowed));
-    let sampled;
-    if(alignment)sampled=sampleAlignmentPoints(alignment,.45).points;
+    const displayAlignment=alignment??shapes[0];
+    let sampled,curvatures,tangents;
+    if(displayAlignment)sampled=sampleAlignmentPoints(displayAlignment,.45).points;
     else{
-      const reach=Math.min(length/3,radius),count=Math.max(6,Math.min(160,Math.ceil(length/.45)));
+      const reach=Math.min(length/3,radius);
       const c={x:a.x+Math.cos(a.heading)*reach,z:a.z+Math.sin(a.heading)*reach};
       const d={x:b.x-Math.cos(b.heading)*reach,z:b.z-Math.sin(b.heading)*reach};
-      sampled=Array.from({length:count+1},(_,j)=>{const t=j/count,u=1-t;return {
-        x:u*u*u*a.x+3*u*u*t*c.x+3*u*t*t*d.x+t*t*t*b.x,y,
-        z:u*u*u*a.z+3*u*u*t*c.z+3*u*t*t*d.z+t*t*t*b.z};});
+      // Bound the maximum step, including the accelerated middle of a long
+      // cubic. Endpoint curvature is evaluated analytically, not inferred from
+      // a far-away control polygon or from unevenly spaced samples.
+      const count=Math.max(6,Math.min(2048,Math.ceil(3*Math.max(distance(a,c),distance(c,d),distance(d,b))/.4)));
+      curvatures=[];tangents=[];
+      sampled=Array.from({length:count+1},(_,j)=>{const t=j/count,u=1-t;
+        const dx=3*u*u*(c.x-a.x)+6*u*t*(d.x-c.x)+3*t*t*(b.x-d.x);
+        const dz=3*u*u*(c.z-a.z)+6*u*t*(d.z-c.z)+3*t*t*(b.z-d.z);
+        const ddx=6*u*(d.x-2*c.x+a.x)+6*t*(b.x-2*d.x+c.x);
+        const ddz=6*u*(d.z-2*c.z+a.z)+6*t*(b.z-2*d.z+c.z);
+        const speed=Math.hypot(dx,dz);tangents.push({x:dx,z:dz});
+        curvatures.push(speed<EPS?Infinity:Math.abs(dx*ddz-dz*ddx)/(speed*speed*speed));
+        return {x:u*u*u*a.x+3*u*u*t*c.x+3*u*t*t*d.x+t*t*t*b.x,y,
+          z:u*u*u*a.z+3*u*u*t*c.z+3*u*t*t*d.z+t*t*t*b.z};});
     }
-    spans.push({fromIndex:i-1,toIndex:i,alignment,points:sampled,reason:alignment?null:shapes.length?'obstacle':'radius'});
-    points.push(...(points.length?sampled.slice(1):sampled));
+    const reason=alignment?null:shapes.length?'obstacle':'radius';
+    const flags={radius:curvatures?.map(curvature=>curvature>1/radius+1e-6),obstacle:sampled.map(point=>!isAllowed(point))};
+    if(tangents)for(let j=1;j<sampled.length;j++){
+      const a=tangents[j-1],b=tangents[j],turn=Math.abs(Math.atan2(a.x*b.z-a.z*b.x,a.x*b.x+a.z*b.z));
+      // A collinear reversal has zero curvature on either side of its cusp.
+      // Catch the heading discontinuity even when the zero-speed point falls
+      // between samples rather than exactly on one.
+      if(turn>distance(sampled[j-1],sampled[j])/radius+1e-6)flags.radius[j-1]=flags.radius[j]=true;
+    }
+    const offset=append(sampled,flags);
+    spans.push({fromIndex:i-1,toIndex:i,alignment,points:sampled,offset,reason});
   }
-  return {poses,spans,points};
+  return {poses,spans,points,violations};
 }

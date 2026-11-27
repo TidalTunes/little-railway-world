@@ -1,6 +1,20 @@
 import {Matrix4,Vector3,Vector4} from 'three';
 import {surfacePoint} from './world-surface.js';
 
+/** Endpoints are selected in either order. A station entry fixes the incoming
+ * end of the route even when it is clicked first; track branches allow either
+ * role. Conflicting ports remain an editable invalid draft. */
+export function railwayDraftDirection({start,end,reverse=false,locked=false,hasOutbound=false,hasReturn=false}={}){
+  if(locked)return reverse;
+  const roles=anchor=>anchor?.kind==='station'&&Math.abs(anchor.side)===1
+    ?{from:anchor.side===1,to:anchor.side===-1}
+    :anchor?.kind==='track'&&anchor.direction===-1?{from:false,to:false}:{from:true,to:true};
+  const a=roles(start),b=roles(end),forward=a.from&&b.to,backward=b.from&&a.to;
+  if(forward!==backward)return backward;
+  if(!start&&!end)return hasOutbound&&!hasReturn;
+  return reverse;
+}
+
 /** Match the city level badge's screen position, with a generous hit area for
  * the town beneath it. A click never depends on streamed building geometry. */
 export function pickRailwayCity(world,cities,camera,pointer,{width,height}={}){

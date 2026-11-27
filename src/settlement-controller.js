@@ -18,7 +18,7 @@ import {createSettlementRailways,railwayControlCount} from './settlement-railway
 import {createSettlementRailwayArt} from './settlement-railway-art.js';
 import {createSettlementRailwayPlanner} from './settlement-railway-planner.js';
 import {createRailwayPreview} from './settlement-railway-preview.js';
-import {pickRailwayCity,pickRailwayHandle,pickRailwayAnchor,railwayCityLabel} from './settlement-railway-input.js';
+import {pickRailwayCity,pickRailwayHandle,pickRailwayAnchor,railwayCityLabel,railwayDraftDirection} from './settlement-railway-input.js';
 import {surfaceDistance} from './world-surface.js';
 import {walkingBuildAim} from './walking-build-aim.js';
 
@@ -99,10 +99,14 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     onBuild:()=>{pendingBuild=true;focusCanvas();},onRailBuild:()=>{pendingRailBuild=railConfirmed&&!railPlanning&&!railDrag&&!press?.connecting&&!!railPreview?.valid;focusCanvas();},onCancel:()=>selectTool('axe')});
   function reverseRail(){
     if(!loopMode||!railSource||!(railTarget??railHover))return;
-    releaseRailDrag();releaseRailPress();railReverse=!railReverse;railDirectionChosen=true;
+    releaseRailDrag();releaseRailPress();setRailDirection(!railReverse);railDirectionChosen=true;focusCanvas();
+  }
+  function setRailDirection(reverse){
+    if(railReverse===reverse)return;
+    railReverse=reverse;
     railWaypoints=railWaypoints?.slice().reverse()??null;
     if(railAttachments)railAttachments={from:railAttachments.to,to:railAttachments.from};
-    railPreview=null;railPreviewFlow.clear();railConfirmed=false;pendingRailBuild=false;focusCanvas();
+    railPreview=null;railPreviewFlow.clear();railConfirmed=false;pendingRailBuild=false;
   }
   function buyTrain(cityId,loopId){
     const result=economy.buyTrain(cityId,loopId,game.ownerId);
@@ -287,11 +291,16 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       railControlPair=pair;
       railControlCount=pair?(railWaypoints?.length??railwayControlCount(cities.find(city=>city.id===railSource),cities.find(city=>city.id===destination))):undefined;
     }
-    // With plain city clicks, offer the missing return automatically. Explicit
-    // ports and a deliberate R press always retain the player's chosen direction.
-    if(loopMode&&railSource&&destination&&!railDirectionChosen&&!railAttachments?.from&&!railAttachments?.to&&!railHoverAnchor?.attachment){
+    // Selection order is independent of travel direction. Closing a circuit by
+    // selecting the remaining entry first should produce the return track.
+    // Defer flips until an endpoint drag ends: its captured handles have roles
+    // in the current direction. An explicit R press remains authoritative.
+    if(loopMode&&railSource&&destination&&!railDrag){
       const linked=(a,b)=>railSnapshot.connections.some(connection=>connection.from===a&&connection.to===b);
-      railReverse=linked(railSource,destination)&&!linked(destination,railSource);
+      setRailDirection(railwayDraftDirection({reverse:railReverse,locked:railDirectionChosen,
+        start:railAttachments?.[railReverse?'to':'from'],
+        end:railTarget?railAttachments?.[railReverse?'from':'to']:railHoverAnchor?.attachment,
+        hasOutbound:linked(railSource,destination),hasReturn:linked(destination,railSource)}));
     }
     const from=railReverse?destination:railSource,to=railReverse?railSource:destination;
     const attachments={...railAttachments};

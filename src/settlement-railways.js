@@ -57,7 +57,7 @@ function crossingPoint(points){
   for(let i=1;i<points.length;i++)for(let j=i+3;j<points.length;j++){
     const a=points[i-1],b=points[i],c=points[j-1],d=points[j];
     if(cross(a,b,c)*cross(a,b,d)<-1e-8&&cross(c,d,a)*cross(c,d,b)<-1e-8){
-      const t=cross(c,d,a)/(cross(c,d,a)-cross(c,d,b));return{x:a.x+(b.x-a.x)*t,z:a.z+(b.z-a.z)*t};
+      const t=cross(c,d,a)/(cross(c,d,a)-cross(c,d,b));return{x:a.x+(b.x-a.x)*t,z:a.z+(b.z-a.z)*t,firstIndex:i,secondIndex:j};
     }
   }return null;
 }
@@ -467,48 +467,28 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
   function failedDraft(from,to,attempt,options){
     const inspection=inspectAlignment(attempt.start,attempt.end,{radius:SETTLEMENT_RAILWAY.minRadius,y:SETTLEMENT_RAILWAY.railY,
       waypoints:options.waypoints,isAllowed:attempt.allowed}),bad=[];
-    const severity=index=>{
-      const a=inspection.poses[index],p=inspection.poses[index+1],b=inspection.poses[index+2];
-      const turn=Math.abs(angleDelta(Math.atan2(b.z-p.z,b.x-p.x),Math.atan2(p.z-a.z,p.x-a.x)));
-      return Math.tan(Math.min(Math.PI-.001,turn)/2)*SETTLEMENT_RAILWAY.minRadius/Math.max(.01,Math.min(dist(a,p),dist(p,b)));
+    const samples=inspection.points,distances=[0];
+    for(let i=1;i<samples.length;i++)distances.push(distances.at(-1)+dist(samples[i-1],samples[i]));
+    const poseSamples=new Map();
+    for(const span of inspection.spans){poseSamples.set(span.fromIndex,span.offset);poseSamples.set(span.toIndex,span.offset+span.points.length-1);}
+    const mark=(first,last,reason)=>{
+      const center=(distances[first]+distances[last])/2;
+      let poseIndex=0,nearest=Infinity;
+      for(const [index,sampleIndex] of poseSamples){const separation=Math.abs(distances[sampleIndex]-center);
+        if(separation<=nearest){nearest=separation;poseIndex=index;}}
+      const pose=inspection.poses[poseIndex],padding=1.5;
+      const low=distances[first]-padding,high=distances[last]+padding;
+      while(first>0&&distances[first]>low)first--;
+      while(last<samples.length-1&&distances[last]<high)last++;
+      if(last<=first)return;
+      bad.push({...(poseIndex===0?{handleKind:'from'}:poseIndex===inspection.poses.length-1?{handleKind:'to'}:{index:poseIndex-1}),
+        x:pose.x,z:pose.z,reason,points:samples.slice(first,last+1)});
     };
-    const poseSamples=new Map();let sampleOffset=0;
-    for(const span of inspection.spans){
-      poseSamples.set(span.fromIndex,sampleOffset);
-      sampleOffset+=span.points.length-1;poseSamples.set(span.toIndex,sampleOffset);
-    }
-    const bendContext=index=>{
-      const center=poseSamples.get(index+1);if(center===undefined)return [];
-      let first=center,last=center,length=0;
-      while(first>0&&length<10){length+=dist(inspection.points[first],inspection.points[first-1]);first--;}
-      length=0;
-      while(last<inspection.points.length-1&&length<10){length+=dist(inspection.points[last],inspection.points[last+1]);last++;}
-      // A collapsed failed span can be hidden beneath its handle. Include the
-      // adjoining real curve so the warning remains visible at map scale.
-      return inspection.points.slice(first,last+1);
-    };
-    const mark=(index,points,reason,focus,limit=SETTLEMENT_RAILWAY.minRadius*2.5)=>{
-      if(index<0||index>=options.waypoints.length)return;
-      const p=options.waypoints[index],runs=[];let current=[];
-      for(const point of points){
-        if(dist(point,focus??p)<=limit)current.push(point);
-        else if(current.length){if(current.length>1)runs.push(current);current=[];}
-      }
-      if(current.length>1)runs.push(current);
-      // Keep separate fragments for the same bend; joining distant samples
-      // would draw a red chord through otherwise valid track.
-      for(const fragment of runs.length?runs:points.length>1?[points]:[])bad.push({index,x:p.x,z:p.z,reason,points:fragment});
-    };
-    for(const span of inspection.spans){
-      if(!span.reason)continue;
-      const choices=[span.fromIndex-1,span.toIndex-1].filter(i=>i>=0&&i<options.waypoints.length).sort((a,b)=>severity(b)-severity(a));
-      mark(choices[0],bendContext(choices[0]),span.reason);
-    }
-    const crossing=crossingPoint(inspection.points);
-    if(crossing&&!bad.length){
-      const index=options.waypoints.reduce((best,p,i)=>dist(p,crossing)<dist(options.waypoints[best],crossing)?i:best,0);
-      mark(index,inspection.points,'intersection',crossing,SETTLEMENT_RAILWAY.minRadius*1.5);
-    }
+    // The warning follows the failing samples themselves. Control positions
+    // only identify which handle can help; they never decide where red is drawn.
+    for(const violation of inspection.violations)mark(violation.startIndex,violation.endIndex,violation.reason);
+    const crossing=crossingPoint(samples);
+    if(crossing){mark(crossing.firstIndex-1,crossing.firstIndex,'intersection');mark(crossing.secondIndex-1,crossing.secondIndex,'intersection');}
     const newStations=[attempt.sa,attempt.sb].filter(station=>!stations.some(existing=>existing.id===station.id));
     const branch=guideLine(from,to,inspection.points);
     return {lines:[...newStations.map(station=>makeSpine(station,false)),branch],stations:newStations,invalidBends:bad,
@@ -567,7 +547,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     }
     if(!chosen){
       const result=blocked('route-blocked',waypoints.length?'Give the curve more room around buildings':'No clear railway route between these cities');
-      if(waypoints.length&&attempts.length){const attempt=attempts[0];attempt.allowed??=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end],false);
+      if(attempts.length){const attempt=attempts[0];attempt.allowed??=allowedWith(occupied,[attempt.sa,attempt.sb],[attempt.start,attempt.end],false);
         const draft=failedDraft(from,to,attempt,options);
         const reason=draft.invalidBends.some(bend=>bend.reason==='radius')?'Give this bend more room':
           draft.invalidBends.some(bend=>bend.reason==='intersection')?'Keep this bend from crossing the line':result.reason;

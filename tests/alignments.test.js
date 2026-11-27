@@ -81,6 +81,43 @@ test('coincident controls cannot hide a cusp, while collinear duplicates remain 
   assert.ok(inspectAlignment(start,straightEnd,straight).spans.every(span=>!span.reason));
 });
 
+
+test('radius diagnostics locate a tight departure hook instead of a distant control',()=>{
+  const start={x:0,z:0,heading:0},end={x:2,z:20,heading:Math.PI/2};
+  const inspected=inspectAlignment(start,end,{radius:8});
+  assert.equal(inspected.spans[0].reason,'radius');
+  const failures=inspected.violations.filter(issue=>issue.reason==='radius');
+  assert.equal(failures.length,1);assert.equal(failures[0].startIndex,0,'the warning starts at the actual tight endpoint');
+  const red=inspected.points.slice(failures[0].startIndex,failures[0].endIndex+1);
+  assert.ok(red.every(point=>Math.hypot(point.x-start.x,point.z-start.z)<5));
+  assert.ok(Math.hypot(red.at(-1).x-end.x,red.at(-1).z-end.z)>15,'the broad arrival is not falsely highlighted');
+});
+
+
+test('a collinear reversal diagnoses its unsampled cusp rather than treating zero curvature as safe',()=>{
+  const inspected=inspectAlignment({x:0,z:0,heading:Math.PI},{x:20,z:0,heading:0});
+  assert.equal(inspected.spans[0].reason,'radius');
+  assert.ok(inspected.violations.some(issue=>issue.reason==='radius'));
+  for(const issue of inspected.violations){
+    const red=inspected.points.slice(issue.startIndex,issue.endIndex+1);
+    assert.ok(red.every(point=>point.x<0),'the backwards hook is highlighted, not the straight route after it');
+  }
+});
+
+test('obstacle diagnostics preserve exact radius-safe geometry and mark the colliding samples',()=>{
+  const start={x:0,z:0,heading:0},end={x:40,z:20,heading:0};
+  const isAllowed=point=>point.x<18||point.x>22;
+  const inspected=inspectAlignment(start,end,{radius:8,isAllowed});
+  assert.equal(inspected.spans[0].reason,'obstacle');
+  assert.deepEqual(inspected.points,sampleAlignmentPoints(alignmentCandidates(start,end,{radius:8})[0],.45).points,
+    'an obstacle cannot introduce a new sharp Hermite hook into the preview');
+  assert.ok(inspected.violations.length);assert.ok(inspected.violations.every(issue=>issue.reason==='obstacle'));
+  for(const issue of inspected.violations){
+    const red=inspected.points.slice(issue.startIndex,issue.endIndex+1);
+    assert.ok(red.every(point=>point.x>=18&&point.x<=22));
+  }
+});
+
 function checkWorldNetwork(world){
   assert.deepEqual(validateWorld(world),[]);
   for(const line of world.lines)checkAlignment(line.alignment,world.minTurnRadius);

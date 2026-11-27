@@ -225,6 +225,24 @@ test('a bad bend highlights only its local span and handle while the rest of the
   art.preview({...result,valid:true,siteValid:true,invalidBends:[]},options);assert.equal(highlight.visible,false);assert.equal(highlight.geometry.drawRange.count,0);
 });
 
+test('a tight station approach marks its endpoint without blaming a distant interior bend',t=>{
+  const {art}=fixture(t),handles=[{kind:'from',x:0,z:0},{kind:'bend',index:0,x:0,z:10},{kind:'to',x:0,z:20}];
+  const result={valid:false,siteValid:false,lines:[line],stations:[],handles,
+    invalidBends:[{handleKind:'from',reason:'radius',points:[{x:0,y:.42,z:0},{x:.3,y:.42,z:1},{x:0,y:.42,z:2}]}]};
+  art.preview(result,{visible:true,editable:true});
+  const color=new THREE.Color();
+  for(const root of [art.root,art.mapRoot]){
+    const centres=root.getObjectByName('railway-handle-centres'),pins=root.getObjectByName('railway-handle-pins');
+    centres.getColorAt(0,color);assert.equal(color.getHexString(),'ee7666');
+    centres.getColorAt(2,color);assert.equal(color.getHexString(),'5db6a5');
+    pins.getColorAt(1,color);assert.equal(color.getHexString(),'5db6a5');
+    const highlight=root.getObjectByName('railway-invalid-bend-glow'),positions=highlight.geometry.attributes.position;
+    for(let i=0;i<highlight.geometry.drawRange.count;i++)assert.ok(positions.getZ(i)<=2,'warning stays at the failed approach');
+  }
+  art.preview({...result,valid:true,siteValid:true,invalidBends:[]},{visible:true,editable:true});
+  art.root.getObjectByName('railway-handle-centres').getColorAt(0,color);assert.equal(color.getHexString(),'5db6a5','endpoint warning clears after repair');
+});
+
 test('endpoint rings follow snapped model handles even when a caller supplies raw drag coordinates',t=>{
   const {art}=fixture(t),handles=[{kind:'from',x:2,z:3},{kind:'to',x:4,z:20}];
   art.preview({valid:true,siteValid:true,lines:[line],stations:[],handles},{visible:true,editable:true,handles:handles.map(handle=>({...handle,x:90,z:90})),activeHandle:0});

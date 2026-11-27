@@ -404,16 +404,12 @@ test('an impossible close bend keeps the complete draft and diagnoses only the a
   const bad=f.rail.preview('a','b',options);assert.equal(bad.siteValid,false);assert.equal(bad.code,'route-blocked');
   assert.equal(bad.reason,'Give this bend more room');
   assert.deepEqual(interior(bad),options.waypoints);assert.deepEqual(endpoints(bad),endpoints(initial));
-  assert.ok(bad.invalidBends.length);assert.deepEqual([...new Set(bad.invalidBends.map(bend=>bend.index))],[1]);
+  assert.ok(bad.invalidBends.length);
   for(const bend of bad.invalidBends){
-    assert.equal(bend.reason,'radius');assert.equal(bend.x,options.waypoints[1].x);assert.equal(bend.z,options.waypoints[1].z);
+    assert.equal(bend.reason,'radius');assert.ok([0,1].includes(bend.index));
     assert.ok(bend.points.length>1);for(let i=1;i<bend.points.length;i++)assert.ok(Math.hypot(bend.points[i].x-bend.points[i-1].x,bend.points[i].z-bend.points[i-1].z)<.6,'local fragments never jump across an unrelated part of the curve');
-    const center=bend.points.findIndex(point=>Math.hypot(point.x-bend.x,point.z-bend.z)<1e-8);
-    assert.ok(center>0&&center<bend.points.length-1,'the warning includes both sides of its control');
-    const length=points=>points.slice(1).reduce((sum,point,i)=>sum+Math.hypot(point.x-points[i].x,point.z-points[i].z),0);
-    for(const side of [bend.points.slice(0,center+1),bend.points.slice(center)]){
-      assert.ok(length(side)>=10&&length(side)<10.6,'even a tiny failed span includes ten units of adjacent curve, without coloring distant track');
-    }
+    assert.ok(bend.points.every(point=>Math.hypot(point.x-options.waypoints[0].x,point.z-options.waypoints[0].z)<4),
+      'only the failed short span and a little visible context are red, not ten metres of valid adjoining curve');
   }
   const branch=bad.lines.at(-1);assert.equal(branch.previewOnly,true);assert.equal(branch.alignment,undefined);
   assert.ok(branch.points.length>300,'the rest of the route remains visible');
@@ -425,12 +421,39 @@ test('an impossible close bend keeps the complete draft and diagnoses only the a
   assert.equal(f.rail.build('a','b',{...options,requireCached:true}).ok,false);assert.equal(f.session.player.gold,20);
   options.waypoints[1]={...options.waypoints[0]};
   const collapsed=f.rail.preview('a','b',options);assert.equal(collapsed.siteValid,false);
-  assert.ok(collapsed.invalidBends.some(bend=>bend.reason==='radius'&&bend.points.length>40),'exactly overlapping controls retain visible neighboring curve context');
+  assert.ok(collapsed.invalidBends.some(bend=>bend.reason==='radius'&&bend.points.length>6),'exactly overlapping controls retain visible neighboring curve context');
   assert.equal(f.rail.evaluate('a','b',options).siteValid,false,'validation also rejects the hidden cusp');
   assert.equal(f.rail.build('a','b',{...options,requireCached:true}).ok,false);assert.equal(f.session.player.gold,20);
   options.waypoints[1]={x:options.waypoints[0].x+3,z:options.waypoints[0].z};
   const healed=f.rail.preview('a','b',options);assert.equal(healed.siteValid,true);assert.deepEqual(healed.invalidBends,[]);
   assertSmooth(healed.lines.at(-1));
+});
+
+
+test('an infeasible departure bend highlights the endpoint hook and leaves the middle of the span neutral',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:200,z:0,ownerId:'coral',level:1,houseCount:3}],f=fixture({cities});
+  const initial=f.rail.preview('a','b'),start=initial.handles[0];
+  const options={attachments:endpoints(initial),waypoints:interior(initial)};
+  options.waypoints[0]={x:start.x+2,z:start.z+20};
+  const draft=f.rail.preview('a','b',options);assert.equal(draft.siteValid,false);
+  const departure=draft.invalidBends.find(issue=>issue.handleKind==='from'&&issue.reason==='radius');
+  assert.ok(departure,'a tight endpoint is represented directly instead of marking only an interior control');
+  assert.deepEqual(departure.points[0],draft.lines.at(-1).points[0]);
+  assert.ok(departure.points.every(point=>Math.hypot(point.x-start.x,point.z-start.z)<7));
+  const middle={x:start.x+1,z:start.z+10};
+  assert.ok(draft.invalidBends.flatMap(issue=>issue.points).every(point=>Math.hypot(point.x-middle.x,point.z-middle.z)>2),
+    'the wide middle of the same unsolved span stays neutral');
+});
+
+test('blocked routes without interior edits retain a local obstacle warning and an editable draft',()=>{
+  const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:1,houseCount:3},{id:'b',x:200,z:0,ownerId:'coral',level:1,houseCount:3}];
+  const wall={id:'blocked-corridor',kind:'house',x:100,z:0,width:6,depth:1000,rotation:0};
+  const f=fixture({cities,placements:[wall]}),draft=f.rail.preview('a','b');
+  assert.equal(draft.siteValid,false);assert.equal(draft.code,'route-blocked');assert.ok(draft.lines.at(-1).previewOnly);
+  assert.ok(draft.invalidBends.length);assert.ok(draft.invalidBends.every(issue=>issue.reason==='obstacle'));
+  assert.ok(draft.invalidBends.flatMap(issue=>issue.points).every(point=>Math.abs(point.x-100)<7),
+    'the obstacle location is red even with no authored interior control');
+  assert.equal(draft.handles[0].kind,'from');assert.equal(draft.handles.at(-1).kind,'to');
 });
 
 test('a blocked orbital station stays visibly snapped to its tangent circle',()=>{
