@@ -52,7 +52,7 @@ export function pickRailwayHandle(world,handles,camera,pointer,{width,height}={}
 /** Pick physical connection points before the city badge. Screen-space hit
  * areas stay comfortable at every zoom; track distances remain in world units.
  * Station spines expose their two ports rather than an ambiguous interior. */
-export function pickRailwayAnchor(world,{cities=[],stations=[],lines=[]}={},camera,pointer,{width,height}={}){
+export function pickRailwayAnchor(world,{cities=[],stations=[],lines=[],includeStationSpines=false}={},camera,pointer,{width,height}={}){
   if(!camera||!Number.isFinite(pointer?.x)||!Number.isFinite(pointer?.y)||!(width>0)||!(height>0)||Math.abs(pointer.x)>1||Math.abs(pointer.y)>1)return null;
   camera.updateMatrixWorld(true);
   const matrix=new Matrix4().multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),point=new Vector3();
@@ -74,7 +74,7 @@ export function pickRailwayAnchor(world,{cities=[],stations=[],lines=[]}={},came
   if(chosen)return chosen;
   const spineIds=new Set(stations.map(station=>station.lineId));
   for(const line of lines){
-    if(spineIds.has(line.id)||String(line.id).startsWith('rail-spine:')||line.previewOnly)continue;
+    if((!includeStationSpines&&(spineIds.has(line.id)||String(line.id).startsWith('rail-spine:')))||line.previewOnly)continue;
     const points=line.points??[];let cumulative=0;
     for(let i=1;i<points.length;i++){
       const start=points[i-1],end=points[i];

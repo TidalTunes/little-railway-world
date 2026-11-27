@@ -160,7 +160,8 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     worker.route=[{x:worker.x,y:worker.y,z:worker.z},...visited.reverse()];worker.routeIndex=1;worker.activity='returning';worker.wait=0;release(worker);worker.reroute=routeBlocked(worker,buildings);worker.rerouteWait=0;
   }
   function arriveHome(worker){
-    if(worker.carrying){worker.trip++;production+=settings.amount;emit({type:'production',id:`${worker.id}:${worker.trip}`,ownerId:worker.ownerId,cityId:worker.cityId,resource:worker.resource,amount:settings.amount});worker.carrying=false;revision++;}
+    if(worker.carrying){worker.trip++;production+=settings.amount;emit({type:'production',id:`${worker.id}:${worker.trip}`,ownerId:worker.ownerId,cityId:worker.cityId,resource:worker.resource,amount:settings.amount,
+      workerId:worker.id,nodeId:worker.nodeId,x:worker.x,y:worker.y,z:worker.z});worker.carrying=false;revision++;}
     release(worker);worker.nodeId=null;worker.route=[];worker.routeIndex=0;worker.activity=dark?'indoors':'waiting';worker.indoors=dark;worker.wait=settings.restSeconds;visibilityRevision++;
   }
   function nodeAvailable(worker){const node=nodes.get(worker.nodeId);return !!node&&!session.shared?.isSceneryRemoved?.(node.farmId??node.id)&&!(worker.resource==='wood'&&removed.has(node.id));}
@@ -171,7 +172,8 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
       if(!node||removed.has(node.id)){goHome(worker);return;}
       removed.add(node.id);regrowth.set(node.id,time+settings.treeRegrowSeconds);markTrees();emit({type:'tree-remove',id:node.id,treeId:node.id,direction:{x:node.x-worker.x,z:node.z-worker.z}});
     }
-    worker.carrying=true;goHome(worker);
+    worker.carrying=true;emit({type:'gathered',id:`${worker.id}:${worker.trip+1}:gathered`,ownerId:worker.ownerId,cityId:worker.cityId,workerId:worker.id,nodeId:worker.nodeId,
+      resource:worker.resource,amount:settings.amount,x:worker.x,y:worker.y,z:worker.z});goHome(worker);
   }
   function trackTree(tree){if(tree?.kind!=='tree')return false;const id=idOf(tree);sources.set(id,tree);if(removed.has(id)&&!regrowth.has(id)&&!session.shared?.isSceneryRemoved?.(id))regrowth.set(id,time+settings.treeRegrowSeconds);return true;}
   function updateRegrowth(){

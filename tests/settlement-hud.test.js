@@ -38,15 +38,15 @@ test('railway guidance starts with a formed owned city and never offers an endpo
   assert.equal(empty.status,'3 homes to start');
   assert.equal(empty.canBuild,false);assert.equal(empty.showConfirm,false);
   const source=settlementHudRailway({hasCity:true,stage:'source',canBuild:true},{gold:20});
-  assert.equal(source.selection,'Choose a city, station end or track');
+  assert.equal(source.selection,'New railway');assert.equal(source.status,'');
   assert.equal(source.canBuild,false);assert.equal(source.showConfirm,false);
   const destination=settlementHudRailway({hasCity:true,stage:'destination',sourceLabel:'Pine Town',canBuild:true},{gold:20});
   assert.equal(destination.selection,'Pine Town → …');
   assert.equal(destination.canBuild,false);assert.equal(destination.showConfirm,false);
-  assert.equal(destination.status,'Choose a city, station end or track');
+  assert.equal(destination.status,'Choose destination');
   assert.equal(settlementHudRailway({hasCity:true,stage:'destination'},{gold:0}).status,destination.status,'free route exploration keeps its interaction hint before purchase');
   const hover=settlementHudRailway({hasCity:true,stage:'destination',hovering:true,siteValid:true,sourceLabel:'Pine Town',targetLabel:'River Village',reason:'Connect these cities'},{gold:0});
-  assert.equal(hover.selection,'Pine Town → River Village');assert.equal(hover.status,'Click or release to shape route');
+  assert.equal(hover.selection,'Pine Town → River Village');assert.equal(hover.status,'Route preview');
   assert.equal(hover.statusKind,'info');assert.equal(hover.canBuild,false);assert.equal(hover.showConfirm,false);
 });
 
@@ -55,7 +55,7 @@ test('railway confirmation requires a ready, valid, affordable preview',()=>{
   const ready=settlementHudRailway(preview,{gold:5});
   assert.equal(ready.canBuild,true);assert.equal(ready.showConfirm,true);
   assert.equal(ready.selection,'Pine Town → River Village');
-  assert.equal(ready.status,'Drag dots to shape the line');assert.equal(ready.statusKind,'success');
+  assert.equal(ready.status,'Ready to build');assert.equal(ready.statusKind,'success');
   for(const gold of [0,4,4.9,NaN,Infinity]){
     const state=settlementHudRailway(preview,{gold});
     assert.equal(state.canBuild,false);assert.equal(state.showConfirm,true);

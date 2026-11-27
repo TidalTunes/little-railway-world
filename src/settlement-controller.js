@@ -4,6 +4,10 @@ import {createEconomicBots} from './economic-bots.js';
 import {createTradeTrains} from './trade-trains.js';
 import {createEconomyHud} from './economy-hud.js';
 import {createLoopHud} from './loop-hud.js';
+import {buildCircuitSelection,pickCircuitAt,nextCircuitId} from './railway-circuit-selection.js';
+import {createCircuitSelectionArt} from './circuit-selection-art.js';
+import {createResourceGainEffects} from './resource-gain-effects.js';
+import './resource-gain-effects.css';
 import {createResourceWork} from './resource-work.js';
 import {createResourceWorkArt} from './resource-work-art.js';
 import {SETTLEMENT} from './settlement-game.js';
@@ -36,6 +40,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const game=session.player,art=createSettlementArt(parent,mapParent,world);
   const residents=createSettlementResidents(parent,world),levels=createCityLevelMarkers(markerParent,markerMapParent,world);
   const incomeEffects=createSettlementIncomeEffects(markerParent,markerMapParent,world);
+  const resourceGains=loopMode?createResourceGainEffects(world,{parent:canvas.ownerDocument.body,document:canvas.ownerDocument}):null;
+  const circuitArt=loopMode?createCircuitSelectionArt(parent,mapParent,world):null;
   // A single gray batch serves all farming villages. They share the scenery
   // and resident systems, while player rules and resource notifications only
   // ever receive the player's own settlement snapshot.
@@ -62,6 +68,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const botRailPlanner=economy?createSettlementRailwayPlanner(world,railways,session,{getPlacements:railPlacements}):null;
   const economicBots=economy?createEconomicBots(world,{session,bots,railways,economy,onRailBuild:applyRailBuild,planRoute:(from,to,options)=>botRailPlanner.request(from,to,options)}):null;
   let inspectedCity=null,industryCity=null,economyView=null,economyViewKey='';
+  let selectedCircuit=null,hoverCircuit=null,circuitCandidates=[],circuitPick=buildCircuitSelection(),circuitKey='',circuitArtKey='',hoverTime=0;
   const railPlanner=createSettlementRailwayPlanner(world,railways,session,{getPlacements:railPlacements});
   const railwayArt=createSettlementRailwayArt(parent,mapParent,world);
   const railPreviewFlow=createRailwayPreview(railways,railPlanner);
@@ -87,7 +94,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   function selectTool(next){
     if(next==='rail'&&(walking||transitioning)||next==='house'&&(!walking||transitioning))return;
     releaseRailDrag();releaseRailPress();
-    tool=next;pointer=null;pendingBuild=false;pendingChop=false;previewKey='';message='';
+    tool=next;if(next!=='axe')clearCircuit();pointer=null;pendingBuild=false;pendingChop=false;previewKey='';message='';
     railSource=railTarget=railPreview=railClick=null;railPreviewFlow.clear();pendingRailBuild=false;press=null;focusCanvas();
     railPlanning=railConfirmed=false;railHover=railHoverAnchor=null;railWaypoints=railAttachments=null;railDrag=null;
     railControlPair='';railControlCount=undefined;railReverse=false;railDirectionChosen=false;
@@ -121,7 +128,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     else{const result=economy?.depositTimber(game.ownerId,position,amount);notify(result?.ok?`${result.amount} timber stored in your town`:result?.reason??'Move close to your town to store timber');}
     focusCanvas();
   }
-  const loopHud=loopMode?createLoopHud({parent:canvas.parentElement,ownerId:game.ownerId,onBuyTrain:buyTrain}):null;
+  const loopHud=loopMode?createLoopHud({parent:canvas.parentElement,ownerId:game.ownerId,onBuyTrain:buyTrain,onCycle:cycleCircuit,onClose:clearCircuit}):null;
   const economyHud=economy&&!loopMode?createEconomyHud({parent:canvas.parentElement,ownerId:game.ownerId,onIndustry:changeIndustry,onDeposit:depositTimber}):null;
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
   const eventPointer=event=>{const box=canvas.getBoundingClientRect();return {x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};};
@@ -131,6 +138,13 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     if(hit.kind==='city')return hit;
     return railways.anchorAt(hit,{...hit,ownerId:game.ownerId});
   }
+  function clearCircuit(){selectedCircuit=hoverCircuit=null;circuitCandidates=[];inspectedCity=null;}
+  function cycleCircuit(direction=1){
+    if(!circuitCandidates.length)return;
+    const index=circuitCandidates.indexOf(selectedCircuit);
+    selectedCircuit=circuitCandidates[(index+direction+circuitCandidates.length)%circuitCandidates.length];focusCanvas();
+  }
+  function circuitAt(point){return loopMode&&tool==='axe'&&!walking&&camera&&point?pickCircuitAt(world,circuitPick,camera,point,canvas.getBoundingClientRect()):null;}
   function groundAt(pointerValue){
     if(!camera||!pointerValue)return null;
     ndc.set(pointerValue.x,pointerValue.y);ray.setFromCamera(ndc,camera);
@@ -183,7 +197,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     if(railDrag?.id===event.pointerId){event.preventDefault();event.stopImmediatePropagation();dragRail(event);return;}
     if(press?.id===event.pointerId&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>=5)press.moved=true;
     if(press?.connecting){event.preventDefault();event.stopImmediatePropagation();}
-    if(tool==='rail')pointer=eventPointer(event);
+    if(!walking)pointer=eventPointer(event);
   },true);
   listen(canvas,'pointerleave',event=>{if(!event.relatedTarget?.closest?.('.settlement-hud, .loop-hud')&&!railDrag&&!press?.connecting)pointer=null;});
   listen(canvas,'pointerdown',event=>{
@@ -203,7 +217,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       press={id:event.pointerId,x:event.clientX,y:event.clientY,tool,connecting:true,started,anchor};
       canvas.setPointerCapture?.(event.pointerId);return;
     }
-    focusCanvas();press={id:event.pointerId,x:event.clientX,y:event.clientY,tool};
+    const circuit=circuitAt(pointer);if(circuit)onClaimPointer();
+    focusCanvas();press={id:event.pointerId,x:event.clientX,y:event.clientY,tool,circuit};
   },true);
   listen(canvas.ownerDocument.defaultView,'pointerup',event=>{
     if(railDrag?.id===event.pointerId){event.preventDefault();event.stopImmediatePropagation();dragRail(event);releaseRailDrag();return;}
@@ -215,14 +230,18 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     }
     if(!press.moved&&Math.hypot(event.clientX-press.x,event.clientY-press.y)<5){
       if(tool==='rail')railClick=eventPointer(event);
-      else inspectedCity=pickRailwayCity(world,railways.cities,camera,eventPointer(event),canvas.getBoundingClientRect())?.id??null;
+      else{
+        const circuit=press.circuit&&circuitAt(eventPointer(event));
+        if(circuit){selectedCircuit=nextCircuitId(circuit.loops,selectedCircuit);circuitCandidates=circuit.loops.map(loop=>loop.id);inspectedCity=null;}
+        else{clearCircuit();inspectedCity=pickRailwayCity(world,railways.cities,camera,eventPointer(event),canvas.getBoundingClientRect())?.id??null;}
+      }
     }
     releaseRailPress();
   });
   listen(canvas,'pointercancel',()=>{releaseRailPress();releaseRailDrag();});
   listen(canvas,'lostpointercapture',event=>{if(railDrag?.id===event.pointerId)releaseRailDrag();if(press?.id===event.pointerId)releaseRailPress();});
   listen(canvas.ownerDocument.defaultView,'blur',()=>{releaseRailPress();releaseRailDrag();pendingBuild=false;pendingChop=false;pendingHit=null;pendingRailBuild=false;railClick=null;});
-  listen(canvas,'dblclick',event=>{if(tool==='rail'){event.preventDefault();event.stopImmediatePropagation();}},true);
+  listen(canvas,'dblclick',event=>{if(tool==='rail'||circuitAt(eventPointer(event))){event.preventDefault();event.stopImmediatePropagation();}},true);
   function clearRailScenery(result){
     for(const id of result.clearedTreeIds??[])if(reducedMotion?.matches||!detail.fellTree(id))detail.removeTree(id);
     detail.clearScenery?.(result.clearedPlacements??result.clearedPlacementIds??[],{animate:!reducedMotion?.matches});
@@ -338,7 +357,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   }
   synchronize();
   return{
-    game,art,hud,residents,villageArt,villageResidents,bots,session,railways,railwayArt,economy,economicBots,tradeArt,resourceWork,resourceWorkArt,loopHud,
+    game,art,hud,residents,villageArt,villageResidents,bots,session,railways,railwayArt,economy,economicBots,tradeArt,resourceWork,resourceWorkArt,loopHud,resourceGains,circuitArt,
     get building(){return tool==='house'||tool==='rail';},
     get railwayPlanning(){return tool==='rail';},
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${sessionRevision}:${resourceRevision}`;},
@@ -347,6 +366,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
     keyDown(event){
       const key=event.key.toLowerCase();
+      if(key==='escape'&&!walking&&tool==='axe'&&(selectedCircuit||inspectedCity)){clearCircuit();return true;}
       if(economy&&!loopMode&&key==='g'){if(!event.repeat)depositTimber();return true;}
       if(economy&&!loopMode&&['1','2','3'].includes(key)){if(!event.repeat&&industryCity)changeIndustry(industryCity,['lumber','farm','workshop'][Number(key)-1]);return true;}
       if(tool==='rail'&&key==='r'){if(!event.repeat)reverseRail();return true;}
@@ -380,7 +400,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       synchronize();
       resourceWork?.update(dt,{night,dayPhase:dayState?.phase});
       for(const event of resourceWork?.drainEvents()??[]){
-        if(event.type==='production')economy.creditProduction(event.ownerId,event.resource,event.amount,event.id);
+        if(event.type==='production')economy.creditProduction(event.ownerId,event.resource,event.amount,event.id,event);
+        else if(event.type==='gathered'&&event.ownerId===game.ownerId)resourceGains?.emit(event);
         else if(event.type==='tree-remove'){if(reducedMotion?.matches||!detail.fellTree(event.treeId,{direction:event.direction}))detail.removeTree(event.treeId);}
         else if(event.type==='tree-regrow')detail.restoreTree?.(event.treeId);
       }
@@ -388,6 +409,10 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       const economicEvents=economy?.drainEvents()??[];
       for(const event of economicEvents)if(event.type==='income'&&event.ownerId===game.ownerId){
         if(walkingWeight<.5)incomeEffects.emit(event.houses);canvas.dataset.lastIncome=String(event.amount);
+      }
+      for(const event of economicEvents){
+        if(event.ownerId===game.ownerId&&['pickup','delivery','production'].includes(event.type))resourceGains?.emit(event);
+        if(event.type==='pickup'&&event.cityOwnerId===game.ownerId&&event.gold>0)resourceGains?.emit({...event,kind:'gold',ownerId:game.ownerId,resource:'gold',amount:event.gold,resources:{gold:event.gold}});
       }
       const income=game.settleIncome(dayState?.completedDays??0);
       if(income?.amount>0){
@@ -432,7 +457,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       pendingBuild=false;
       const railwayHud=updateRailways();
       railwayArt.update({mapBlend,camera,viewportHeight,walkingWeight,zoom});
-      tradeArt?.update(economy.trains,{camera,mapBlend,walkingWeight,viewportHeight,zoom});
+      const liveTrains=economy?.trains??[];
+      tradeArt?.update(liveTrains,{camera,mapBlend,walkingWeight,viewportHeight,zoom});
       art.preview(placement,{visible:walking&&tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend,dt:uiDt,reducedMotion:reducedMotion?.matches,night});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
       const target=placement?.house??player?.position??{x:0,z:0};
@@ -451,6 +477,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       bots.update(dt,{camera,mapBlend,walkingWeight,focus:focus??player?.position,viewportHeight,night,dayPhase:dayState?.phase,uiDt});
       levels.update({camera,mapBlend,walkingWeight,viewportHeight});
       incomeEffects.update(uiDt,{camera,mapBlend,walkingWeight,viewportHeight,reducedMotion:reducedMotion?.matches});
+      resourceGains?.update(uiDt,{camera,viewport:canvas.getBoundingClientRect(),mapBlend,walkingWeight,reducedMotion:reducedMotion?.matches});
       const resources=game.resourcesAt(placement?.house??player?.position);
       if(economy){
         const key=`${economy.revision}:${Math.floor(economy.elapsed)}`;
@@ -459,7 +486,21 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         const city=economyView.cities.find(city=>city.id===cityId);industryCity=city?.ownerId===game.ownerId?city.id:null;
         economyHud?.update({city,houses:snapshot.houses.length,walking,tool,night,time:economyView.time,nextPulse:economyView.nextPulse,
           delivered:economyView.stats.deliveries,carried:snapshot.logs,localCityId:economy.resourcesAt(game.ownerId,player?.position).cityId,stationCount:railSnapshot.stations.filter(station=>station.ownerId===game.ownerId).length,events:economicEvents,feedback:messageTime>0?message:''});
-        loopHud?.update({city,ownCity:economyView.cities.find(city=>city.ownerId===game.ownerId),houses:snapshot.houses.length,resources,walking,tool,night,feedback:messageTime>0?message:'',delivered:economyView.stats.laps});
+        const ownCity=economyView.cities.find(city=>city.ownerId===game.ownerId);
+        const selectionKey=`${railRevision}:${(ownCity?.loops??[]).map(loop=>loop.id).join(',')}`;
+        if(selectionKey!==circuitKey){
+          circuitKey=selectionKey;circuitPick=buildCircuitSelection({loops:ownCity?.loops??[],lines:railSnapshot.lines});
+          if(selectedCircuit&&!circuitPick.loops.some(loop=>loop.id===selectedCircuit))clearCircuit();
+          circuitCandidates=circuitCandidates.filter(id=>circuitPick.loops.some(loop=>loop.id===id));
+        }
+        hoverTime-=uiDt;
+        if(hoverTime<=0){hoverTime=.12;const hit=!press&&!transitioning?circuitAt(pointer):null;hoverCircuit=hit?.loops.find(loop=>loop.id===selectedCircuit)?.id??hit?.loops[0]?.id??null;}
+        const shownCircuit=selectedCircuit??hoverCircuit,artKey=`${railRevision}:${shownCircuit??''}`;
+        if(artKey!==circuitArtKey){circuitArtKey=artKey;circuitArt?.sync(circuitPick.loops.find(loop=>loop.id===shownCircuit),railSnapshot.lines);}
+        circuitArt?.update({camera,viewportHeight,mapBlend,walkingWeight,visible:tool==='axe'&&!transitioning,hover:!selectedCircuit});
+        loopHud?.update({city:!walking?economyView.cities.find(city=>city.id===inspectedCity):null,ownCity,cities:economyView.cities,selectedLoopId:selectedCircuit,candidateIds:circuitCandidates,trains:liveTrains,
+          houses:snapshot.houses.length,resources,walking,tool,night,feedback:messageTime>0?message:'',delivered:economyView.stats.laps});
+        Object.assign(canvas.dataset,{selectedCircuit:selectedCircuit??'',hoverCircuit:hoverCircuit??'',circuitCandidates:String(circuitCandidates.length),resourcePopups:String(resourceGains?.visibleCount??0)});
         Object.assign(canvas.dataset,{wood:String(resources.wood??resources.timber),metal:String(resources.metal??0),food:String(resources.food??0),production:String(resourceWork?.stats.production??0),economyTime:String(Math.floor(economy.elapsed)),deliveries:String(economyView.stats.deliveries),
           freightTrains:String(tradeArt.stats.active??0),localTools:String(resources.tools),localGrain:String(resources.grain),economyCity:city?.id??'',industry:city?.industry??''});
       }
@@ -476,6 +517,6 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;releaseRailDrag();releaseRailPress();railPreviewFlow.dispose();railPlanner.dispose();botRailPlanner?.dispose();for(const remove of listeners)remove();hud.dispose();economyHud?.dispose();loopHud?.dispose();resourceWorkArt?.dispose();resourceWork?.dispose();economicBots?.dispose();tradeArt?.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
+    dispose(){disposed=true;releaseRailDrag();releaseRailPress();railPreviewFlow.dispose();railPlanner.dispose();botRailPlanner?.dispose();for(const remove of listeners)remove();hud.dispose();economyHud?.dispose();loopHud?.dispose();resourceGains?.dispose();circuitArt?.dispose();resourceWorkArt?.dispose();resourceWork?.dispose();economicBots?.dispose();tradeArt?.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
   };
 }

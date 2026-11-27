@@ -37,10 +37,27 @@ test('resources require a real outward trip, working pause, and return to the sa
       if(event.type==='production'){
         returns++;const worker=work.workers.get(event.id.split(':').slice(0,-1).join(':')),home=houses.find(home=>home.id===worker.houseId);
         assert.ok(Math.hypot(worker.x-home.x,worker.z-home.z-.9)<1e-6);assert.equal(event.resource,'wood');assert.equal(event.amount,1);assert.equal(event.ownerId,'teal');
+        assert.equal(event.workerId,worker.id);assert.equal(event.x,worker.x);assert.equal(event.y,worker.y);assert.equal(event.z,worker.z);assert.ok(event.nodeId);
       }
     }
   }
   assert.ok(returns>=3);assert.ok(removed>=returns);assert.ok(work.snapshot().every(worker=>worker.distance>10));
+});
+
+test('gathered feedback marks the resource node without crediting income before the return trip',()=>{
+  const{world,session}=fixture(),work=createResourceWork(world,{session,surfaceAt:ground});let gathered=null,production=null;
+  for(let frame=0;frame<1600&&!production;frame++){
+    const previous=work.stats.production;work.update(.05);
+    for(const event of work.drainEvents()){
+      if(event.type==='gathered'&&!gathered){
+        gathered=event;const worker=work.workers.get(event.workerId);
+        assert.equal(worker.carrying,true);assert.equal(work.stats.production,previous);assert.equal(event.x,worker.x);assert.equal(event.z,worker.z);
+        assert.ok(Math.hypot(event.x-worker.home.x,event.z-worker.home.z)>4,'feedback is anchored to the resource, not the house');
+      }
+      if(event.type==='production'&&event.workerId===gathered?.workerId)production=event;
+    }
+  }
+  assert.ok(gathered);assert.ok(production);assert.equal(production.amount,gathered.amount);assert.equal(production.nodeId,gathered.nodeId);assert.ok(production.time>gathered.time);assert.notEqual(production.id,gathered.id);work.dispose();
 });
 
 test('water and blocked routes prevent production instead of using an invisible timer',()=>{

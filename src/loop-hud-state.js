@@ -7,8 +7,9 @@ export function loopCargo(loop,city){
   return result;
 }
 export function loopHudState({city,ownCity,houses=1,resources={},walking=true,ownerId,selectedLoopId}={}){
-  const inspected=city??ownCity,owned=inspected?.ownerId===ownerId,loops=owned?inspected.loops??[]:[],selected=loops.find(loop=>loop.id===selectedLoopId)??loops[0]??null;
+  const home=ownCity??(city?.ownerId===ownerId?city:null),loops=home?.loops??[],selected=loops.find(loop=>loop.id===selectedLoopId)??null;
+  const inspected=selected?home:city,owned=inspected?.ownerId===ownerId;
   const gold=Number.isFinite(resources.gold)?resources.gold:0,cost=selected?.cost??0,station=inspected?.hasStation??(inspected?.level>=2),count=inspected?.houseCount??houses;
   return{city:inspected,owned,loops,selected,resource:inspected?.resource??null,station,houseCount:count,
-    compact:walking,showRoutes:!walking&&owned&&station,canBuy:!!selected&&owned&&gold>=cost,cost,shortfall:Math.max(0,cost-gold),cargo:loopCargo(selected,inspected)};
+    compact:walking,showRoutes:!walking&&owned&&!!selected,canBuy:!walking&&!!selected&&owned&&gold>=cost,cost,shortfall:Math.max(0,cost-gold),cargo:loopCargo(selected,inspected)};
 }

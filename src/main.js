@@ -265,7 +265,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Build a railway town. WASD moves, Shift runs, Space jumps. E or click chops trees for wood. B aims a house; click or Enter builds for eight wood. Three nearby homes form a city; six unlock a one-way station. Residents gather wood in forests, metal in deserts, and gold on plains. Gray villages produce food. V switches to overview. T plans a railway: click or drag between cities, station ends or tracks; drag dots to shape, R reverses direction, Enter builds. Red connections cannot be built. Complete an outward and return loop, then buy a train in the route panel. Each visit creates ten resources and pays the city owner three gold; cargo arrives home after a full loop. Tab releases the mouse for controls. Day and night each last five minutes.');
+    if(settlement)canvas.setAttribute('aria-label','Railway settlement. Explore on foot, build your town, and connect directed railway circuits. Select tracks in overview to inspect a circuit and add trains.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();

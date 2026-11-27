@@ -36,7 +36,7 @@ A single outward link does not run a train. There must be a complete, physically
 
 ## Buying trains and completing circuits
 
-Select your city in overview to see its available complete loops. A train costs **10 gold per distinct city on the selected loop**: 20 for two cities, 30 for three, and so on. The owner chooses a complete loop from the network, without assigning individual station-to-station freight instructions.
+Click an actual railway or either station end in overview to select a complete circuit through your city. The full circuit receives a clean outline, and its inspector shows the stops, resource manifest and train cost. If several eligible circuits share the clicked section, click it again or use the inspector's arrows to cycle between them. No circuit is chosen automatically, and clicking a city only inspects that city. A train costs **10 gold per distinct city on the selected loop**: 20 for two cities, 30 for three, and so on. The owner chooses a complete loop from the network, without assigning individual station-to-station freight instructions.
 
 At each visited city:
 
@@ -46,7 +46,9 @@ At each visited city:
 
 These pickups do **not** consume the visited owner's resources. NPC work and railway pickups are independent sources. No purchase payment is deducted from the train owner during visits. A train collects once at its home station when beginning a circuit, then once at each intermediate station. Returning home delivers the whole cargo into the train owner's global totals. Beginning another circuit starts another home visit; it is not counted as two pickups on the completed lap.
 
-Trains travel at five world units per second and pause three seconds at a visited station. Their cars follow the same forward geometry in every view, including the home crossing. Current traffic control reserves all source lines and stations of a circuit together. Waiting trains are admitted oldest first; a waiting train does not appear on already occupied rails. This prevents collisions and deadlocks, but extra trains sharing a circuit do not yet improve its throughput. This is a deliberate first traffic model, not a finished signal system.
+Trains travel at five world units per second and pause one second at each visited station. Their cars follow the same forward geometry in every view, including the home crossing. Current traffic control reserves all source lines and stations of a circuit together. Waiting trains are admitted oldest first; a waiting train does not appear on already occupied rails. This prevents collisions and deadlocks, but extra trains sharing a circuit do not yet improve its throughput. This is a deliberate first traffic model, not a finished signal system.
+
+In overview, resource popups appear at the actual worker or station position with the exact quantity. A worker's **Gathered** popup marks collection at a resource node; **Delivered** marks the return home that credits the owner's total. A train's **On board** popup marks its newly loaded cargo; **Delivered** marks the completed circuit's wallet credit. A separate **+3 gold** popup appears for the station owner when that owner is the player. These labels distinguish resources being carried from resources already available to spend; showing a popup never awards anything a second time.
 
 ## Rival settlers
 
@@ -70,14 +72,14 @@ Measured outcomes after fifteen simulation minutes:
 
 | Spacing | Loop | Gold | Wood | Metal | Food | Completed laps |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Near | Food | 86 | 262 | 0 | 210 | 21 |
-| Near | Metal | 71 | 213 | 160 | 0 | 16 |
-| Near | Mixed | 49 | 173 | 120 | 120 | 12 |
-| Distant | Food | 66 | 202 | 0 | 150 | 15 |
-| Distant | Metal | 57 | 173 | 120 | 0 | 12 |
+| Near | Food | 92 | 282 | 0 | 230 | 23 |
+| Near | Metal | 77 | 233 | 180 | 0 | 18 |
+| Near | Mixed | 52 | 183 | 130 | 130 | 13 |
+| Distant | Food | 69 | 212 | 0 | 160 | 16 |
+| Distant | Metal | 60 | 183 | 130 | 0 | 13 |
 | Distant | Mixed | 38 | 143 | 90 | 90 | 9 |
 
-The first completed circuit takes about 43–73 seconds in the near scenario and 58–98 seconds in the distant scenario. These results expose the current tradeoff: short circuits return more frequently, while longer mixed circuits supply a broader resource collection. Metal and food do not yet have spending sinks, so these measurements cannot establish a winning competitive strategy or monetary value for diversification. Military costs and later construction recipes will determine those values.
+The first completed circuit takes 38.5–66.75 seconds in the near scenario and 53.5–91.5 seconds in the distant scenario, measured at quarter-second simulation steps. These results expose the current tradeoff: short circuits return more frequently, while longer mixed circuits supply a broader resource collection. Metal and food do not yet have spending sinks, so these measurements cannot establish a winning competitive strategy or monetary value for diversification. Military costs and later construction recipes will determine those values.
 
 Focused tests check global and exactly-once worker credit, no timer production, stable founding biomes, contiguous ownership, paid train creation, incomplete-loop rejection, pickup creation without source deductions, home-only delivery, frame-size independence, continuous forward geometry, construction jurisdiction, and safe train queues. A separate 900-second real-island simulation verifies physical rival growth, paid outward and return tracks, completed circuits and gold accounting. The older depot economy is tested separately using explicit legacy configuration and `scripts/simulate-legacy-economy.mjs`.
 
