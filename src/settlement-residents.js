@@ -33,13 +33,13 @@ function eligibleHomes(houses,cities){
   return membership;
 }
 
-function trimmedPoints(points){
+function trimmedPoints(points,{trimStart=true,trimEnd=true}={}){
   const result=points.filter(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.z)).map(p=>({x:p.x,y:p.y??0,z:p.z}));
   for(let i=result.length-1;i>0;i--)if(distance(result[i],result[i-1])<epsilon)result.splice(i,1);
   if(result.length<2)return [];
   const length=result.slice(1).reduce((sum,p,i)=>sum+distance(result[i],p),0),inset=Math.min(RESIDENT_LIMITS.doorInset,length*.2);
   function trim(){let left=inset;while(result.length>1){const span=distance(result[0],result[1]);if(left<span){result[0]=mix(result[0],result[1],left/span);break;}left-=span;result.shift();}}
-  trim();result.reverse();trim();result.reverse();return result;
+  if(trimStart)trim();result.reverse();if(trimEnd)trim();result.reverse();return result;
 }
 
 /** Exact intersections become choices; unrelated nearby roads never become a
@@ -52,7 +52,7 @@ export function buildResidentPathGraph(paths,membership){
   const endpointCities=new Map(membership);
   for(let pass=0;pass<2;pass++)for(const path of paths){const city=pathCities.get(path.id)??endpointCities.get(path.fromHouseId)??endpointCities.get(path.toHouseId);if(city==null)continue;
     pathCities.set(path.id,city);endpointCities.set(path.fromHouseId,city);endpointCities.set(path.toHouseId,city);}
-  for(const path of paths){const cityId=pathCities.get(path.id);if(cityId==null)continue;const points=trimmedPoints(path.points??[]);
+  for(const path of paths){const cityId=pathCities.get(path.id);if(cityId==null)continue;const points=trimmedPoints(path.points??[],path);
     for(let index=1;index<points.length;index++){
       const a=points[index-1],b=points[index];if(distance(a,b)<epsilon)continue;
       segments.push({a,b,pathId:path.id,cityId,index,cuts:[0,1]});
@@ -122,9 +122,9 @@ function localRoute(from,to){
   return null;
 }
 
-function routineDestinations(graph,paths,houses,buildings,membership){
+function routineDestinations(graph,paths,houses,buildings,membership,extraDestinations=[]){
   const destinations=new Map(),byCity=new Map(),entrances=new Map();
-  for(const path of paths){const points=trimmedPoints(path.points??[]),cityId=path.cityId??membership.get(path.fromHouseId)??membership.get(path.toHouseId);if(!points.length||cityId==null)continue;
+  for(const path of paths){const points=trimmedPoints(path.points??[],path),cityId=path.cityId??membership.get(path.fromHouseId)??membership.get(path.toHouseId);if(!points.length||cityId==null)continue;
     for(const [id,point]of [[path.fromHouseId,points[0]],[path.toHouseId,points.at(-1)]]){
       const node=graph.nodes.get(`${cityId}:${pointKey(point)}`);if(node&&!entrances.has(id))entrances.set(id,node);
     }
@@ -137,6 +137,14 @@ function routineDestinations(graph,paths,houses,buildings,membership){
     if(!node)continue;
     const kind=item.buildingType??'home';
     add({id:item.id,cityId,kind,nodeId:node.id,x:node.x,z:node.z,lookX:item.x,lookZ:item.z,heading:Math.atan2(item.x-node.x,item.z-node.z)});
+  }
+  // Farm errands belong to authored field-access paths, never to whichever
+  // street happens to be closest across a hedge, crop bed or neighbouring town.
+  for(const item of extraDestinations){
+    const node=entrances.get(item.id);
+    if(item.kind!=='farm'||!node||node.cityId!==item.cityId||destinations.has(item.id))continue;
+    const lookX=item.lookX??item.x,lookZ=item.lookZ??item.z;
+    add({id:item.id,cityId:item.cityId,kind:'farm',nodeId:node.id,x:node.x,z:node.z,lookX,lookZ,heading:Math.atan2(lookX-node.x,lookZ-node.z)});
   }
   for(const node of graph.nodes.values())if(node.edges.length>=3)add({id:`junction:${node.id}`,cityId:node.cityId,kind:'junction',nodeId:node.id,x:node.x,z:node.z,heading:0});
   // Small towns with a single through-road still have quiet places to stop
@@ -168,7 +176,7 @@ export function createSettlementResidentSimulation(world={}){
       target.id!==resident.destinationId&&target.nodeId!==node.id&&(!home||distance(target,home)<=RESIDENT_LIMITS.routineRadius));
     if(dark){setDestination(resident,home);return;}
     const weighted=choices.map(target=>({target,weight:target.kind==='home'?(target.id===resident.houseId? .3:.7):
-      target.kind==='market'?2.8:target.kind==='well'?2.1:target.kind==='plaza'?2.5:target.kind==='junction'?1.25:1.6}));
+      target.kind==='market'?2.8:target.kind==='farm'?2.6:target.kind==='well'?2.1:target.kind==='plaza'?2.5:target.kind==='junction'?1.25:1.6}));
     if(!weighted.length){setDestination(resident,home);resident.wait=2+random(resident)*3;return;}
     let roll=random(resident)*weighted.reduce((sum,item)=>sum+item.weight,0),target=weighted.at(-1).target;
     for(const item of weighted){roll-=item.weight;if(roll<=0){target=item.target;break;}}
@@ -226,7 +234,7 @@ export function createSettlementResidentSimulation(world={}){
     resident.arrived=true;resident.route=[];resident.lookHeading=target.lookX===undefined?target.heading:Math.atan2(target.lookX-resident.x,target.lookZ-resident.z);
     if(dark&&target.id===resident.houseId){beginEntering(resident);return;}
     resident.activity='lingering';
-    const duration=target.kind==='market'?[4,8]:target.kind==='well'?[2,5]:target.kind==='plaza'?[5,10]:target.kind==='junction'?[2,5]:target.kind==='home'?[1,4]:[3,6];
+    const duration=target.kind==='market'?[4,8]:target.kind==='farm'?[5,9]:target.kind==='well'?[2,5]:target.kind==='plaza'?[5,10]:target.kind==='junction'?[2,5]:target.kind==='home'?[1,4]:[3,6];
     resident.wait=(duration[0]+random(resident)*duration[1])*resident.tempo;
     if(target.kind==='junction')resident.lookHeading=resident.heading+(random(resident)-.5)*Math.PI;
   }
@@ -250,9 +258,9 @@ export function createSettlementResidentSimulation(world={}){
     }
     resident.route.shift();return enterEdge(resident,node,edge);
   }
-  function sync({houses=[],paths=[],cities,buildings=[]}={}){
+  function sync({houses=[],paths=[],cities,buildings=[],destinations:extraDestinations=[]}={}){
     const membership=eligibleHomes(houses,cities);homes=new Map(houses.map(home=>[home.id,home]));graph=buildResidentPathGraph(paths,membership);const alive=new Set();
-    ({destinations,byCity}=routineDestinations(graph,paths,houses,buildings,membership));
+    ({destinations,byCity}=routineDestinations(graph,paths,houses,buildings,membership,extraDestinations));
     for(const house of houses){const cityId=membership.get(house.id);if(cityId==null)continue;const id=`resident:${house.id}`;alive.add(id);
       let resident=residents.get(id);
       if(resident){resident.cityId=cityId;resident.route=resident.route.filter(edge=>graph.edges.has(edge));
@@ -348,9 +356,9 @@ export function createSettlementResidentSimulation(world={}){
 
 /** Two fixed-capacity instanced draws replace a scene hierarchy per citizen.
  * The head and coat reuse the same .75-unit passenger template as stations. */
-export function createSettlementResidents(parent,world){
+export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.ownerId}={}){
   const root=new THREE.Group();root.name='settlement-residents';parent.add(root);
-  const owner=world.players?.find(player=>player.id===world.gameplay?.ownerId),palette=createPlayerPalette(owner),template=new THREE.Group();
+  const owner=world.players?.find(player=>player.id===ownerId),palette=createPlayerPalette(owner),template=new THREE.Group();
   const model=person(template,{color:palette.body});model.remove(model.children[0],model.children[1]);
   bakeMaterialColors(consolidate(template));const bodySource=template.children[0];
   const body=new THREE.InstancedMesh(bodySource.geometry,bodySource.material,RESIDENT_LIMITS.visible);body.name='resident-bodies';

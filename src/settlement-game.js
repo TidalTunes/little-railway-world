@@ -54,6 +54,11 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   const ownerId=config.ownerId??config.starterHouse.ownerId??'teal';
   const starter={...copy(config.starterHouse),kind:'house',ownerId,cityId:null,connected:false};
   const homes=[starter],buildings=[],paths=[],links=[],removed=new Set();
+  // Neutral villages are permanent world occupancy, not player-owned homes.
+  // Keep them out of component growth and income even when towns touch, and
+  // retain their reservations while their scenery chunk is off screen.
+  const villages=copy(config.farmVillages??{});
+  const villageBuildings=[...villages.houses??[],...villages.buildings??[]],villagePaths=villages.paths??[];
   let cities=[],clusters=[];
   let logs=0,gold=0,lastIncomeDay=0,revision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
@@ -107,8 +112,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     if(!finitePoint(building)||!Number.isFinite(building.rotation))return ['invalid-position','Choose a place for your house'];
     if(!ready)return ['loading','Preparing this patch of ground'];
     if(player&&(!finitePoint(player)||circleTouchesHouse(world,building,player,SETTLEMENT.playerRadius,.12)))return ['player-blocked','Step away from the blueprint'];
-    for(const home of [...homes,...buildings])if(overlaps(world,building,home))return ['house-blocked','Leave a little room between buildings'];
-    for(const path of paths)if(houseBlocksSettlementPath(world,building,path))return ['path-blocked','Keep the village paths clear'];
+    for(const home of [...homes,...buildings,...villageBuildings])if(overlaps(world,building,home))return ['house-blocked','Leave a little room between buildings'];
+    for(const path of [...paths,...villagePaths])if(houseBlocksSettlementPath(world,building,path))return ['path-blocked','Keep the village paths clear'];
     for(const item of placements){
       if(!(BLOCKING_KINDS.has(item.kind)||item.kind==='nature'&&item.style==='outcrop')||!finitePoint(item)||homes.some(home=>home.id===item.id)||buildings.some(home=>home.id===item.id))continue;
       if(item.kind==='tree'&&removed.has(settlementTreeId(item)))continue;
@@ -151,7 +156,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     // Logical neighbour links survive before city formation. They reserve no
     // visible road; on the third home every dormant route is planned again
     // against the complete current layout, including the new foundation.
-    const components=homeComponents(),nearby=new Map(),obstacles=[...homes,...buildings,house,...placements];
+    const components=homeComponents(),nearby=new Map(),obstacles=[...homes,...buildings,...villageBuildings,house,...placements];
     const route=(from,to)=>planSettlementPath(world,from,to,{placements:obstacles,surfaceAt,removedTreeIds:removed});
     for(const home of homes){
       const distance=surfaceDistance(world,house,home);if(distance>SETTLEMENT.connectionRange)continue;
@@ -219,7 +224,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
           .filter(item=>item.distance<=SETTLEMENT.connectionRange).sort((a,b)=>a.distance-b.distance);
         if(!nearby.length||validateSite(candidate,context)){search.offset=index+1;continue;}
         budget--;search.offset=index+1;
-        const path=planSettlementPath(world,candidate,nearby[0].home,{placements:[...homes,...buildings,...context.placements??[]],
+        const path=planSettlementPath(world,candidate,nearby[0].home,{placements:[...homes,...buildings,...villageBuildings,...context.placements??[]],
           surfaceAt,removedTreeIds:removed,maxNodes:SETTLEMENT_CIVIC_SEARCH.maxRouteNodes});
         if(path&&(!context.isReadyAt||sampleSettlementPath(path.points,context.isReadyAt))){chosen=candidate;connection=path;break;}
       }

@@ -1,4 +1,6 @@
 import {createIslandWorld} from './island-world.js';
+import {DEFAULT_PLAYERS} from './development.js';
+import {FARM_VILLAGE_PLAYER} from './farm-villages.js';
 
 /** The landscape is still the authored island; the settlement starts from one
  * home instead of inheriting the railway showcase's towns and infrastructure. */
@@ -18,8 +20,9 @@ export function createSettlementWorld({seed='first-settlement-v1'}={}){
     x,y:0,z,rotation:index*2.399963229728653,scale,variant,
     radius:.85*scale,biome:'forest'}));
   return {...world,name:'First Settlement',cities:[],connections:[],
+    players:[...DEFAULT_PLAYERS,FARM_VILLAGE_PLAYER].map(player=>structuredClone(player)),
     traffic:{trainCount:0,circuits:[]},
-    gameplay:{version:1,ownerId:'teal',starterHouse,spawn,guaranteedTrees,
+    gameplay:{version:1,ownerId:'teal',starterHouse,spawn,guaranteedTrees,farmVillageCount:3,
       // These clear only the footprint of the authored home, spawn and trees.
       // They do not erase the surrounding forest to make a rectangular lot.
       reservations:[{x:starterHouse.x,z:starterHouse.z,radius:starterHouse.radius+.65},

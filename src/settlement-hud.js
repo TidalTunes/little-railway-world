@@ -94,7 +94,7 @@ export function createSettlementHud({
     text(nodes.logs,inventoryNumber(logs));text(nodes.gold,inventoryNumber(gold));
     nodes['wood-stock'].title=`${number.format(logs)} logs`;nodes['gold-stock'].title=`${number.format(gold)} gold`;
     nodes['wood-stock'].setAttribute('aria-label',`${logs} logs. Ten logs builds one house.`);
-    nodes['gold-stock'].setAttribute('aria-label',`${gold} gold. City homes earn one gold each at sunset.`);
+    nodes['gold-stock'].setAttribute('aria-label',`${gold} gold. Your city homes earn one gold each at sunset.`);
     text(nodes.level,String(growth.level));text(nodes['city-label'],growth.level?'City level':'Outpost');
     text(nodes['city-progress'],growth.complete?'Max':`${growth.houses} / ${growth.next}`);
     text(nodes['growth-caption'],growth.complete?'fully grown':growth.level?'next level':'toward city');

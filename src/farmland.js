@@ -71,6 +71,14 @@ function parcelsFor(width,depth,seed,family,footprint){
   });
 }
 
+/** Shared estate vocabulary for both free countryside and village farms. */
+export function createFarmEstate({seed,family=cropFamilies[0],width,depth,...placement}){
+  const footprint=outlineFor(width,depth,seed),item={kind:'farm',y:0,scale:1,variant:0,...placement,
+    width,depth,radius:Math.hypot(width,depth)/2,footprint,family};
+  item.parcels=parcelsFor(width,depth,seed,family,footprint);
+  item.livestock=createFarmLivestock(item);return item;
+}
+
 /** Plan adjoining agricultural estates. Circular reservations protect all
  * non-farm obstacles; neighboring farms compare their actual field hulls.
  * Regional requests use global cluster IDs
@@ -82,6 +90,15 @@ export function placeFarmland(world,{density=1,canPlace,add}={}){
   const area=regionBounds?Math.min(regionArea,(regionBounds.maxX-regionBounds.minX)*(regionBounds.maxZ-regionBounds.minZ)):regionArea;
   const amount=Math.max(0,Math.min(3,Number(density)||0));
   const result={districts:[],area:0,cultivatedArea:0,targetArea:area*Math.min(.50,.28*amount)};
+  // Authored hamlet fields already passed the full terrain/reservation checks
+  // alongside their homes and lanes. Their global centers assign each field
+  // to exactly one detail chunk, including fields crossing a chunk boundary.
+  for(const source of world.gameplay?.farmVillages?.farms??[]){
+    if(regionBounds&&(source.x<regionBounds.minX||source.x>=regionBounds.maxX||source.z<regionBounds.minZ||source.z>=regionBounds.maxZ))continue;
+    const item=structuredClone(source);add(item);
+    result.districts.push({...item,id:item.districtId,parcelCount:item.parcels.length});
+    result.area+=item.width*item.depth;result.cultivatedArea+=item.parcels.reduce((sum,p)=>sum+ringArea(p.polygon),0);
+  }
   if(!amount||!area)return result;
   const candidates=[];
   for(const region of regions){

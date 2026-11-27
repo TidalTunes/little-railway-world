@@ -18,7 +18,11 @@ test('the settlement preserves the island geography with no authored railway or 
 test('the starting home and first grove are dry, flat forest or field terrain',()=>{
   const config=createSettlementWorld(),world=generateWorld(config,{detail:'network'});
   assert.equal(world.cities.length,0);assert.equal(world.lines.length,0);
-  assert.deepEqual(world.gameplay,config.gameplay);
+  const {farmVillages,reservations,...compiledGameplay}=world.gameplay;
+  const {reservations:authoredReservations,...authoredGameplay}=config.gameplay;
+  assert.deepEqual(compiledGameplay,authoredGameplay);
+  assert.deepEqual(reservations.slice(0,authoredReservations.length),authoredReservations);
+  assert.equal(farmVillages.cities.length,3);
   for(const point of [config.gameplay.starterHouse,config.gameplay.spawn,...config.gameplay.guaranteedTrees]){
     assert.equal(worldSurface(world,point.x,point.z).type,'ground');
     assert.ok(['forest','plains','farmland'].includes(biomeAt(world,point.x,point.z)));

@@ -45,10 +45,10 @@ function civicMapGeometry(type){
 /** Player-built houses use the original house templates in every camera layer.
  * Settled instances stay static; only new construction animates its own slots.
  * Previews reuse one mesh. */
-export function createSettlementArt(parent,mapParent,world){
+export function createSettlementArt(parent,mapParent,world,{ownerId=world.gameplay.ownerId}={}){
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='player-settlement';mapRoot.name='settlement-map';parent.add(root);mapParent.add(mapRoot);
   const construction=createSettlementConstruction(root,mapRoot,world);
-  const owner=world.players.find(p=>p.id===world.gameplay.ownerId),palette=createPlayerPalette(owner),templates=[];
+  const owner=world.players.find(p=>p.id===ownerId),palette=createPlayerPalette(owner),templates=[];
   for(let variant=0;variant<4;variant++){
     const template=new THREE.Group();house(template,{variant,palette});bakeMaterialColors(consolidate(template));templates.push(template);
   }

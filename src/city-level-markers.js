@@ -17,8 +17,8 @@ function levelAtlas(owner){
   const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;return texture;
 }
 
-export function createCityLevelMarkers(scene,mapScene,world){
-  const owner=world.players.find(player=>player.id===world.gameplay.ownerId),texture=levelAtlas(owner);
+export function createCityLevelMarkers(scene,mapScene,world,{ownerId=world.gameplay.ownerId}={}){
+  const owner=world.players.find(player=>player.id===ownerId),texture=levelAtlas(owner);
   const material=new THREE.MeshBasicMaterial({map:texture,transparent:true,depthTest:false,depthWrite:false,toneMapped:false});
   material.onBeforeCompile=shader=>{
     shader.vertexShader='attribute float cityLevel;\n'+shader.vertexShader;

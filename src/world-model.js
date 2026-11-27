@@ -4,6 +4,7 @@ import { createAlignment, combineAlignments, straightSegment, sampleAlignment, s
 import { mountainSurfaceHeight, mountainFootprintDistance } from './mountain-shape.js';
 import { normalizePlayers, cityDevelopment, cityRandom, CITY_ASSET_RADII } from './development.js';
 import { placeFarmland } from './farmland.js';
+import { createFarmVillages } from './farm-villages.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
 import {sampleLandscape} from './landscape-field.js';
 import {riversOf,riverBankDistance,riverCenterDistance,createHydrology} from './hydrology.js';
@@ -920,6 +921,12 @@ export function generateWorld(input = {}, options = {}) {
   buildSharedNetwork(world);
   buildJunctions(world);
   world.biomes??=createBiomes(world,input.biomes);
+  if(world.gameplay?.farmVillageCount){
+    world.gameplay.reservations=(world.gameplay.reservations??[]).filter(item=>!item.id?.startsWith('farm-village:'));
+    const villages=createFarmVillages(world,{count:world.gameplay.farmVillageCount});
+    world.gameplay.farmVillages=villages;
+    world.gameplay.reservations.push(...villages.reservations);
+  }
   placeStations(world);
   world.placements=[];
   if(options.detail!=='network'){
@@ -943,7 +950,8 @@ export function generateWorldRegion(network,{x=0,z=0,size=192}={}){
   const mountains=network.mountains.filter(m=>m.range?boxesOverlap(bounds,m.range.bounds):owns(m))
     .map(m=>m.range?{...m,renderBounds:bounds}:m),stations=network.stations.filter(owns);
   const lines=network.lines.filter(line=>boxesOverlap(bounds,lineTree(line).box));
-  const margin=Math.max(mountains.some(m=>m.range)?1.2:0,...owned.map(c=>footprintRadius(network,c)),...mountains.filter(m=>!m.range).map(m=>m.radius),...stations.map(s=>footprintRadius(network,s)));
+  const villageFarms=working.placements.filter(item=>item.kind==='farm'&&item.id?.startsWith('farm-village:'));
+  const margin=Math.max(mountains.some(m=>m.range)?1.2:0,...owned.map(c=>footprintRadius(network,c)),...mountains.filter(m=>!m.range).map(m=>m.radius),...stations.map(s=>footprintRadius(network,s)),...villageFarms.map(farm=>farm.radius));
   return{key,bounds,cullBounds:{minX:bounds.minX-margin,minZ:bounds.minZ-margin,maxX:bounds.maxX+margin,maxZ:bounds.maxZ+margin},
     cities:owned,placements:working.placements,cityStreets:working.cityStreets,stations,lines,mountains,farmland:working.farmland};
 }

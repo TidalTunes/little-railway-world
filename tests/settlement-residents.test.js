@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Group,Vector3,Matrix4} from 'three';
+import {Group,Vector3,Matrix4,Color} from 'three';
 import {createSettlementResidentSimulation,createSettlementResidents,buildResidentPathGraph,RESIDENT_LIMITS} from '../src/settlement-residents.js';
 import {PERSON_HEIGHT} from '../src/person-scale.js';
 import {M} from '../src/palette.js';
 import {createSettlementGame} from '../src/settlement-game.js';
+import {playerColors} from '../src/player-palette.js';
+import {createSettlementWorld} from '../src/settlement-world.js';
+import {generateWorld} from '../src/world-model.js';
 
 const world={seed:'citizens-test',players:[{id:'owner',color:{l:.61,c:.14,h:170}}],gameplay:{ownerId:'owner'}};
 const point=(x,z,y=.015)=>({x,y,z});
@@ -308,4 +311,98 @@ test('construction hides only the new house resident without resetting its logic
   const progressing=residents.snapshot().find(resident=>resident.houseId==='home-b');assert.ok(progressing.distance>before.find(resident=>resident.houseId==='home-b').distance);
   unavailableHomes.clear();residents.update(1/60,{unavailableHomes});assert.equal(residents.stats.visible,3);
   assert.deepEqual(residents.snapshot().map(resident=>resident.id),before.map(resident=>resident.id));residents.dispose();
+});
+
+function farmVillage(prefix='farm',offset=0){
+  const snapshot=town(),cityId=`${prefix}:city`;
+  snapshot.houses=snapshot.houses.map(home=>({...home,id:`${prefix}:${home.id}`,x:home.x+offset}));
+  snapshot.cities=[{...snapshot.cities[0],id:cityId,houseIds:snapshot.houses.map(home=>home.id)}];
+  snapshot.paths=snapshot.paths.map(path=>({...path,id:`${prefix}:${path.id}`,cityId,fromHouseId:`${prefix}:${path.fromHouseId}`,toHouseId:`${prefix}:${path.toHouseId}`,points:path.points.map(p=>({...p,x:p.x+offset}))}));
+  const hub=`${prefix}:lane`,farmId=`${prefix}:field`;
+  snapshot.paths.push(
+    {id:`${prefix}:access`,cityId,fromHouseId:`${prefix}:home-a`,toHouseId:hub,trimEnd:false,points:[point(offset-5,.9),point(offset-5,2),point(offset-9,2),point(offset-9,9)]},
+    {id:`${prefix}:field-lane`,cityId,fromHouseId:hub,toHouseId:farmId,trimStart:false,trimEnd:false,points:[point(offset-9,9),point(offset-9,12),point(offset,12)]},
+  );
+  snapshot.destinations=[{id:farmId,cityId,kind:'farm',x:offset,z:12,lookX:offset+2,lookZ:14},
+    {id:`${prefix}:unlinked`,cityId,kind:'farm',x:offset+2,z:12}];
+  return snapshot;
+}
+
+test('field lanes share exact untrimmed junctions while home approaches keep their doorstep clearance',()=>{
+  const village=farmVillage(),membership=new Map(village.houses.map(home=>[home.id,village.cities[0].id]));
+  const graph=buildResidentPathGraph(village.paths,membership);
+  const hub=[...graph.nodes.values()].find(node=>node.x===-9&&node.z===9);
+  assert.equal(hub.edges.length,2,'separate access and field lanes meet without a trimmed gap');
+  assert.ok([...graph.nodes.values()].some(node=>node.x===0&&node.z===12),'farm endpoint remains at its authored position');
+  assert.ok(![...graph.nodes.values()].some(node=>node.x===-5&&node.z===.9),'house approach retains its normal doorstep inset');
+});
+
+test('farm villagers visit their own fields on paths, linger, and return through their own doors at night',()=>{
+  const first=farmVillage('west'),second=farmVillage('east',25);
+  const snapshot=Object.fromEntries(['houses','cities','paths','destinations'].map(key=>[key,[...first[key],...second[key]]]));
+  const simulation=createSettlementResidentSimulation({...world,seed:'farm-errands'});simulation.sync(snapshot);
+  const visited=new Set(),lanes=new Set(),dt=.05;
+  for(let frame=0;frame<240/dt;frame++){
+    const previous=simulation.snapshot();simulation.update(dt,{dayPhase:'day'});
+    assert.ok(simulation.stats.routeSearches<=RESIDENT_LIMITS.routeBudget);
+    for(const [index,resident]of simulation.snapshot().entries()){
+      const own=resident.cityId==='west:city'?first:second;
+      assert.ok(roadDistance(resident,own.paths)<1e-6,'farm walks stay on their own village network');
+      assert.ok(Math.hypot(resident.x-previous[index].x,resident.z-previous[index].z)<=resident.speed*dt+1e-6,'no teleport between farm and village');
+      assert.ok(!resident.destinationId?.endsWith(':unlinked'),'a nearby field without an explicit access path is never chosen');
+      for(const path of resident.pathIds)if(path.endsWith(':field-lane'))lanes.add(path);
+      if(resident.destinationKind==='farm'&&resident.arrived&&!resident.moving){visited.add(resident.destinationId);assert.ok(['lingering','chatting'].includes(resident.activity));}
+    }
+  }
+  assert.deepEqual([...visited].sort(),['east:field','west:field']);assert.equal(lanes.size,2);
+  for(let frame=0;frame<120/dt;frame++){
+    const previous=simulation.snapshot();simulation.update(dt,{dayPhase:'night'});
+    for(const [index,resident]of simulation.snapshot().entries())assert.ok(Math.hypot(resident.x-previous[index].x,resident.y-previous[index].y,resident.z-previous[index].z)<=resident.speed*dt+1e-6);
+  }
+  assert.equal(simulation.stats.indoors,6);
+  for(const resident of simulation.snapshot()){
+    const home=snapshot.houses.find(house=>house.id===resident.houseId);
+    assert.equal(resident.destinationId,resident.houseId);assert.ok(Math.hypot(resident.x-home.x,resident.z-home.z)<.21);
+  }
+  routineStep(simulation,20,{dayPhase:'day'});assert.equal(simulation.stats.indoors,0);
+});
+
+test('a neutral owner override colors village residents gray without changing player residents',()=>{
+  const neutral={id:'village-gray',color:{l:.61,c:0,h:0}},villageWorld={...world,players:[...world.players,neutral]};
+  const gray=createSettlementResidents(new Group(),villageWorld,{ownerId:neutral.id}),player=createSettlementResidents(new Group(),villageWorld);
+  const grayColor=new Color(),playerColor=new Color();gray.limbs.getColorAt(1,grayColor);player.limbs.getColorAt(1,playerColor);
+  const expected=new Color(playerColors(neutral).body);
+  for(const channel of ['r','g','b'])assert.ok(Math.abs(grayColor[channel]-expected[channel])<1e-6);
+  assert.ok(Math.abs(grayColor.r-grayColor.g)<1e-6&&Math.abs(grayColor.g-grayColor.b)<1e-6,'zero-chroma ownership stays gray');
+  assert.ok(Math.abs(playerColor.r-grayColor.r)+Math.abs(playerColor.g-grayColor.g)+Math.abs(playerColor.b-grayColor.b)>.1);
+  gray.sync(farmVillage());gray.update(.1,{focus:{x:0,z:0}});assert.equal(gray.stats.visible,3);assert.equal(gray.stats.draws,2);
+  gray.dispose();player.dispose();
+});
+
+test('all nine villagers in the generated island visit its six farm endpoints and return indoors continuously',()=>{
+  const island=generateWorld(createSettlementWorld(),{detail:'network'}),villages=island.gameplay.farmVillages;
+  const simulation=createSettlementResidentSimulation(island);simulation.sync(villages);
+  assert.equal(simulation.residents.size,9);
+  const visitors=new Set(),fields=new Set(),dt=.1,ownPaths=new Map(villages.cities.map(city=>[city.id,villages.paths.filter(path=>path.cityId===city.id)]));
+  function advance(dayPhase){
+    const previous=simulation.snapshot();simulation.update(dt,{dayPhase});
+    assert.ok(simulation.stats.routeSearches<=RESIDENT_LIMITS.routeBudget);
+    for(const [index,resident]of simulation.snapshot().entries()){
+      const old=previous[index];
+      assert.ok(Math.hypot(resident.x-old.x,resident.y-old.y,resident.z-old.z)<=resident.speed*dt+1e-6,'authored junctions and doors never create a position jump');
+      if(!resident.transition&&!resident.indoors)assert.ok(roadDistance(resident,ownPaths.get(resident.cityId))<1e-6,'residents never shortcut across crops or another village');
+      if(resident.destinationKind==='farm'&&resident.arrived&&!resident.moving){
+        visitors.add(resident.id);fields.add(resident.destinationId);
+        assert.equal(villages.destinations.find(destination=>destination.id===resident.destinationId).cityId,resident.cityId);
+      }
+    }
+  }
+  for(let frame=0;frame<300/dt;frame++)advance('day');
+  assert.equal(visitors.size,9);assert.equal(fields.size,6);
+  for(let frame=0;frame<120/dt;frame++)advance('night');
+  assert.equal(simulation.stats.indoors,9);
+  for(const resident of simulation.snapshot()){
+    const home=villages.houses.find(house=>house.id===resident.houseId);
+    assert.equal(resident.destinationId,home.id);assert.ok(Math.hypot(resident.x-home.x,resident.z-home.z)<.21);
+  }
 });

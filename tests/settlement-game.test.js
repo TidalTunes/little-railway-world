@@ -180,3 +180,84 @@ test('a third house can occupy an unseen future lane and the emerging city rerou
   assert.equal(houseBlocksSettlementPath({},third.house,oldLane,0),false);
   assert.ok(oldLane.points.length>4);
 });
+
+function neutralVillage(){
+  const ownerId='village-gray',cityId='farm-village:one';
+  const houses=[{x:30,z:0},{x:35,z:0},{x:32.5,z:4.5}].map((point,index)=>({
+    id:`${cityId}:home-${index}`,kind:'house',...point,y:0,rotation:0,scale:1,ownerId,cityId,connected:true,
+  }));
+  const buildings=[{id:`${cityId}:well`,kind:'civic',buildingType:'well',x:32.5,y:0,z:-5,
+    width:2.2,depth:2.2,rotation:0,scale:1,ownerId,cityId,connected:true}];
+  const paths=[{id:`${cityId}:lane`,cityId,fromHouseId:houses[0].id,toHouseId:houses[1].id,width:.45,
+    points:[{x:30,y:.015,z:.9},{x:30,y:.015,z:2},{x:35,y:.015,z:2},{x:35,y:.015,z:.9}]}];
+  return {ownerId,houses,buildings,paths,cities:[{id:cityId,x:32.5,z:1.5,ownerId,level:1,houseCount:3,
+    houseIds:houses.map(home=>home.id)}],destinations:[]};
+}
+function villageGame(villages=neutralVillage()){
+  const world={seed:'rules-test',gameplay:{...config(),farmVillages:villages}};
+  return {world,game:createSettlementGame(world,{surfaceAt:flat})};
+}
+
+test('neutral farmland villages stay outside player state and never generate player income',()=>{
+  const {world,game}=villageGame(),before=structuredClone(world.gameplay.farmVillages);
+  assert.equal(game.houses.length,1);assert.equal(game.clusters.length,1);
+  assert.deepEqual(game.cities,[]);assert.deepEqual(game.buildings,[]);assert.deepEqual(game.paths,[]);
+  assert.equal(game.settleIncome(1).amount,0,'a nearby established bot city earns nothing for the lone player house');
+  earn(game,20);
+  assert.equal(game.build({x:5,z:0}).ok,true);assert.equal(game.build({x:0,z:5}).ok,true);
+  const payout=game.settleIncome(2);
+  assert.equal(payout.amount,3);assert.equal(payout.houses.length,3);
+  assert.ok(payout.houses.every(home=>home.ownerId==='teal'));
+  assert.equal(game.cities.length,1);assert.equal(game.cities[0].level,1);assert.equal(game.cities[0].houseCount,3);
+  assert.ok(game.buildings.every(building=>building.ownerId==='teal'));
+  assert.deepEqual(world.gameplay.farmVillages,before,'player construction and income leave the static village untouched');
+});
+
+test('neutral village neighbours do not bias front doors, form a player city or join its paths',()=>{
+  const villages=neutralVillage(),{game}=villageGame(villages),baseline=make();
+  earn(game,20);earn(baseline,20);
+  const point={x:26,z:4.5},heading=.22,preview=game.evaluateBuild(point,{heading}),comparison=baseline.evaluateBuild(point,{heading});
+  assert.equal(preview.valid,true);assert.equal(preview.house.rotation,comparison.house.rotation);
+  assert.equal(preview.connectionHouseId,null);assert.equal(preview.cityHouseCount,1);assert.equal(preview.cityLevel,0);
+  assert.equal(preview.connected,false);assert.deepEqual(preview.links,[]);assert.deepEqual(preview.paths,[]);
+  const outpost=game.build(point,{heading});assert.equal(outpost.ok,true);assert.equal(outpost.cityId,null);
+  const second=game.build({x:22,z:4.5},{heading});assert.equal(second.ok,true);assert.equal(second.cityHouseCount,2);
+  assert.equal(second.connected,false);assert.deepEqual(game.cities,[]);assert.deepEqual(game.paths,[]);
+  assert.equal(game.settleIncome(1).amount,0,'two owned houses cannot use the three neutral neighbours to reach the city threshold');
+});
+
+test('neutral house and civic foundations stay reserved when their scenery chunks are absent',()=>{
+  const {game}=villageGame();earn(game,12);const before=game.snapshot();
+  for(const pose of [{x:30,z:0},{x:32.5,z:-5}]){
+    const preview=game.evaluateBuild(pose,{placements:[]});
+    assert.equal(preview.siteValid,false);assert.equal(preview.code,'house-blocked');
+    assert.equal(game.build(pose,{placements:[]}).ok,false);
+  }
+  assert.deepEqual(game.snapshot(),before,'invalid neutral lots cannot consume logs or spawn player houses');
+});
+
+test('neutral village lanes stay open without streamed placements',()=>{
+  const {game}=villageGame();earn(game,12);const before=game.snapshot(),point={x:32.5,z:2};
+  assert.equal(game.evaluateBuild(point,{placements:[]}).code,'path-blocked');
+  assert.equal(game.build(point,{placements:[]}).ok,false);
+  assert.deepEqual(game.snapshot(),before);
+});
+
+test('new player connections route around neutral foundations without merging village ownership',()=>{
+  const villages=neutralVillage();
+  // Put a neutral house between a pair of owned outposts while keeping the
+  // rest of its hamlet distant. Its lot must influence routing, not membership.
+  villages.houses[0].x=23.5;villages.houses[0].z=1.52;
+  const {game}=villageGame(villages);earn(game,25);
+  const first=game.build({x:20,z:0},{heading:0});assert.equal(first.ok,true);
+  const second=game.build({x:27,z:0},{heading:0});assert.equal(second.ok,true);
+  const third=game.build({x:20,z:-5},{heading:0});assert.equal(third.ok,true);
+  const playerIds=new Set(game.houses.map(home=>home.id)),neutralIds=new Set(villages.houses.map(home=>home.id));
+  assert.equal(game.cities.length,1);assert.equal(game.cities[0].houseCount,3);
+  for(const path of game.paths){
+    assert.ok(playerIds.has(path.fromHouseId)||game.buildings.some(building=>building.id===path.fromHouseId));
+    assert.ok(playerIds.has(path.toHouseId));
+    assert.ok(!neutralIds.has(path.fromHouseId)&&!neutralIds.has(path.toHouseId));
+    for(const home of villages.houses)assert.equal(houseBlocksSettlementPath({},home,path,0),false);
+  }
+});

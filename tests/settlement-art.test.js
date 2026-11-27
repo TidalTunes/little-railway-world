@@ -21,6 +21,23 @@ function nearBounds(actual,expected){for(const bound of ['min','max'])for(const 
   assert.ok(Math.abs(actual[bound][axis]-expected[bound][axis])<1e-5,`${bound}.${axis}: ${actual[bound][axis]} versus ${expected[bound][axis]}`);}
 function previewMesh(root){return root.getObjectByName('settlement-blueprint');}
 
+test('neutral villages use their own gray palette without changing player art or geometry',()=>{
+  const model=world();model.players.push({id:'village-gray',color:{l:.59,c:0,h:0}});
+  const scene=new Group(),map=new Group(),owned=createSettlementArt(scene,map,model),neutral=createSettlementArt(scene,map,model,{ownerId:'village-gray'});
+  try{
+    const placements=homes();owned.sync(placements);neutral.sync(placements.map(home=>({...home,ownerId:'village-gray'})));
+    const marker=art=>art.mapRoot.children.find(node=>node.isInstancedMesh).material.color;
+    const gray=marker(neutral),teal=marker(owned);
+    assert.ok(Math.max(gray.r,gray.g,gray.b)-Math.min(gray.r,gray.g,gray.b)<1e-5);
+    assert.ok(teal.g-teal.r>.05,'the player keeps their existing teal palette');
+    for(const source of owned.meshes){
+      const other=neutral.meshes.find(mesh=>mesh.name===source.name&&mesh.userData.variant===source.userData.variant);
+      assert.ok(other);assert.deepEqual(Array.from(other.instanceMatrix.array),Array.from(source.instanceMatrix.array));
+    }
+    assert.equal(neutral.construction.count,0,'generated village buildings appear complete');
+  }finally{owned.dispose();neutral.dispose();}
+});
+
 test('instanced homes preserve all four original house silhouettes and their authored transforms',()=>{
   const {art}=setup();
   try{

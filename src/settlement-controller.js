@@ -13,6 +13,20 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const game=createSettlementGame(world),art=createSettlementArt(parent,mapParent,world);
   const residents=createSettlementResidents(parent,world),levels=createCityLevelMarkers(markerParent,markerMapParent,world);
   const incomeEffects=createSettlementIncomeEffects(markerParent,markerMapParent,world);
+  // A single gray batch serves all farming villages. They share the scenery
+  // and resident systems, while player rules and resource notifications only
+  // ever receive the player's own settlement snapshot.
+  const villages=world.gameplay.farmVillages;
+  const villageObjects=[...villages?.houses??[],...villages?.buildings??[]],villagePaths=villages?.paths??[];
+  let villageArt=null,villageResidents=null,villageLevels=null;
+  if(villages?.cities?.length){
+    const ownership={ownerId:villages.ownerId};
+    villageArt=createSettlementArt(parent,mapParent,world,ownership);
+    villageArt.root.name='farm-villages';villageArt.mapRoot.name='farm-villages-map';
+    villageArt.sync(villages.houses,villagePaths,villages.buildings);
+    villageResidents=createSettlementResidents(parent,world,ownership);villageResidents.root.name='farm-village-residents';villageResidents.sync(villages);
+    villageLevels=createCityLevelMarkers(markerParent,markerMapParent,world,ownership);villageLevels.sync(villages.cities);
+  }
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0;
   let revision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
@@ -56,10 +70,10 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     }
     if(changed||detail.placementRevision!==detailRevision){
       detailRevision=detail.placementRevision;
-      scenery=[...detail.placements,...snapshot.houses,...(snapshot.buildings??[])];
-      collisions=[...detail.getCollisionPlacements(),...snapshot.houses,...(snapshot.buildings??[])];
-      meshes=[...detail.getTerrainMeshes(),...houseMeshes];
-      streets=[...detail.cityStreets,...(snapshot.paths??[])];
+      scenery=[...detail.placements,...snapshot.houses,...(snapshot.buildings??[]),...villageObjects];
+      collisions=[...detail.getCollisionPlacements(),...snapshot.houses,...(snapshot.buildings??[]),...villageObjects];
+      meshes=[...detail.getTerrainMeshes(),...houseMeshes,...villageArt?.meshes??[]];
+      streets=[...detail.cityStreets,...(snapshot.paths??[]),...villagePaths];
     }
   }
   function findTree(player){
@@ -98,7 +112,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   }
   synchronize();
   return{
-    game,art,hud,residents,
+    game,art,hud,residents,villageArt,villageResidents,
     get building(){return tool==='house';},
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${revision}`;},
     get cityStreets(){synchronize();return streets;},
@@ -175,6 +189,9 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       const cityBuildings=(snapshot.buildings??[]).filter(item=>item.cityId===nearest?.id);
       const cityPending=(snapshot.pendingDevelopments??[]).filter(item=>item.cityId===nearest?.id).map(item=>item.type);
       residents.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches,night,dayPhase:dayState?.phase,unavailableHomes:art.construction.activeIds});
+      villageArt?.update({mapBlend});
+      villageResidents?.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches,night,dayPhase:dayState?.phase});
+      villageLevels?.update({camera,mapBlend,walkingWeight,viewportHeight});
       levels.update({camera,mapBlend,walkingWeight,viewportHeight});
       incomeEffects.update(uiDt,{camera,mapBlend,walkingWeight,viewportHeight,reducedMotion:reducedMotion?.matches});
       hud.update({logs:snapshot.logs,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
@@ -182,9 +199,10 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),gold:String(snapshot.gold),incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects.visibleCount),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),construction:String(art.construction.count),constructionDust:String(art.construction.dustCount),residentsIndoors:String(residents.stats.indoors??0),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(residents.stats?.residents??residents.stats?.count??0),
+        farmVillages:String(villages?.cities?.length??0),villageResidents:String(villageResidents?.stats.residents??0),villageResidentsIndoors:String(villageResidents?.stats.indoors??0),
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();},
+    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();},
   };
 }
