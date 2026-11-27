@@ -12,9 +12,9 @@ export async function createLaunchWorld(parameters,baseUrl){
   const layout=launchLayout(parameters);
   const options={...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
     ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})};
-  if(layout==='settlement'){
+  if(layout==='settlement'||layout==='settlement-compact'){
     const {createSettlementWorld}=await import('./settlement-world.js');
-    return createSettlementWorld(options);
+    return createSettlementWorld({...options,...(layout==='settlement-compact'?{map:'compact'}:{})});
   }
   if(layout==='island'){
     const {createIslandWorld}=await import('./island-world.js');

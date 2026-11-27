@@ -447,3 +447,15 @@ test('the owning city range stays anchored while a return route starts at a fore
   art.preview(null,{cities:[owned,foreign],sourceCityId:foreign.id,rangeCityId:foreign.id,maxConnectionDistance:140,visible:true});
   art.root.getObjectByName('railway-connection-range').getMatrixAt(0,matrix);assert.equal(matrix.elements[12],foreign.x,'changing only the range anchor refreshes its placement');
 });
+
+
+test('station access paths stay in detailed scenery without appearing as map railways',t=>{
+  const {art}=fixture(t),paths=[{id:'station-path',width:.7,points:[{x:-8,z:3},{x:-2.5,z:3}]}];
+  art.sync({...snapshot,paths});
+  const network=art.root.getObjectByName('built-railway-network'),map=art.mapRoot.getObjectByName('built-map-railway-network');
+  assert.equal(map.children.length,2,'only the two route casing/ink batches remain in the map');
+  assert.ok(network.children.some(mesh=>mesh.material?.userData?.sceneStyle==='street'||mesh.material?.name==='street-surface'||mesh.geometry?.attributes?.position?.count>0));
+  const withPaths=network.children.reduce((total,mesh)=>total+(mesh.geometry?.attributes.position.count??0),0);
+  art.sync({...snapshot,revision:2,paths:[]});
+  assert.ok(withPaths>network.children.reduce((total,mesh)=>total+(mesh.geometry?.attributes.position.count??0),0),'detailed access path geometry is retained');
+});

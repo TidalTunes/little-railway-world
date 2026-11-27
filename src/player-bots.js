@@ -1,3 +1,4 @@
+import {isHarvestableWood} from './harvestable-wood.js';
 import {SETTLEMENT,settlementTreeId} from './settlement-game.js';
 import {worldSurface} from './world-model.js';
 import {settlementDoor} from './settlement-paths.js';
@@ -46,7 +47,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     }
     obstacles=new Map();
     for(const item of placements){
-      if(!(solidKinds.has(item.kind)||item.kind==='nature'&&item.style==='outcrop')||item.kind==='tree'&&game.isTreeRemoved(item))continue;
+      if(!(solidKinds.has(item.kind)||item.kind==='nature'&&item.style==='outcrop')||isHarvestableWood(item)&&game.isTreeRemoved(item))continue;
       const scale=item.scale??1,circle=item.kind==='tree'||['rock','cactus','nature'].includes(item.kind);
       const radius=(item.kind==='tree'?.14*scale:item.kind==='rock'?.59*scale:item.kind==='cactus'?.31*scale:item.radius??1);
       const halfWidth=(item.width??(item.kind==='house'?2.2:3.5))*scale/2,halfDepth=(item.depth??(item.kind==='house'?2.2:3.5))*scale/2;
@@ -145,7 +146,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
   }
   function* chooseTree(preferred=null){
     if(!treeChoices.length||chosenRevision!==revision||preferred){
-      treeChoices=placements.filter(item=>item.kind==='tree'&&!game.isTreeRemoved(item)&&distance(item,anchor)<=PLAYER_BOT.searchRadius)
+      treeChoices=placements.filter(item=>isHarvestableWood(item)&&!game.isTreeRemoved(item)&&distance(item,anchor)<=PLAYER_BOT.searchRadius)
         .sort((a,b)=>(preferred&&a.id===preferred.id?-1e4:distance(position,a)+distance(anchor,a)*.2)
           -(preferred&&b.id===preferred.id?-1e4:distance(position,b)+distance(anchor,b)*.2));
       treeIndex=0;chosenRevision=revision;
@@ -185,7 +186,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       stats.siteChecks++;
       const evaluation=game.evaluateBuild(site,{placements,heading:facing,player:position,enforceReach:false});
       if(!evaluation.siteValid){
-        if(evaluation.code==='tree-blocked'&&!clearingTree)clearingTree=placements.filter(item=>item.kind==='tree'&&!game.isTreeRemoved(item)&&distance(item,site)<Math.hypot(SETTLEMENT.houseWidth,SETTLEMENT.houseDepth)/2+(item.radius??.85*(item.scale??1))+SETTLEMENT.clearance)
+        if(evaluation.code==='tree-blocked'&&!clearingTree)clearingTree=placements.filter(item=>isHarvestableWood(item)&&!game.isTreeRemoved(item)&&distance(item,site)<Math.hypot(SETTLEMENT.houseWidth,SETTLEMENT.houseDepth)/2+(item.radius??.85*(item.scale??1))+SETTLEMENT.clearance)
           .sort((a,b)=>distance(a,position)-distance(b,position))[0]??null;
         continue;
       }
@@ -226,7 +227,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       // final tree clearing; the same axe/reach/reward rules apply to that work.
       if(!development.searching&&policy.allowChop){
         const homes=game.houses,center={x:homes.reduce((sum,p)=>sum+p.x,0)/homes.length,z:homes.reduce((sum,p)=>sum+p.z,0)/homes.length};
-        const tree=placements.filter(p=>p.kind==='tree'&&!game.isTreeRemoved(p)&&distance(p,center)<18)
+        const tree=placements.filter(p=>isHarvestableWood(p)&&!game.isTreeRemoved(p)&&distance(p,center)<18)
           .sort((a,b)=>distance(a,center)-distance(b,center))[0];
         if(tree)yield* chooseTree(tree);
       }

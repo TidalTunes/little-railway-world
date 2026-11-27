@@ -7,7 +7,7 @@ import {createPlayerBotStarts,preparePlayerBotScenery,PLAYER_BOT_WORLD} from '..
 import {fitsBiome} from '../src/biomes.js';
 import {treeLogYield} from '../src/settlement-game.js';
 
-const network=seed=>generateWorld(createSettlementWorld({seed,economy:true}),{detail:'network'});
+const network=seed=>generateWorld(createSettlementWorld({seed,economy:true,map:'compact'}),{detail:'network'});
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 
 test('three differently owned homesteads are deterministic and preserve the starter and gray villages',()=>{
@@ -21,7 +21,7 @@ test('three differently owned homesteads are deterministic and preserve the star
   assert.equal(world.gameplay.reservations.filter(item=>item.id?.startsWith('bot:')).length,6,
     'only home footprints and doorsteps are cleared, never broad construction lots');
   assert.notDeepEqual(bots,network('another-world').gameplay.playerBots);
-  const recompilation=generateWorld({...createSettlementWorld({economy:true}),gameplay:structuredClone(world.gameplay)},{detail:'network'});
+  const recompilation=generateWorld({...createSettlementWorld({economy:true,map:'compact'}),gameplay:structuredClone(world.gameplay)},{detail:'network'});
   assert.deepEqual(recompilation.gameplay.playerBots,bots);
   assert.deepEqual(recompilation.gameplay.reservations,world.gameplay.reservations);
 });
@@ -71,7 +71,7 @@ test('offscreen scenery is an exact bounded CPU catalog of the renderer canonica
 });
 
 test('bot starts can be disabled and do not affect the existing railway art presets',()=>{
-  const config=createSettlementWorld({economy:true});config.gameplay.playerBotCount=0;
+  const config=createSettlementWorld({economy:true,map:'compact'});config.gameplay.playerBotCount=0;
   const world=generateWorld(config,{detail:'network'});
   assert.deepEqual(world.gameplay.playerBots,[]);
   assert.deepEqual(preparePlayerBotScenery(world,()=>{throw Error('should not generate detail');}),[]);

@@ -1,3 +1,4 @@
+import {isHarvestableWood} from './harvestable-wood.js';
 import * as THREE from 'three';
 import {clipPolygonsToBounds} from './polygon-region.js';
 import { buildWorld } from './world.js';
@@ -40,10 +41,10 @@ export function clipRailRanges(line,bounds){
 /** Runs in a worker: actual terrain, CSG, assets and rail art become plain buffers. */
 export function compileDetailPacket(region,network){
   const bounds=region.bounds;
-  const sourcePlacements=(region.placements??[]).map(p=>network.gameplay&&p.kind==='tree'&&!p.id?{...p,id:treeId(p)}:p);
-  const mutableTrees=network.gameplay?sourcePlacements.filter(p=>p.kind==='tree'):[];
-  const mutableScenery=network.gameplay?sourcePlacements.filter(p=>REMOVABLE_SCENERY.has(p.kind)).map((p,i)=>({...p,id:sceneryPlacementId(p),sceneryIndex:i+1})):[];
-  const sceneryIndices=network.gameplay?new Map(sourcePlacements.filter(p=>REMOVABLE_SCENERY.has(p.kind)).map((p,i)=>[p,i+1])):null;
+  const sourcePlacements=(region.placements??[]).map(p=>network.gameplay&&isHarvestableWood(p)&&!p.id?{...p,id:treeId(p)}:p);
+  const mutableTrees=network.gameplay?sourcePlacements.filter(isHarvestableWood):[];
+  const mutableScenery=network.gameplay?sourcePlacements.filter(p=>REMOVABLE_SCENERY.has(p.kind)&&!isHarvestableWood(p)).map((p,i)=>({...p,id:sceneryPlacementId(p),sceneryIndex:i+1})):[];
+  const sceneryIndices=network.gameplay?new Map(sourcePlacements.filter(p=>REMOVABLE_SCENERY.has(p.kind)&&!isHarvestableWood(p)).map((p,i)=>[p,i+1])):null;
   const islands=clipPolygonsToBounds([[network.outline]],bounds);
   const mountainIds=new Set((region.mountains??[]).map(m=>m.id));
   const lines=(region.lines??network.lines).map(line=>({...line,renderRanges:clipRailRanges(line,bounds),
@@ -56,7 +57,7 @@ export function compileDetailPacket(region,network){
   }
   const root=new THREE.Group(),surfaceRoot=network.surface?.type==='sphere'?new THREE.Group():null,ownedMaterials=new Set();
   const local={...network,...region,lines,terrainChunk:true,terrainSource:network,
-    placements:network.gameplay?sourcePlacements.filter(p=>p.kind!=='tree'):sourcePlacements,
+    placements:network.gameplay?sourcePlacements.filter(p=>!isHarvestableWood(p)):sourcePlacements,
     cityStreets:region.cityStreets??[],stations:region.stations??[],mountains:region.mountains??[]};
   if(network.biomes)local.biomes={...network.biomes,
     ocean:network.biomes.ocean?.length?clipPolygonsToBounds(network.biomes.ocean,bounds):[],

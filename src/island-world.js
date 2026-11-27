@@ -48,12 +48,12 @@ function offsetLand(polygons,distance){
   return result.map(path=>{const ring=path.map(({X,Y})=>[X/scale,Y/scale]);return [[...ring,[...ring[0]]]];});
 }
 
-function islandGeography(){
-  const coast=[MAIN_COAST,...ISLE_COASTS].map(ring=>[roundedRing(ring)]);
-  const inland=offsetLand(coast,-SHORE_WIDTH),lakes=[[roundedRing(LAKE_COAST)]];
-  const lakeAndShore=offsetLand(lakes,SHORE_WIDTH);
+export function createIslandGeography({coasts=[MAIN_COAST,...ISLE_COASTS],lakeCoasts=[LAKE_COAST],frame=FRAME,shoreWidth=SHORE_WIDTH}={}){
+  const coast=coasts.map(ring=>[roundedRing(ring)]);
+  const inland=offsetLand(coast,-shoreWidth),lakes=lakeCoasts.map(ring=>[roundedRing(ring)]);
+  const lakeAndShore=offsetLand(lakes,shoreWidth);
   return {
-    ocean:clipping.difference([[FRAME]],coast),
+    ocean:clipping.difference([[frame]],coast),
     oceanShore:clipping.difference(coast,inland),
     landInterior:clipping.difference(inland,lakeAndShore),
     lakes,lakeShore:clipping.difference(lakeAndShore,lakes),
@@ -108,7 +108,7 @@ export function createIslandWorld({seed='island-sandbox-v1',trainCount=12}={}){
       {id:'sunport-meadow',type:'plains',x:66,z:47},
       {id:'dune-coast',type:'desert',x:100,z:57},
       {id:'south-isles',type:'plains',x:111,z:89},
-    ],geography:islandGeography()},
+    ],geography:createIslandGeography()},
     geography:{name:'Little Island',kind:'authored-island',version:1,
       description:'A compact island with wooded uplands, a lake-fed river, farm valley, sheltered eastern bay and offshore islets.'},
   };

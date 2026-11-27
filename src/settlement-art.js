@@ -6,7 +6,6 @@ import {createPlayerPalette,playerColors} from './player-palette.js';
 import {rigidSurfacePoseMatrix} from './world-surface.js';
 import {buildCityStreets,STREET_HEIGHT} from './city-streets.js';
 import {worldSurface} from './world-model.js';
-import {C} from './palette.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {buildSettlementBuilding} from './settlement-building-assets.js';
 import {SETTLEMENT_BUILDINGS} from './settlement-progression.js';
@@ -78,7 +77,7 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
   for(const line of [link,mapLink]){line.name='settlement-path-preview';line.visible=false;line.frustumCulled=false;line.renderOrder=9;}
   root.add(link);mapRoot.add(mapLink);
   const pathsRoot=new THREE.Group(),mapPathsRoot=new THREE.Group();pathsRoot.name='settlement-paths';mapPathsRoot.name='settlement-map-paths';root.add(pathsRoot);mapRoot.add(mapPathsRoot);
-  const mapPathMaterial=new THREE.MeshBasicMaterial({color:C.sand,depthWrite:false});
+  mapPathsRoot.visible=false; // The flat map shows the rail network, not local footpaths.
   function syncPaths(paths){
     for(const group of [pathsRoot,mapPathsRoot]){for(const mesh of group.children)mesh.geometry.dispose();group.clear();}
     // Union first, so branching lanes share one surface without coplanar seams.
@@ -89,9 +88,7 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
       for(let i=0;i<positions.count;i++)positions.setY(i,worldSurface(world,positions.getX(i),positions.getZ(i)).height+STREET_HEIGHT);
       positions.needsUpdate=true;mesh.geometry.computeVertexNormals();mesh.geometry.computeBoundingSphere();
       mesh.castShadow=false;mesh.receiveShadow=true;
-      const geometry=mesh.geometry.clone(),flat=geometry.attributes.position;
-      for(let i=0;i<flat.count;i++)flat.setY(i,.62);
-      geometry.computeBoundingSphere();const mapPath=new THREE.Mesh(geometry,mapPathMaterial);mapPath.renderOrder=7;mapPathsRoot.add(mapPath);
+
     }
   }
   const treeRing=new THREE.Mesh(new THREE.RingGeometry(.26,.32,28),new THREE.MeshBasicMaterial({color:0xffdf96,side:THREE.DoubleSide,depthWrite:false}));
@@ -188,7 +185,7 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
       Object.values(palette).forEach(material=>material.dispose());
       linkGeometry.dispose();mapLinkGeometry.dispose();linkMaterial.dispose();treeRing.geometry.dispose();treeRing.material.dispose();
       ghostGeometry.dispose();ghostMaterial.dispose();edgeGeometry.dispose();edgeMaterial.dispose();
-      for(const group of [pathsRoot,mapPathsRoot])for(const mesh of group.children)mesh.geometry.dispose();mapPathMaterial.dispose();
+      for(const group of [pathsRoot,mapPathsRoot])for(const mesh of group.children)mesh.geometry.dispose();
       markerGeometry.dispose();markerMaterial.dispose();
     },
   };

@@ -261,3 +261,14 @@ test('new player connections route around neutral foundations without merging vi
     for(const home of villages.houses)assert.equal(houseBlocksSettlementPath({},home,path,0),false);
   }
 });
+
+test('desert cacti yield wood once, obey reach, and clear buildable ground like trees',()=>{
+  const game=make(),cactus={kind:'cactus',x:5,z:0,variant:2,scale:1,radius:.7};earn(game);
+  assert.notEqual(settlementTreeId(cactus),settlementTreeId({...cactus,kind:'tree'}));
+  assert.equal(game.evaluateBuild(cactus,{placements:[cactus]}).code,'tree-blocked');
+  assert.equal(game.chop(cactus,{player:{x:0,z:0}}).code,'out-of-reach');
+  const before=game.logs,cut=game.chop(cactus,{player:{x:4.2,z:0}});
+  assert.equal(cut.ok,true);assert.equal(game.logs,before+treeLogYield('rules-test',cactus));
+  assert.equal(game.chop({...cactus}).code,'already-chopped');
+  assert.equal(game.evaluateBuild(cactus,{placements:[cactus]}).valid,true);
+});

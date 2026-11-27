@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import {buildTrainCar} from './assets.js';
+import {buildSteamLocomotive} from './steam-locomotive.js';
+import {TRAIN_CAR_SPACING} from './train-consist.js';
 import {box,cylinder,ico,consolidate} from './geometry.js';
 import {bakeMaterialColors} from './color-batches.js';
 import {createPlayerPalette,playerColors} from './player-palette.js';
@@ -7,7 +8,7 @@ import {C} from './palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {surfaceFor,rigidSurfacePoseMatrix,surfacePoint} from './world-surface.js';
 
-export const TRADE_TRAIN_LIMITS=Object.freeze({visible:2048,spacing:2.6});
+export const TRADE_TRAIN_LIMITS=Object.freeze({visible:2048,detailCars:8192,spacing:TRAIN_CAR_SPACING});
 const CARGO_COLORS={timber:C.soilLight,grain:C.wheat,metal:C.rail,tools:C.blue};
 // Old saves retain timber/grain names; both economies share the same pooled
 // log and food geometry rather than creating duplicate alias batches.
@@ -64,9 +65,9 @@ export function createTradeTrains(parent,mapParent,world={}){
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='trade-trains';mapRoot.name='trade-trains-map';parent.add(root);mapParent.add(mapRoot);
   const owners=new Map(),cargoBatches=new Map(),records=new Map(),trains=[],ownedMaterials=new Set(),ownedGeometries=new Set(),groups=[];
   const curved=!!surfaceFor(world),matrix=new THREE.Matrix4(),projection=new THREE.Matrix4(),frustum=new THREE.Frustum();
-  const viewPoint=new THREE.Vector3(),scale=new THREE.Vector3(1,1,1),sphere=new THREE.Sphere(new THREE.Vector3(),4.2);
+  const viewPoint=new THREE.Vector3(),scale=new THREE.Vector3(1,1,1),sphere=new THREE.Sphere(),bounds=new THREE.Box3();
   const fallback={x:0,y:0,z:0,angle:0};let disposed=false,frame=0;
-  const stats={active:0,visible:0,detailInstances:0,mapInstances:0,drawCalls:0,capacity:0};
+  const stats={active:0,visible:0,detailCars:0,detailInstances:0,mapInstances:0,drawCalls:0,capacity:0};
   function group(template,name,parent=root){
     bakeMaterialColors(consolidate(template));
     for(const material of template.userData.ownedMaterials??[])ownedMaterials.add(material);
@@ -75,7 +76,7 @@ export function createTradeTrains(parent,mapParent,world={}){
   }
   function allocate(entry,needed){
     if(needed<=entry.capacity)return;
-    const capacity=Math.min(TRADE_TRAIN_LIMITS.visible,Math.max(8,2**Math.ceil(Math.log2(needed))));
+    const capacity=Math.min(entry.parent===root?TRADE_TRAIN_LIMITS.detailCars:TRADE_TRAIN_LIMITS.visible,Math.max(8,2**Math.ceil(Math.log2(needed))));
     const previous=entry.meshes;
     entry.meshes=entry.parts.map((part,index)=>{
       const mesh=new THREE.InstancedMesh(part.geometry,part.material,capacity);mesh.name=entry.name;
@@ -97,7 +98,7 @@ export function createTradeTrains(parent,mapParent,world={}){
   }
   function owner(player){
     const palette=createPlayerPalette(player);Object.values(palette).forEach(material=>ownedMaterials.add(material));
-    const value={color:playerColors(player).body,loco:group(buildTrainCar(new THREE.Group(),{palette,cab:true}),`trade-locomotive:${player?.id??'neutral'}`),
+    const value={color:playerColors(player).body,loco:group(buildSteamLocomotive(palette),`trade-locomotive:${player?.id??'neutral'}`),
       wagon:group(wagon(palette),`trade-wagon:${player?.id??'neutral'}`)};
     owners.set(player?.id??null,value);return value;
   }
@@ -129,7 +130,7 @@ export function createTradeTrains(parent,mapParent,world={}){
   function update(states=[],{camera,mapBlend=0,walkingWeight=0,viewportHeight=800}={}){
     if(disposed)return;frame++;
     root.visible=mapBlend<.999;mapRoot.visible=mapBlend>.001&&walkingWeight<.8;
-    stats.active=stats.visible=stats.detailInstances=stats.mapInstances=0;trains.length=0;
+    stats.active=stats.visible=stats.detailCars=stats.detailInstances=stats.mapInstances=0;trains.length=0;
     for(const entry of groups)entry.count=0;
     if(camera){camera.updateMatrixWorld(true);projection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(projection);}
     parent.updateWorldMatrix(true,false);
@@ -141,37 +142,48 @@ export function createTradeTrains(parent,mapParent,world={}){
       }
       stats.active++;
       if(!record){
-        record={state,parts:[new THREE.Object3D(),new THREE.Object3D()],frame};
-        for(const part of record.parts)part.userData={trainId:state.id,poseOnly:true};records.set(state.id,record);
+        record={state,parts:[],fallbackPoses:[],frame};records.set(state.id,record);
       }
       record.state=state;record.frame=frame;trains.push(record);
-      const locomotive=finitePose(state.carPoses?.[0])?state.carPoses[0]:state;
-      fallback.x=locomotive.x-Math.sin(locomotive.angle)*TRADE_TRAIN_LIMITS.spacing;fallback.y=locomotive.y??.42;
-      fallback.z=locomotive.z-Math.cos(locomotive.angle)*TRADE_TRAIN_LIMITS.spacing;fallback.angle=locomotive.angle;
-      const hasWagon=!Array.isArray(state.carPoses)||state.carPoses.length>1;
-      const rear=finitePose(state.carPoses?.[1])?state.carPoses[1]:fallback;
-      record.parts[0].position.set(locomotive.x,locomotive.y??.42,locomotive.z);record.parts[0].rotation.y=locomotive.angle;
-      record.parts[1].position.set(rear.x,rear.y??.42,rear.z);record.parts[1].rotation.y=rear.angle;
-      record.parts[0].visible=true;record.parts[1].visible=hasWagon;
-      if(curved)surfacePoint(world,locomotive.x,(locomotive.y??.42)+.7,locomotive.z,sphere.center);
-      else sphere.center.set(locomotive.x,(locomotive.y??.42)+.7,locomotive.z);
-      sphere.center.applyMatrix4(parent.matrixWorld);
+      const locomotive=finitePose(state.carPoses?.[0])?state.carPoses[0]:state,carCount=Math.max(1,state.carPoses?.length??2);
+      const poseAt=index=>{
+        if(finitePose(state.carPoses?.[index]))return state.carPoses[index];
+        if(!record.fallbackPoses[index])record.fallbackPoses[index]={};
+        const pose=record.fallbackPoses[index];pose.x=locomotive.x-Math.sin(locomotive.angle)*TRADE_TRAIN_LIMITS.spacing*index;pose.y=locomotive.y??.42;
+        pose.z=locomotive.z-Math.cos(locomotive.angle)*TRADE_TRAIN_LIMITS.spacing*index;pose.angle=locomotive.angle;return pose;
+      };
+      bounds.makeEmpty();
+      for(let index=0;index<carCount;index++){
+        const pose=poseAt(index);
+        if(!record.parts[index]){const part=new THREE.Object3D();part.userData={trainId:state.id,poseOnly:true};record.parts.push(part);}
+        const part=record.parts[index];part.position.set(pose.x,pose.y??.42,pose.z);part.rotation.y=pose.angle;part.visible=true;
+        if(curved)surfacePoint(world,pose.x,(pose.y??.42)+.8,pose.z,viewPoint);else viewPoint.set(pose.x,(pose.y??.42)+.8,pose.z);
+        viewPoint.applyMatrix4(parent.matrixWorld);bounds.expandByPoint(viewPoint);
+      }
+      for(let index=carCount;index<record.parts.length;index++)record.parts[index].visible=false;
+      bounds.getBoundingSphere(sphere);sphere.radius+=2;
       if(camera&&!frustum.intersectsSphere(sphere)||stats.visible>=TRADE_TRAIN_LIMITS.visible)continue;
       stats.visible++;
       const resource=state.resource??(typeof state.cargo==='string'?state.cargo:state.cargo?.resource),cargo=CARGO_KIND[resource];
-      const livery=owners.get(state.ownerId)??neutral,loaded=hasWagon&&state.amount>0&&cargoBatches.has(cargo);
-      if(root.visible){
+      const cargoAt=index=>state.cars?state.cars[index]:index===1?{resource,amount:state.amount}:null;
+      const livery=owners.get(state.ownerId)??neutral;
+      if(root.visible&&stats.detailCars+carCount<=TRADE_TRAIN_LIMITS.detailCars){
         insert(livery.loco,state.id,poseMatrix(locomotive));stats.detailInstances++;
-        if(hasWagon){insert(livery.wagon,state.id,poseMatrix(rear));stats.detailInstances++;}
-        if(loaded){insert(cargoBatches.get(cargo),state.id,matrix);stats.detailInstances++;}
+        for(let index=1;index<carCount;index++){
+          insert(livery.wagon,state.id,poseMatrix(poseAt(index)));stats.detailInstances++;
+          const load=cargoAt(index),kind=CARGO_KIND[load?.resource];
+          if(load?.amount>0&&cargoBatches.has(kind)){insert(cargoBatches.get(kind),state.id,matrix);stats.detailInstances++;}
+        }
+        stats.detailCars+=carCount;
       }
       if(mapRoot.visible){
         const pixel=camera?pixelSize(camera)/Math.max(1,viewportHeight):0;
-        const widthScale=Math.max(1,pixel*7/1.2),lengthScale=Math.max(1,pixel*19/4.65);
-        fallback.x=hasWagon?(locomotive.x+rear.x)/2:locomotive.x;fallback.z=hasWagon?(locomotive.z+rear.z)/2:locomotive.z;fallback.angle=locomotive.angle;
+        const widthScale=Math.max(1.1,pixel*8.5/1.2),lengthScale=Math.max(1.1,Math.min(carCount,4)*TRADE_TRAIN_LIMITS.spacing/4.65,pixel*23/4.65),rear=poseAt(carCount-1);
+        fallback.x=(locomotive.x+rear.x)/2;fallback.z=(locomotive.z+rear.z)/2;fallback.angle=locomotive.angle;
         insert(outline,state.id,mapMatrix(fallback,widthScale,lengthScale,.86));
         insert(body,state.id,mapMatrix(fallback,widthScale,lengthScale,.87),livery.color);
-        if(loaded)insert(cargoMarker,state.id,mapMatrix(fallback,widthScale,lengthScale,.88),CARGO_COLORS[cargo]);
+        const mapCargo=state.cars?.find(car=>car.amount>0&&CARGO_KIND[car.resource]),mapKind=mapCargo?CARGO_KIND[mapCargo.resource]:cargo;
+        if(mapCargo||carCount>1&&state.amount>0&&cargoBatches.has(cargo))insert(cargoMarker,state.id,mapMatrix(fallback,widthScale,lengthScale,.88),CARGO_COLORS[mapKind]);
         stats.mapInstances++;
       }
     }

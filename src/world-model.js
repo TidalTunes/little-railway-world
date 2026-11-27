@@ -642,9 +642,9 @@ function placeScenery(world,random,density) {
     // dry districts; Old World deserts use scrub rather than American cacti.
     const herd=!frozen&&biome==='plains'&&e.ecoregion!=='polar'&&e.patch<.58&&e.moisture>.36&&rng()<.17;
     const american=!world.surface?.complete||(e.longitude>-125&&e.longitude<-60);
-    const colony=!frozen&&biome==='desert'&&american&&e.patch>.5&&e.patch<.72&&rng()<.2;
+    const colony=!frozen&&biome==='desert'&&american&&e.patch>.38&&e.patch<.82&&rng()<.42;
     if(!herd&&!colony)continue;
-    const count=2+Math.floor(rng()*4),heading=rng()*Math.PI*2;
+    const count=herd?2+Math.floor(rng()*4):2+Math.floor(rng()*2),heading=rng()*Math.PI*2;
     for(let i=0;i<count;i++){
       const kind=herd?'sheep':'cactus';if(herd?sheep>=sheepTarget:cacti>=cactusTarget)break;
       const angle=rng()*Math.PI*2,offset=2.4+rng()*4.8,pos=surfaceOffset(world,p.x,p.z,Math.cos(angle)*offset,Math.sin(angle)*offset);

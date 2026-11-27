@@ -66,7 +66,7 @@ test('third-person and off-screen gains stay hidden, age normally, and do not re
 
 test('gathering and delivery remain distinct, spatially separated receipts and DOM slots are reused',()=>{
   const{document,effects,options}=fixture();effects.emit(gain({kind:'gathered'}));effects.emit(gain({kind:'production'}));effects.update(.2,options);
-  const slots=document.body.children[0].children;assert.equal(slots.length,2);assert.equal(slots[0].children[0].textContent,'Gathered');assert.equal(slots[1].children[0].textContent,'Delivered');assert.notEqual(slots[0].style.transform,slots[1].style.transform);
+  const slots=document.body.children[0].children;assert.equal(slots.length,2);assert.equal(slots[0].children[0].textContent,'Gathered');assert.equal(slots[1].children[0].textContent,'');assert.equal(slots[1].children[0].hidden,true);assert.notEqual(slots[0].style.transform,slots[1].style.transform);
   effects.update(3,options);effects.emit(gain({id:'new-work'}));effects.update(.2,options);assert.equal(effects.stats.allocated,2);assert.equal(effects.visibleCount,1);assert.equal(slots[1].hidden,true);effects.dispose();
 });
 

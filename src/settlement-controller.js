@@ -1,3 +1,4 @@
+import {isHarvestableWood} from './harvestable-wood.js';
 import * as THREE from 'three';
 import {createSettlementEconomy} from './settlement-economy.js';
 import {createEconomicBots} from './economic-bots.js';
@@ -280,7 +281,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     let selected=null,best=Infinity;
     const fx=Math.sin(player.heading),fz=Math.cos(player.heading);
     for(const item of scenery){
-      if(item.kind!=='tree'||game.isTreeRemoved(item))continue;
+      if(!isHarvestableWood(item)||game.isTreeRemoved(item))continue;
       const dx=item.x-player.position.x,dz=item.z-player.position.z,distance=Math.hypot(dx,dz);
       if(distance>SETTLEMENT.chopReach||distance<1e-6)continue;
       const facing=(dx*fx+dz*fz)/distance;

@@ -73,6 +73,21 @@ test('rail construction clears only corridor trees without awarding logs',()=>{
   assert.ok(rail.build('a','b',{requireCached:true}).ok);assert.ok(session.shared.removedTreeIds.has('on-rail'));assert.ok(!session.shared.removedTreeIds.has('distant'));assert.equal(session.player.logs,0);
 });
 
+test('rail corridors permanently clear standing and already harvested cacti without duplicate animations',()=>{
+  const {rail,placements,session,world}=fixture(),preview=rail.evaluate('a','b'),points=preview.lines.at(-1).points;
+  placements.push({id:'standing-cactus',kind:'cactus',...points[16],radius:.8},
+    {id:'harvested-cactus',kind:'cactus',...points[20],radius:.8},
+    {id:'standing-tree',kind:'tree',...points[24],radius:.8});
+  session.shared.removedTreeIds.add('harvested-cactus');
+  const worker=createSettlementRailways(world,{session,getPlacements:()=>placements,surfaceAt:flat});
+  assert.ok(rail.adoptPreview('a','b',worker.evaluate('a','b'),rail.geometryKey('a','b')));
+  const built=rail.build('a','b',{requireCached:true});assert.ok(built.ok);
+  assert.deepEqual(built.clearedTreeIds.sort(),['standing-cactus','standing-tree']);
+  assert.deepEqual(built.clearedPlacements,[],'wood uses only the falling-source animation');
+  assert.deepEqual(rail.snapshot().clearedPlacementIds.sort(),['harvested-cactus','standing-cactus','standing-tree']);
+  assert.ok(placements.every(source=>session.shared.removedTreeIds.has(source.id)));assert.equal(session.player.logs,0);
+});
+
 test('worker previews reuse geometry, honor the current wallet and reject stale occupancy',()=>{
   const {rail,world,session,surfaceAt}=fixture({gold:4}),key=rail.geometryKey('a','b');const preview=rail.evaluate('a','b');
   const authority=createSettlementRailways(world,{session,surfaceAt});session.player.gold=10;
@@ -105,7 +120,7 @@ test('the settlement wallet rejects invalid costs and cannot become negative',()
 });
 
 test('canonical off-screen island scenery supports the actual starter layout and shared farm routes',()=>{
-  const world=generateWorld(createSettlementWorld({economy:true}),{detail:'network'}),starter=world.gameplay.starterHouse;
+  const world=generateWorld(createSettlementWorld({economy:true,map:'compact'}),{detail:'network'}),starter=world.gameplay.starterHouse;
   world.gameplay.railwayMaxDistance=1000;
   const city={id:'player-city',x:-84,z:-43-2/3,ownerId:'teal',level:1,houseCount:3};
   const {session}=fixture({cities:[city],gold:40});session.buildings=[[0,0],[-6,3],[0,-5]].map(([x,z],index)=>({...starter,id:`actual-${index}`,x:starter.x+x,z:starter.z+z,cityId:city.id}));

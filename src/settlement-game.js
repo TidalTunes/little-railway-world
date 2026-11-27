@@ -1,3 +1,4 @@
+import {isHarvestableWood,woodSourceId} from './harvestable-wood.js';
 import {worldSurface} from './world-model.js';
 import {surfaceDistance,surfaceDisplacement,surfaceOffset} from './world-surface.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
@@ -21,7 +22,7 @@ function hash(value){
 /** Generated placement IDs remain stable through chunk unload/reload. The
  * coordinate fallback also supports small authored test worlds without IDs. */
 export function settlementTreeId(tree){
-  return tree?.id!=null?String(tree.id):`tree:${tree?.x}:${tree?.z}:${tree?.variant??0}`;
+  return woodSourceId(tree);
 }
 
 export function treeLogYield(seed,tree,economic=false){return (economic?4:2)+hash(`${seed}:${settlementTreeId(tree)}:logs`)%3;}
@@ -149,8 +150,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     for(const item of placements){
       if(sceneryRemoved(item))continue;
       if(!(BLOCKING_KINDS.has(item.kind)||item.kind==='nature'&&item.style==='outcrop')||!finitePoint(item)||homes.some(home=>home.id===item.id)||buildings.some(home=>home.id===item.id))continue;
-      if(item.kind==='tree'&&removed.has(settlementTreeId(item)))continue;
-      if(overlaps(world,building,item))return [item.kind==='tree'?'tree-blocked':'scenery-blocked',item.kind==='tree'?'Chop this tree to clear the ground':'This spot is already occupied'];
+      if(isHarvestableWood(item)&&removed.has(settlementTreeId(item)))continue;
+      if(overlaps(world,building,item))return [isHarvestableWood(item)?'tree-blocked':'scenery-blocked',isHarvestableWood(item)?`Chop this ${item.kind} to clear the ground`:'This spot is already occupied'];
     }
     const c=Math.cos(building.rotation),s=Math.sin(building.rotation),width=building.width??SETTLEMENT.houseWidth,depth=building.depth??SETTLEMENT.houseDepth;
     let minHeight=Infinity,maxHeight=-Infinity;
@@ -286,7 +287,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   }
 
   function chop(tree,{player}={}){
-    if(tree?.kind!=='tree'||!finitePoint(tree))return {ok:false,code:'not-a-tree'};
+    if(!isHarvestableWood(tree)||!finitePoint(tree))return {ok:false,code:'not-a-tree'};
     const treeId=settlementTreeId(tree);
     if(removed.has(treeId))return {ok:false,code:'already-chopped'};
     if(player&&(!finitePoint(player)||surfaceDistance(world,player,tree)>SETTLEMENT.chopReach))return {ok:false,code:'out-of-reach'};

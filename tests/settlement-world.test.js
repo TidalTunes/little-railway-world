@@ -24,7 +24,7 @@ test('the starting home and first grove are dry, flat forest or field terrain',(
   assert.deepEqual({...compiledGameplay,guaranteedTrees:compiledGameplay.guaranteedTrees.filter(tree=>!tree.id.startsWith('bot:'))},authoredGameplay);
   assert.deepEqual(compiledGameplay.guaranteedTrees.filter(tree=>tree.id.startsWith('bot:')),playerBots.flatMap(bot=>bot.guaranteedTrees));
   assert.deepEqual(reservations.slice(0,authoredReservations.length),authoredReservations);
-  assert.equal(farmVillages.cities.length,3);
+  assert.equal(farmVillages.cities.length,6);
   assert.equal(playerBots.length,3);
   for(const point of [config.gameplay.starterHouse,config.gameplay.spawn,...config.gameplay.guaranteedTrees]){
     assert.equal(worldSurface(world,point.x,point.z).type,'ground');
@@ -51,7 +51,7 @@ test('default loop economy generates six-home food villages and distinct forest,
     const authored=createSettlementWorld({seed}),world=generateWorld(authored,{detail:'network'});
     assert.equal(authored.gameplay.economy,'loops');assert.equal(authored.gameplay.version,3);
     const villages=world.gameplay.farmVillages,bots=world.gameplay.playerBots;
-    assert.ok(villages.cities.length>=2);if(seed==='first-settlement-v1')assert.equal(villages.cities.length,3);assert.equal(villages.houses.length,villages.cities.length*6);
+    assert.equal(villages.cities.length,6);assert.equal(villages.houses.length,villages.cities.length*6);
     for(const city of villages.cities){assert.equal(city.level,2);assert.equal(city.houseCount,6);assert.equal(city.houseIds.length,6);assert.equal(city.ownerId,FARM_VILLAGE_OWNER);}
     assert.deepEqual(bots.map(bot=>bot.biome),['forest','desert','plains']);
     assert.equal(new Set(bots.map(bot=>bot.ownerId)).size,3);
@@ -59,7 +59,7 @@ test('default loop economy generates six-home food villages and distinct forest,
       assert.equal(biomeAt(world,bot.starterHouse.x,bot.starterHouse.z),bot.biome);
       assert.deepEqual(worldSurface(world,bot.starterHouse.x,bot.starterHouse.z),{type:'ground',height:0});
       assert.equal(bot.guaranteedTrees.length,8);assert.equal(new Set(bot.guaranteedTrees.map(tree=>tree.id)).size,8);
-      for(const tree of bot.guaranteedTrees){assert.equal(tree.kind,'tree');assert.ok(Math.hypot(tree.x-bot.starterHouse.x,tree.z-bot.starterHouse.z)<15);assert.deepEqual(worldSurface(world,tree.x,tree.z),{type:'ground',height:0});}
+      for(const tree of bot.guaranteedTrees){assert.equal(tree.kind,bot.biome==='desert'?'cactus':'tree');assert.ok(Math.hypot(tree.x-bot.starterHouse.x,tree.z-bot.starterHouse.z)<15);assert.deepEqual(worldSurface(world,tree.x,tree.z),{type:'ground',height:0});}
     }
     const repeated=generateWorld(createSettlementWorld({seed}),{detail:'network'});
     assert.deepEqual(repeated.gameplay.playerBots,bots);assert.deepEqual(repeated.gameplay.farmVillages,villages);

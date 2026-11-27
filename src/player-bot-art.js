@@ -17,7 +17,7 @@ export function createPlayerBotArt(parent,mapParent,world,{ownerId,markerParent=
   const cap=applySceneStyle(new THREE.MeshStandardMaterial({color:color(.67,.12,((owner?.color?.h??22)+140)%360),roughness:1,flatShading:true}));
   const root=new THREE.Group();root.name=`player-bot-${ownerId??'neutral'}`;root.visible=false;root.userData.ownerId=ownerId;parent.add(root);
   const art=createTravellerArt(root,{coatMaterial:palette.body,capMaterial:cap,trouserMaterial:palette.dark});
-  const marker=createCharacterMarker(markerParent,markerMapParent,world,{color:colors.dark,accent:colors.body,trim:colors.trim,name:root.name});
+  const marker=createCharacterMarker(markerParent,markerMapParent,world,{color:colors.dark,accent:colors.body,trim:colors.trim,name:root.name,self:false});
   const pose=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
   let disposed=false;
   return {root,art,marker,

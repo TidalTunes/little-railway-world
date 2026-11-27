@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {C} from './palette.js';
-import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
+import {surfaceFor,surfacePoint,surfaceNormal,surfaceFrame} from './world-surface.js';
+import {playerColors} from './player-palette.js';
 import {PERSON_HEIGHT} from './person-scale.js';
 
 function badgeGeometry(ownerColor,accent,trim){
@@ -19,17 +20,32 @@ function badgeGeometry(ownerColor,accent,trim){
   geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));geometry.computeBoundingSphere();return geometry;
 }
 
-/** A location pin attached to the same surface position as the traveller.
- * The actual character stays in the world; this small companion dot only
- * becomes necessary when a person would be less than a few pixels tall. */
-export function createCharacterMarker(scene,mapScene,world,{color=C.teal,accent=C.redLight,trim=C.trim,name='character'}={}){
-  const geometry=badgeGeometry(color,accent,trim);
+
+function travellerTriangle(ownerColor,trim){
+  const positions=[],colors=[],outline=new THREE.Color('#163b3d'),points=[[0,1],[-.78,-.68],[.78,-.68]];
+  const vertex=(index,radius,color)=>{const [x,y]=points[index];positions.push(x*radius,y*radius,0);colors.push(color.r,color.g,color.b);};
+  for(const [inner,outer,color]of [[0,.74,ownerColor],[.74,.88,trim],[.88,1,outline]])for(let i=0;i<3;i++){
+    const next=(i+1)%3;vertex(i,inner,color);vertex(i,outer,color);vertex(next,outer,color);
+    if(inner){vertex(i,inner,color);vertex(next,outer,color);vertex(next,inner,color);}
+  }
+  const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+  geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));geometry.computeBoundingSphere();return geometry;
+}
+
+/** A locator attached to the same surface position as the traveller.
+ * The local player has a directional triangle; other players have circular
+ * owner marks. Both take over only when a person becomes unreadably small. */
+export function createCharacterMarker(scene,mapScene,world,{color,accent=C.redLight,trim=C.trim,name='character',self=true}={}){
+  const owner=world.players?.find(player=>player.id===world.gameplay?.ownerId);
+  color??=owner?playerColors(owner).body:C.teal;
+  const geometry=self?travellerTriangle(color,trim):badgeGeometry(color,accent,trim);
   const material=new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,depthTest:false,depthWrite:false,toneMapped:false});
   const overview=new THREE.Mesh(geometry,material),map=new THREE.Mesh(geometry,material.clone());
   overview.name=`${name}-overview-marker`;map.name=`${name}-map-marker`;overview.renderOrder=map.renderOrder=20;
   overview.visible=map.visible=false;scene.add(overview);mapScene.add(map);
   const base=new THREE.Vector3(),normal=new THREE.Vector3(),top=new THREE.Vector3(),eye=new THREE.Vector3(),viewPosition=new THREE.Vector3();
-  const projectedBase=new THREE.Vector3(),projectedTop=new THREE.Vector3();
+  const projectedBase=new THREE.Vector3(),projectedTop=new THREE.Vector3(),forward=new THREE.Vector3(),directionPoint=new THREE.Vector3();
+  const frame=new THREE.Matrix4(),headingRotation=new THREE.Quaternion(),screenNormal=new THREE.Vector3(0,0,1),billboard=new THREE.Quaternion();
   let characterReadable=false;
   const smooth=(a,b,value)=>{const t=THREE.MathUtils.clamp((value-a)/(b-a),0,1);return t*t*(3-2*t);};
   function size(camera,position,viewportHeight){
@@ -38,7 +54,7 @@ export function createCharacterMarker(scene,mapScene,world,{color=C.teal,accent=
     return 2*Math.abs(w)/(Math.max(1,viewportHeight)*Math.abs(e[5]));
   }
   return{root:overview,mapRoot:map,get characterReadable(){return characterReadable;},
-    update({position,initialized=false,camera,mapBlend=0,walking=false,walkingWeight=walking?1:0,viewportHeight=800}={}){
+    update({position,heading=0,initialized=false,camera,mapBlend=0,walking=false,walkingWeight=walking?1:0,viewportHeight=800}={}){
       overview.visible=map.visible=characterReadable=false;if(!initialized||!position||!camera)return;
       camera.updateMatrixWorld(true);
       surfacePoint(world,position.x,position.y??0,position.z,base);surfaceNormal(world,position.x,position.z,normal);
@@ -46,6 +62,15 @@ export function createCharacterMarker(scene,mapScene,world,{color=C.teal,accent=
       top.copy(base).addScaledVector(normal,PERSON_HEIGHT);projectedBase.copy(base).project(camera);projectedTop.copy(top).project(camera);
       if(projectedBase.z < -1||projectedBase.z>1||Math.abs(projectedBase.x)>1.08||Math.abs(projectedBase.y)>1.08)return;
       const height=Math.abs(projectedTop.y-projectedBase.y)*viewportHeight/2;
+      billboard.copy(camera.quaternion);
+      if(self){
+        surfaceFrame(world,position.x,position.z,frame);
+        forward.set(Math.sin(heading),0,Math.cos(heading)).transformDirection(frame);
+        directionPoint.copy(base).add(forward).project(camera);
+        const projection=camera.projectionMatrix.elements,aspect=Math.abs(projection[5]/projection[0]);
+        const dx=(directionPoint.x-projectedBase.x)*aspect,dy=directionPoint.y-projectedBase.y;
+        if(dx*dx+dy*dy>1e-14){headingRotation.setFromAxisAngle(screenNormal,Math.atan2(-dx,dy));billboard.multiply(headingRotation);}
+      }
       // Retain a broad overlap with the locator's 4–12px fade. Below five
       // pixels a small figure cannot add useful detail, so the caller
       // may skip its individual mesh and shadow draws while keeping the same
@@ -53,12 +78,12 @@ export function createCharacterMarker(scene,mapScene,world,{color=C.teal,accent=
       characterReadable=height>=5;
       const opacity=(1-smooth(4,12,height))*(1-smooth(.3,.9,walkingWeight));
       if(opacity>.001&&mapBlend<.999){
-        overview.visible=true;overview.position.copy(base).addScaledVector(normal,PERSON_HEIGHT*.57);overview.quaternion.copy(camera.quaternion);
-        overview.scale.setScalar(size(camera,overview.position,viewportHeight)*5.4);overview.material.opacity=opacity;
+        overview.visible=true;overview.position.copy(base).addScaledVector(normal,PERSON_HEIGHT*.57);overview.quaternion.copy(billboard);
+        overview.scale.setScalar(size(camera,overview.position,viewportHeight)*(self?8:5.4));overview.material.opacity=opacity;
       }
       if(mapBlend>.001){
         map.visible=true;surfacePoint(world,position.x,surfaceFor(world)?2.4:.62,position.z,map.position);
-        map.quaternion.copy(camera.quaternion);map.scale.setScalar(size(camera,map.position,viewportHeight)*6.5);map.material.opacity=1;
+        map.quaternion.copy(billboard);map.scale.setScalar(size(camera,map.position,viewportHeight)*(self?9:6.5));map.material.opacity=1;
       }
     },
     dispose(){overview.removeFromParent();map.removeFromParent();geometry.dispose();overview.material.dispose();map.material.dispose();},

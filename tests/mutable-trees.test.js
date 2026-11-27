@@ -127,3 +127,21 @@ test('regrowth restores an inactive slot in a newly loaded chunk and persists wh
   manager.removeChunk('near');const next=manager.addChunk('near',parent,[p]),matrix=new THREE.Matrix4();next.meshes[0].getMatrixAt(0,matrix);
   assert.ok(new THREE.Vector3().setFromMatrixScale(matrix).length()>1);manager.dispose();
 });
+
+test('cacti use their exact own artwork and one mutable slot through fall, eviction and regrowth',async()=>{
+  const {cactus}=await import('../src/assets.js');
+  const manager=createMutableTrees(flat),parent=new THREE.Group(),p={...placement('cactus',105),kind:'cactus',variant:1};
+  const chunk=manager.addChunk('near',parent,[p]),mesh=chunk.meshes[0],source=new THREE.Group();
+  cactus(source,{variant:1});bakeMaterialColors(consolidate(source));
+  assert.deepEqual(mesh.geometry.attributes.position.array,source.children[0].geometry.attributes.position.array);
+  const region={bounds:{minX:100,maxX:110,minZ:20,maxZ:30},placements:[p]};
+  const packet=compileDetailPacket(region,{...flat,outline:[[0,0],[4,0],[4,4],[0,4]]});
+  assert.deepEqual(packet.mutableTrees,[p]);assert.equal(packet.meshes.length,0,'no static cactus remains after chopping');
+  assert.equal(packet.mutableScenery.length,0,'cactus cannot also be a second removable scenery instance');
+  assert.ok(manager.fellTree(p.id));manager.update(TREE_FALL_DURATION);manager.removeChunk('near');
+  const next=manager.addChunk('near',parent,[p]),matrix=new THREE.Matrix4();next.meshes[0].getMatrixAt(0,matrix);
+  assert.equal(new THREE.Vector3().setFromMatrixScale(matrix).length(),0);
+  assert.ok(manager.restoreTree(p.id));manager.update(TREE_REGROW_DURATION);next.meshes[0].getMatrixAt(0,matrix);
+  assert.ok(new THREE.Vector3().setFromMatrixScale(matrix).length()>1);
+  source.children[0].geometry.dispose();source.children[0].material.dispose();manager.dispose();
+});

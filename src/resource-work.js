@@ -1,3 +1,4 @@
+import {isHarvestableWood} from './harvestable-wood.js';
 import {biomeAt} from './biomes.js';
 import {cityResource} from './loop-economy.js';
 export {cityResource} from './loop-economy.js';
@@ -8,7 +9,7 @@ import {settlementTreeId} from './settlement-game.js';
 export const RESOURCE_WORK=Object.freeze({speed:1.12,workSeconds:3.8,restSeconds:3,amount:1,treeRegrowSeconds:95,searchRadius:38,routeInterval:.12,routeNodes:420});
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z),wrap=value=>Math.atan2(Math.sin(value),Math.cos(value));
 const hash=value=>{let n=2166136261;for(const c of String(value))n=Math.imul(n^c.charCodeAt(0),16777619);return(n>>>0)/4294967296;};
-const idOf=item=>item.kind==='tree'?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
+const idOf=item=>isHarvestableWood(item)?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
 const radius=item=>item.radius??(item.kind==='tree'?.85:(item.width||item.depth)?Math.hypot(item.width??2.2,item.depth??2.2)/2:.8)*(item.scale??1);
 const solid=item=>['tree','rock','house','civic','farm','station','tower','apartment','cactus','landmark'].includes(item.kind)||item.kind==='nature'&&item.style==='outcrop';
 function pointSegment(point,a,b){const dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.z-a.z)*dz)/(dx*dx+dz*dz||1)));return Math.hypot(point.x-a.x-t*dx,point.z-a.z-t*dz);}
@@ -41,7 +42,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   }
   function emptySite(point,padding=.8){
     const ground=surfaceAt(point.x,point.z);if(!ground||!['ground','mountain'].includes(ground.type)||!Number.isFinite(ground.height))return false;
-    for(const item of [...scenery,...buildings,...placements])if(solid(item)&&!(item.kind==='tree'&&removed.has(idOf(item)))&&distance(point,item)<padding+radius(item)+.3)return false;
+    for(const item of [...scenery,...buildings,...placements])if(solid(item)&&!(isHarvestableWood(item)&&removed.has(idOf(item)))&&distance(point,item)<padding+radius(item)+.3)return false;
     return !paths.some(path=>(path.points??[]).slice(1).some((b,i)=>pointSegment(point,path.points[i],b)<padding+(path.width??.7)/2+.25));
   }
   function makeOre(city){
@@ -82,7 +83,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   }
   function nodesFor(worker){
     const city=cityRecords.find(city=>city.id===worker.cityId);if(!city)return[];
-    if(worker.resource==='wood')return scenery.filter(item=>item.kind==='tree'&&!removed.has(idOf(item))&&distance(item,city)<=settings.searchRadius).map(item=>({id:idOf(item),resource:'wood',source:item,...item}));
+    if(worker.resource==='wood')return scenery.filter(item=>isHarvestableWood(item)&&!removed.has(idOf(item))&&distance(item,city)<=settings.searchRadius).map(item=>({id:idOf(item),resource:'wood',source:item,...item}));
     if(worker.resource==='metal')return placements.filter(item=>item.cityId===city.id&&!session.shared?.isSceneryRemoved?.(item)).map(item=>({...item,source:item}));
     if(worker.resource==='food')return(world.gameplay?.farmVillages?.destinations??[]).filter(item=>item.cityId===city.id&&!session.shared?.isSceneryRemoved?.(item.farmId)).map(item=>({...item,resource:'food',gate:true}));
     const civic=buildings.filter(item=>item.cityId===city.id&&item.kind==='civic');
@@ -101,7 +102,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     // A tiny non-solid destination has its doorway at the work point. The
     // ordinary path planner checks the complete route, not a straight shortcut.
     const fake={id:`work-target:${node.id}`,kind:'work-target',...target,depth:-.84,doorOffset:0,rotation:Math.atan2(worker.home.x-target.x,worker.home.z-target.z)};
-    const obstacles=[...scenery,...buildings,...placements].filter(item=>!(item.kind==='tree'&&removed.has(idOf(item))));
+    const obstacles=[...scenery,...buildings,...placements].filter(item=>!(isHarvestableWood(item)&&removed.has(idOf(item))));
     const route=planSettlementPath(world,worker.home,fake,{placements:obstacles,surfaceAt,removedTreeIds:removed,width:.22,maxNodes:settings.routeNodes});
     routeCache.set(cacheKey,route?.points??null);return route?.points??null;
   }
@@ -141,7 +142,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     const to=returning?worker.home:{id:`work-target:${node.id}`,kind:'work-target',...target,depth:-.84,doorOffset:0,rotation:heading+Math.PI};
     // One queued replan owns a fixed total node budget. No worker performs a
     // full collision scan every animation frame after construction changes.
-    const obstacles=[...scenery,...buildings,...placements].filter(item=>!(item.kind==='tree'&&removed.has(idOf(item)))&&!session.shared?.isSceneryRemoved?.(item));
+    const obstacles=[...scenery,...buildings,...placements].filter(item=>!(isHarvestableWood(item)&&removed.has(idOf(item)))&&!session.shared?.isSceneryRemoved?.(item));
     let plan=null;
     for(const offset of [0,Math.PI/2,-Math.PI/2,Math.PI]){
       const from={id:`worker-origin:${worker.id}`,kind:'work-target',x:worker.x,z:worker.z,depth:-.84,doorOffset:0,rotation:heading+offset};
@@ -175,14 +176,14 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     worker.carrying=true;emit({type:'gathered',id:`${worker.id}:${worker.trip+1}:gathered`,ownerId:worker.ownerId,cityId:worker.cityId,workerId:worker.id,nodeId:worker.nodeId,
       resource:worker.resource,amount:settings.amount,x:worker.x,y:worker.y,z:worker.z});goHome(worker);
   }
-  function trackTree(tree){if(tree?.kind!=='tree')return false;const id=idOf(tree);sources.set(id,tree);if(removed.has(id)&&!regrowth.has(id)&&!session.shared?.isSceneryRemoved?.(id))regrowth.set(id,time+settings.treeRegrowSeconds);return true;}
+  function trackTree(tree){if(!isHarvestableWood(tree))return false;const id=idOf(tree);sources.set(id,tree);if(removed.has(id)&&!regrowth.has(id)&&!session.shared?.isSceneryRemoved?.(id))regrowth.set(id,time+settings.treeRegrowSeconds);return true;}
   function updateRegrowth(){
     const signature=[...removed].sort().join('|');if(signature!==removedKey){removedKey=signature;for(const id of removed)if(!regrowth.has(id)&&!session.shared?.isSceneryRemoved?.(id))regrowth.set(id,time+settings.treeRegrowSeconds);}
     for(const [id,due]of regrowth){
-      if(!removed.has(id)){regrowth.delete(id);continue;}
+      if(!removed.has(id)||session.shared?.isSceneryRemoved?.(id)){regrowth.delete(id);continue;}
       if(time<due)continue;
       const tree=sources.get(id);if(!tree){regrowth.set(id,time+10);continue;}
-      const blocked=session.shared?.isSceneryRemoved?.(id)||(session.shared?.getActors?.()??[]).some(actor=>distance(actor,tree)<radius(tree)+.3)||buildings.some(item=>distance(item,tree)<radius(item)+radius(tree)+.3)||paths.some(path=>(path.points??[]).slice(1).some((b,i)=>pointSegment(tree,path.points[i],b)<radius(tree)+(path.width??.7)/2+.25))||[...workers.values()].some(worker=>!worker.indoors&&(distance(worker,tree)<1.25||['outbound','returning'].includes(worker.activity)&&routeBlocked(worker,[tree])));
+      const blocked=(session.shared?.getActors?.()??[]).some(actor=>distance(actor,tree)<radius(tree)+.3)||buildings.some(item=>distance(item,tree)<radius(item)+radius(tree)+.3)||paths.some(path=>(path.points??[]).slice(1).some((b,i)=>pointSegment(tree,path.points[i],b)<radius(tree)+(path.width??.7)/2+.25))||[...workers.values()].some(worker=>!worker.indoors&&(distance(worker,tree)<1.25||['outbound','returning'].includes(worker.activity)&&routeBlocked(worker,[tree])));
       if(blocked){regrowth.set(id,time+10);continue;}
       removed.delete(id);regrowth.delete(id);markTrees();emit({type:'tree-regrow',id,treeId:id,tree});revision++;
     }

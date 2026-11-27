@@ -49,5 +49,5 @@ test('surface projection and hollow screen-width shader keep map tracks readable
   const{root,art}=fixture(world),track=line();art.sync(loop([{lineId:'rail',start:5,end:15}]),[track]);
   const position=root.children[0].geometry.attributes.position,expected=surfacePoint(world,5,.55,0);assert.ok(new Vector3().fromBufferAttribute(position,0).distanceTo(expected)<1e-5);
   const shader={uniforms:{},vertexShader:'#include <begin_vertex>',fragmentShader:'#include <color_fragment>'};root.children[0].material.onBeforeCompile(shader);
-  assert.match(shader.vertexShader,/5\.2 \* selectionUnit/);assert.match(shader.fragmentShader,/smoothstep\(0\.61, 0\.67/);assert.match(shader.fragmentShader,/selectionSphereRadius/);assert.equal(shader.uniforms.selectionSphereRadius.value,radius);art.dispose();
+  assert.match(shader.vertexShader,/7\.2 \* selectionUnit/);assert.match(shader.fragmentShader,/smoothstep\(0\.54, 0\.60/);assert.match(shader.fragmentShader,/selectionSphereRadius/);assert.equal(shader.uniforms.selectionSphereRadius.value,radius);art.dispose();
 });

@@ -18,8 +18,16 @@ test('normal and seeded launches open the empty settlement island',async()=>{
     assert.equal(input.camera.startInDetail,true);
     assert.equal(input.cities.length,0);assert.equal(input.traffic.trainCount,0);
     assert.equal(input.gameplay.starterHouse.kind,'house');
-    assert.ok(input.bounds.width<=400&&input.bounds.depth<=400);
+    assert.deepEqual(input.bounds,{width:504,depth:396});
   }
+});
+
+test('the original compact settlement remains available without changing its saved island geography',async()=>{
+  const input=await createLaunchWorld(parameters('layout=settlement-compact&seed=quiet-home'),baseUrl);
+  assert.deepEqual(input,createSettlementWorld({seed:'quiet-home',map:'compact'}));
+  const old=createIslandWorld({seed:'quiet-home',trainCount:0});
+  for(const key of ['bounds','outline','mountains','rivers','biomes'])assert.deepEqual(input[key],old[key]);
+  assert.equal(input.gameplay.farmVillageCount,3);
 });
 
 test('explicit island links retain their authoring seed and an empty train fleet',async()=>{

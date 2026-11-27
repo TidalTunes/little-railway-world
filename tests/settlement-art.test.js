@@ -175,7 +175,7 @@ test('milestone templates retain their exact placement, distinguish map marks an
 });
 
 
-test('settlement paths merge junctions, sit on the terrain and remain visible in the map',()=>{
+test('settlement paths merge junctions on terrain without local road geometry in the flat map',()=>{
   const {art}=setup();
   try{
     const paths=[{id:'lane-a',width:.45,points:[{x:-5,z:0},{x:5,z:0}]},
@@ -183,13 +183,13 @@ test('settlement paths merge junctions, sit on the terrain and remain visible in
     art.sync(homes(),paths);art.root.updateMatrixWorld(true);
     const lanes=art.root.getObjectByName('settlement-paths'),mapLanes=art.mapRoot.getObjectByName('settlement-map-paths');
     assert.equal(lanes.children.length,1,'connected paths share a single joined surface');
-    assert.equal(mapLanes.children.length,1);
+    assert.equal(mapLanes.children.length,0,'the flat map reserves linework for railways');assert.equal(mapLanes.visible,false);
     const mesh=lanes.children[0],positions=mesh.geometry.attributes.position;
     for(let i=0;i<positions.count;i++)assert.ok(Math.abs(positions.getY(i)-.026)<1e-6);
     const hits=new Raycaster(new Vector3(.03,2,.02),new Vector3(0,-1,0)).intersectObject(mesh);
     assert.equal(hits.length,1,'the crossing has one surface, not overlapping strips');
-    const flat=mapLanes.children[0].geometry.attributes.position;
-    for(let i=0;i<flat.count;i++)assert.ok(Math.abs(flat.getY(i)-.62)<1e-6);
+    art.update({mapBlend:1});assert.equal(lanes.parent.visible,false);assert.equal(mapLanes.visible,false);
+    art.update({mapBlend:0});assert.equal(lanes.parent.visible,true);
     const old=mesh.geometry;let released=0;old.addEventListener('dispose',()=>released++);
     art.sync(homes(),[]);assert.equal(released,1);assert.equal(lanes.children.length,0);
   }finally{art.dispose();}

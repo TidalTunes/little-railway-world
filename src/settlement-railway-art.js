@@ -66,7 +66,6 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     applyMapNetworkVisibility(material,visibility);return material;
   };
   const mapRim=makeMapMaterial('railway-map-paper',C.trim),mapInk=makeMapMaterial('railway-map-ink',C.window);
-  const mapPathMaterial=new THREE.MeshBasicMaterial({color:C.sand,depthWrite:false,side:THREE.DoubleSide});
   const previewViewport={value:800};
   const makePreviewMaterial=(name,width,pixels,opacity,color,pattern='solid')=>{
     const material=new THREE.MeshBasicMaterial({name,color,transparent:true,opacity,depthWrite:false,depthTest:false,side:THREE.DoubleSide,toneMapped:false,fog:false});material.forceSinglePass=true;
@@ -310,7 +309,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
       }
       positions.needsUpdate=true;mesh.geometry.computeVertexNormals();mesh.geometry.computeBoundingSphere();mesh.castShadow=false;
     }
-    for(const path of paths)mapStrip(path.points,path.width??.7,.64,mapPathMaterial);
+    // Station access roads belong to the detailed world only.
   }
   function sync(snapshot={}){
     if(disposed||snapshot.revision!==undefined&&snapshot.revision===revision)return false;
@@ -446,7 +445,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
       for(const pool of previewPools){pool.geometry.dispose();pool.invalidGeometry.dispose();pool.guideGeometry.dispose();pool.group.clear();}stationGeometry.dispose();stationEdges.dispose();
       for(const pool of circlePools)for(const batch of Object.values(pool))batch.dispose();circleGeometry.dispose();
       for(const layers of handleBatches)for(const batch of layers)batch.dispose();dotGeometry.dispose();dotMaterial.dispose();
-      for(const material of [mapRim,mapInk,mapPathMaterial,ghostMaterial,ghostEdgeMaterial,blockedGuideMaterial,cityCircleOutline,cityCircleInk,rangeCircleOutline,rangeCircleInk,...previewMaterials,...invalidMaterials])material.dispose();
+      for(const material of [mapRim,mapInk,ghostMaterial,ghostEdgeMaterial,blockedGuideMaterial,cityCircleOutline,cityCircleInk,rangeCircleOutline,rangeCircleInk,...previewMaterials,...invalidMaterials])material.dispose();
       root.removeFromParent();mapRoot.removeFromParent();root.clear();mapRoot.clear();
     },
   };

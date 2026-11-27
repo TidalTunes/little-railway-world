@@ -1,3 +1,4 @@
+import {isHarvestableWood,streamedWoodSourceId} from './harvestable-wood.js';
 import {alignmentCandidates,combineAlignments,createAlignment,inspectAlignment,sampleAlignment,sampleAlignmentPoints,straightSegment} from './alignments.js';
 import {worldSurface,generateWorldRegion,mountainHeight,CLEARANCES} from './world-model.js';
 import {mountainFootprintDistance} from './mountain-shape.js';
@@ -33,7 +34,7 @@ function projectSegment(segment,point){
 const segmentBox=segment=>segment.type==='arc'?{minX:segment.center.x-segment.radius,maxX:segment.center.x+segment.radius,
   minZ:segment.center.z-segment.radius,maxZ:segment.center.z+segment.radius}:{minX:Math.min(segment.start.x,segment.end.x),maxX:Math.max(segment.start.x,segment.end.x),
   minZ:Math.min(segment.start.z,segment.end.z),maxZ:Math.max(segment.start.z,segment.end.z)};
-const placementId=item=>item.kind==='tree'?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
+const placementId=item=>isHarvestableWood(item)?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
 const routeOptions=options=>({waypoints:(options?.waypoints===undefined?[]:Array.isArray(options.waypoints)?options.waypoints:[null]).map(p=>({x:p?.x,z:p?.z})),
   attachments:Object.fromEntries(['from','to'].filter(key=>options?.attachments?.[key]!==undefined).map(key=>{const a=options.attachments[key];return [key,{x:a?.x,z:a?.z,...(a?.kind?{kind:a.kind}:{}),...(a?.stationId?{stationId:a.stationId,side:a.side}:{}),...(a?.lineId?{lineId:a.lineId,distance:a.distance,direction:a.direction??1}:{})}];})),
   ...(options?.controlCount!==undefined?{controlCount:options.controlCount}:{}),
@@ -268,7 +269,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
           minZ:Math.min(...world.outline.map(p=>p[1])),maxZ:Math.max(...world.outline.map(p=>p[1]))},size=192;
         for(let x=Math.floor(b.minX/size);x<=Math.floor((b.maxX-.001)/size);x++)for(let z=Math.floor(b.minZ/size);z<=Math.floor((b.maxZ-.001)/size);z++){
           for(const source of generateWorldRegion(world,{x:x*size,z:z*size,size}).placements){
-            const item=source.kind==='tree'&&!source.id?{...source,id:`tree:${source.x}:${source.y??0}:${source.z}`}:source;
+            const item=isHarvestableWood(source)&&!source.id?{...source,id:streamedWoodSourceId(source)}:source;
             found.set(item.id??`${item.kind}:${item.x}:${item.z}`,item);
           }
         }
@@ -569,13 +570,19 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     if(newStations.some(station=>!boxSamples({...station,width:7,depth:3},dry))||geometry.lines.some(line=>!acceptable(line.alignment,allowed))){
       return {...geometry,code:'route-blocked',reason:'Keep the line inside the world and platforms on clear level land'};
     }
-    const newLines=geometry.lines.map(line=>makeLine(line.id,line.alignment,line.from,line.to,line.stationIds)),clearedTreeIds=[],clearedPlacements=[];
+    const newLines=geometry.lines.map(line=>makeLine(line.id,line.alignment,line.from,line.to,line.stationIds)),clearedTreeIds=[],clearedPlacements=[],permanentWoodIds=[];
     for(const item of placements){
-      if(PROTECTED.has(item.kind)||session.shared.removedTreeIds.has(placementId(item))||clearedPlacementIds.has(placementId(item)))continue;
+      const id=placementId(item);
+      if(PROTECTED.has(item.kind)||clearedPlacementIds.has(id))continue;
       const intersectsLine=newLines.some(line=>line.points.some(point=>pointDistance(item,point)<SETTLEMENT_RAILWAY.halfWidth+.25));
       const intersectsStation=newStations.some(station=>boxSamples(station,point=>pointDistance(item,point)>.2)===false);
       if(!intersectsLine&&!intersectsStation)continue;
-      if(item.kind==='tree')clearedTreeIds.push(settlementTreeId(item));
+      if(isHarvestableWood(item)){
+        // A harvested root can still sit beneath the new railway. Reserve it
+        // permanently even though there is no standing source left to animate.
+        permanentWoodIds.push(id);
+        if(!session.shared.removedTreeIds.has(id))clearedTreeIds.push(id);
+      }
       else clearedPlacements.push({...item,id:placementId(item)});
     }
     const removed=new Set([...session.shared.removedTreeIds,...clearedTreeIds]),newPaths=[];
@@ -589,7 +596,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
         if(path){newPaths.push({...path,id:`rail-access:${station.cityId}`,cityId:station.cityId,ownerId:station.ownerId});break;}
       }
     }
-    return {...geometry,lines:newLines,paths:newPaths,clearedTreeIds,clearedPlacements,clearedPlacementIds:clearedPlacements.map(placementId)};
+    return {...geometry,lines:newLines,paths:newPaths,clearedTreeIds,clearedPlacements,clearedPlacementIds:[...permanentWoodIds,...clearedPlacements.map(placementId)]};
   }
   function resultFor(fromCityId,toCityId,options={},provisional=false){
     const route=normalizedOptions(options);

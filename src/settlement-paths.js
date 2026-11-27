@@ -1,3 +1,4 @@
+import {isHarvestableWood,woodSourceId} from './harvestable-wood.js';
 import {surfaceDisplacement,surfaceOffset} from './world-surface.js';
 
 export const SETTLEMENT_PATH=Object.freeze({width:.45,houseWidth:2.2,houseDepth:2.2,
@@ -88,7 +89,7 @@ export function planSettlementPath(world,from,to,{placements=[],surfaceAt,remove
   for(const item of [from,to,...placements]){
     if(!finitePoint(item)||!(BLOCKING.has(item.kind)||item.kind==='nature'&&item.style==='outcrop'))continue;
     if(item.id!=null&&seenIds.has(item.id))continue;if(item.id!=null)seenIds.add(item.id);
-    if(item.kind==='tree'&&removedTreeIds.has(String(item.id??`tree:${item.x}:${item.z}:${item.variant??0}`)))continue;
+    if(isHarvestableWood(item)&&removedTreeIds.has(woodSourceId(item)))continue;
     // Keep whole tree canopies free so the route reads clearly from above too.
     const rectangle=item.kind==='house'||['farm','civic'].includes(item.kind)&&item.width&&item.depth;
     const dimensions=rectangle?footprintDimensions(item):null,scale=item.scale??1;

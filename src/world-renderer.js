@@ -1,3 +1,4 @@
+import {isHarvestableWood} from './harvestable-wood.js';
 import * as THREE from 'three';
 import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
 import {installGeometryBVH,geometryBVHTransfers} from './geometry-bvh.js';
@@ -294,7 +295,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     }
     const signature=`${trees?.revision??0}:${scenery?.revision??0}:`+lifeChunks.map(chunk=>chunk.key).join('|');
     if(signature!==lifeSignature){lifeSignature=signature;lifePlacements=lifeChunks.flatMap(chunk=>chunk.lifePlacements)
-      .filter(p=>(p.kind!=='tree'||!trees?.removed.has(p.id))&&!scenery?.removed.has(sceneryPlacementId(p))&&!scenery?.removed.has(p.farmId));lifeRevision++;}
+      .filter(p=>(!isHarvestableWood(p)||!trees?.removed.has(p.id))&&!scenery?.removed.has(sceneryPlacementId(p))&&!scenery?.removed.has(p.farmId));lifeRevision++;}
   }
   function update(camera,{mapBlend=0,target,budgetMs=5,prewarm=false,coverageCamera=camera,coverageCameras,retainVisible=false,
     groundFocus,groundRadius=45,groundOnly=false}={}){
@@ -393,7 +394,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
     if(!residentDirty)return;
     placements=[];cityStreets=[];terrainMeshes=[];
     for(const chunk of cache.values()){
-      placements.push(...chunk.placements.filter(p=>(p.kind!=='tree'||!trees?.removed.has(p.id))&&!scenery?.removed.has(sceneryPlacementId(p))));cityStreets.push(...chunk.cityStreets);
+      placements.push(...chunk.placements.filter(p=>(!isHarvestableWood(p)||!trees?.removed.has(p.id))&&!scenery?.removed.has(sceneryPlacementId(p))));cityStreets.push(...chunk.cityStreets);
       terrainMeshes.push(...chunk.root.children.filter(mesh=>mesh.isMesh&&!nonSolidStyles.has(mesh.material.userData.sceneStyle)),...chunk.trees?.meshes??[]);
     }
     collisionPlacements=placements.filter(p=>solidKinds.has(p.kind));residentDirty=false;

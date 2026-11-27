@@ -9,7 +9,7 @@ const MAX_PIECES=256,MAX_INTERVALS=8192,SAMPLE_SPACING=.6;
  * Both strategy layers share one geometry, one shader, and no animation work. */
 export function createCircuitSelectionArt(parent,mapParent,world){
   const viewport={value:800},mapWeight={value:0},radius={value:surfaceFor(world)?.radius??0};
-  const material=new THREE.MeshBasicMaterial({name:'circuit-selection-gold',color:'#f0c976',transparent:true,opacity:.96,
+  const material=new THREE.MeshBasicMaterial({name:'circuit-selection-gold',color:'#fff0a6',transparent:true,opacity:.96,
     depthTest:false,depthWrite:false,side:THREE.DoubleSide,toneMapped:false,fog:false});material.forceSinglePass=true;
   material.onBeforeCompile=shader=>{
     shader.uniforms.selectionViewport=viewport;shader.uniforms.selectionMapBlend=mapWeight;shader.uniforms.selectionSphereRadius=radius;
@@ -21,18 +21,18 @@ export function createCircuitSelectionArt(parent,mapParent,world){
       vec3 selectionOffset = mix(previewOffset, selectionMapOffset, selectionMapBlend);
       vec4 selectionClip = projectionMatrix * modelViewMatrix * vec4(selectionCenter, 1.0);
       float selectionUnit = 2.0 * abs(selectionClip.w) / (max(selectionViewport, 1.0) * abs(projectionMatrix[1][1]));
-      vec3 transformed = selectionCenter + selectionOffset * max(1.48, 5.2 * selectionUnit);
+      vec3 transformed = selectionCenter + selectionOffset * max(1.72, 7.2 * selectionUnit);
       vSelectionSide = previewSide; vSelectionWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
     shader.fragmentShader=`varying float vSelectionSide; varying vec3 vSelectionWorld; uniform float selectionSphereRadius;\n`+shader.fragmentShader;
     shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`#include <color_fragment>
       if (selectionSphereRadius > 0.0 && dot(normalize(vSelectionWorld + vec3(0.0, selectionSphereRadius, 0.0)), cameraPosition - vSelectionWorld) <= 0.0) discard;
       float selectionSide = abs(vSelectionSide);
-      float selectionMask = smoothstep(0.61, 0.67, selectionSide) * (1.0 - smoothstep(0.97, 1.0, selectionSide));
-      float selectionGold = smoothstep(0.67, 0.74, selectionSide) * (1.0 - smoothstep(0.90, 0.97, selectionSide));
+      float selectionMask = smoothstep(0.54, 0.60, selectionSide) * (1.0 - smoothstep(0.97, 1.0, selectionSide));
+      float selectionGold = smoothstep(0.60, 0.66, selectionSide) * (1.0 - smoothstep(0.90, 0.97, selectionSide));
       diffuseColor.rgb = mix(vec3(0.035, 0.095, 0.09), diffuseColor.rgb, selectionGold);
       diffuseColor.a *= selectionMask;`);
   };
-  material.customProgramCacheKey=()=> 'circuit-hollow-selection-v1';
+  material.customProgramCacheKey=()=> 'circuit-hollow-selection-v2';
   let geometry=new THREE.BufferGeometry(),key=null,disposed=false,rebuilds=0,intervals=0,pieceCount=0;
   const meshes=[parent,mapParent].map((group,index)=>{const mesh=new THREE.Mesh(geometry,material);mesh.name=index?'selected-circuit-map':'selected-circuit';mesh.visible=false;mesh.frustumCulled=false;mesh.renderOrder=10;group.add(mesh);return mesh;});
   const identities=new WeakMap();let nextIdentity=0;
@@ -66,7 +66,7 @@ export function createCircuitSelectionArt(parent,mapParent,world){
   return{sync,
     update({viewportHeight=800,mapBlend=0,walkingWeight=0,visible=true,hover=false}={}){
       viewport.value=Math.max(1,viewportHeight);mapWeight.value=THREE.MathUtils.clamp(mapBlend,0,1);
-      material.opacity=(hover?.58:.96)*(1-THREE.MathUtils.smoothstep(walkingWeight,.05,.75));
+      material.opacity=(hover?.78:1)*(1-THREE.MathUtils.smoothstep(walkingWeight,.05,.75));
       const show=!disposed&&visible&&intervals>0&&material.opacity>0;
       meshes[0].visible=show&&mapBlend<.999;meshes[1].visible=show&&mapBlend>.001;
     },

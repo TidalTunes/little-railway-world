@@ -3,7 +3,7 @@ import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
 
 const RESOURCES=['wood','metal','food','gold'];
 const KINDS=new Set(['pickup','delivery','production','gold','gathered']);
-const CAPTIONS={pickup:'On board',delivery:'Delivered',production:'Delivered',gold:'',gathered:'Gathered'};
+const CAPTIONS={pickup:'On board',delivery:'',production:'',gold:'',gathered:'Gathered'};
 const ICONS={
   wood:'<path fill="#a97145" d="m4 8 9-5 8 5v9l-9 5-8-5z"/><path fill="#dcac75" d="m4 8 8 5 9-5-8-5z"/><path fill="#ba8755" d="m12 13 9-5v9l-9 5z"/><path fill="none" stroke="#f5d4a5" stroke-width="1.4" d="m8 6 8 5v9"/>',
   metal:'<path fill="#8caeb7" d="m5 6 11-2 6 10-7 7-12-3z"/><path fill="#c3d7d8" d="m5 6 11-2-3 10-10 4z"/><path fill="#597d88" d="m13 14 9 0-7 7-12-3z"/>',

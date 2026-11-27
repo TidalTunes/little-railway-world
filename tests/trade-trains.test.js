@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {createTradeTrains,TRADE_TRAIN_LIMITS} from '../src/trade-trains.js';
 import {playerColors} from '../src/player-palette.js';
 import {M} from '../src/palette.js';
+import {buildSteamLocomotive} from '../src/steam-locomotive.js';
 
 const world={players:[{id:'teal',color:{l:.60,c:.13,h:185}},{id:'coral',color:{l:.63,c:.14,h:24}}]};
 const train=(id=1,values={})=>({id:`freight-${id}`,ownerId:'teal',x:0,y:.42,z:0,angle:0,cargo:'timber',amount:6,active:true,...values});
@@ -107,4 +108,50 @@ test('wood, metal and food loop freight renders distinct loads and map cargo col
   assert.ok(bounds.min.y>=.55&&bounds.max.y<1.2,'ingots sit on the wagon deck and stack below its silhouette budget');
   assert.ok(bounds.max.x<.46&&bounds.min.x>-.46);assert.ok(bounds.max.z<1.02&&bounds.min.z> -1.02);
   const geometry=metal.geometry;art.update([train(5,{resource:'metal',amount:20})]);assert.equal(art.root.getObjectByName('trade-cargo:metal').geometry,geometry);
+});
+
+test('long circuits draw every city carriage and put each load on its own curved pose',t=>{
+  const {art}=fixture(t),carPoses=Array.from({length:6},(_,index)=>({x:index*2,y:.42,z:-index*2,angle:index*.12}));
+  const cars=[{cityId:'home',resource:'wood',amount:10},{cityId:'farm',resource:'food',amount:10},
+    {cityId:'mine',resource:'metal',amount:10},{cityId:'other-mine',resource:'metal',amount:10},
+    {cityId:'clearing',resource:'gold',amount:0},{cityId:'forest',resource:'wood',amount:0}];
+  const state=train(1,{carPoses,cars,carCount:cars.length});art.update([state],{mapBlend:.5});
+  assert.equal(art.stats.detailCars,6);assert.equal(art.stats.detailInstances,9);assert.equal(art.trains[0].parts.length,6);
+  assert.equal(art.root.getObjectByName('trade-locomotive:teal').count,1);assert.equal(art.root.getObjectByName('trade-wagon:teal').count,5);
+  assert.equal(art.root.getObjectByName('trade-cargo:grain').count,1);assert.equal(art.root.getObjectByName('trade-cargo:metal').count,2);
+  assert.equal(art.root.getObjectByName('trade-cargo:timber').count,0,'the engine does not draw a wagon load through its boiler');
+  const transform=new THREE.Matrix4();
+  art.root.getObjectByName('trade-cargo:metal').getMatrixAt(1,transform);
+  const position=new THREE.Vector3().setFromMatrixPosition(transform);assert.deepEqual(position.toArray().map(n=>Math.round(n*100)/100),[6,.42,-6]);
+  carPoses.forEach((pose,index)=>assert.deepEqual(art.trains[0].parts[index].position.toArray(),[pose.x,pose.y,pose.z]));
+});
+
+test('a single-city train is exactly one steam engine while a visible tail keeps a long train rendered',t=>{
+  const {art}=fixture(t);
+  art.update([train(1,{carPoses:[{x:0,y:.42,z:0,angle:0}],cars:[{cityId:'home',resource:'wood',amount:10}]})]);
+  assert.equal(art.stats.detailCars,1);assert.equal(art.stats.detailInstances,1);assert.equal(art.trains[0].parts.length,1);
+  const camera=new THREE.OrthographicCamera(-10,10,10,-10,.1,1000);camera.position.set(0,100,0);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);
+  const poses=Array.from({length:13},(_,i)=>({x:31.2-i*2.6,y:.42,z:0,angle:Math.PI/2}));
+  art.update([train(2,{x:31.2,carPoses:poses})],{camera});
+  assert.equal(art.stats.visible,1,'the front engine being outside the viewport must not hide its visible trailing cars');
+  assert.equal(art.stats.detailCars,13);assert.equal(art.root.getObjectByName('trade-wagon:teal').count,12);
+});
+
+test('larger strategy glyphs have an eight-and-a-half pixel body at distant overview zoom',t=>{
+  const {art}=fixture(t),camera=new THREE.OrthographicCamera(-200,200,200,-200,.1,1000);camera.position.set(0,100,0);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);
+  art.update([train()],{camera,mapBlend:1,viewportHeight:800});
+  const transform=new THREE.Matrix4();art.mapRoot.getObjectByName('trade-map-body').getMatrixAt(0,transform);
+  const scale=new THREE.Vector3().setFromMatrixScale(transform);
+  assert.ok(scale.x*1.2*2>=8.499);assert.ok(scale.z*4.65*2>=22.999);
+});
+
+test('the steam engine has a joined boiler, compact cab and raised chimney inside one car envelope',()=>{
+  const root=buildSteamLocomotive(),boiler=root.getObjectByName('boiler'),cab=root.getObjectByName('cab'),chimney=root.getObjectByName('chimney');
+  assert.ok(boiler&&cab&&chimney);root.updateMatrixWorld(true);
+  const bodyBounds=new THREE.Box3().setFromObject(boiler),cabBounds=new THREE.Box3().setFromObject(cab),bounds=new THREE.Box3().setFromObject(root);
+  assert.ok(bodyBounds.min.z<=cabBounds.max.z&&bodyBounds.max.z>cabBounds.max.z,'boiler connects flush into the front of the cab');
+  assert.ok(chimney.position.y>bodyBounds.max.y);assert.ok(bounds.max.y<1.8);
+  assert.ok(bounds.min.x>-.65&&bounds.max.x<.65);assert.ok(bounds.min.y>=-.000001);
+  const geometries=new Set();root.traverse(node=>{if(node.geometry?.type!=='BoxGeometry')geometries.add(node.geometry);});
+  for(const geometry of geometries)geometry?.dispose();
 });

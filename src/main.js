@@ -396,7 +396,7 @@ function frame(now){
     walkingSunDirection.subVectors(sun.position,sun.target.position).normalize();
     walkingSky.update(activeCamera,{visible:walkingWeight>.001,strength:walkingWeight,night:daylight.night,sunDirection:walkingSunDirection,horizonColor:scene.background});
     mapWorld.update(trains,{visible:blend>.001,camera,viewportHeight:innerHeight,poseBuffer:railway.poseBuffer,dt,reducedMotion:reducedMotion.matches});
-    characterMarker.update({position:walker.renderPosition,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
+    characterMarker.update({position:walker.renderPosition,heading:walker.facingHeading,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
       walking:walkingMode,walkingWeight,viewportHeight:innerHeight});
     // Keep the figure where it can be read; its fixed-size locator represents
     // the same position once the figure becomes subpixel geometry.

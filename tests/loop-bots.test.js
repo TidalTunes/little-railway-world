@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createEconomicBots} from '../src/economic-bots.js';
+import {loopBotRouteOptions} from '../src/loop-bots.js';
 
 function fixture({gold=60,houses=6,cost=10,planRoute}={}){
   const city={id:'own',ownerId:'blue',x:0,z:0,level:Math.floor(houses/3),houseCount:houses},farm={id:'farm',ownerId:'gray',x:25,z:0,level:2,houseCount:6};
@@ -53,4 +54,36 @@ test('stale or disposed bot workers cannot purchase tracks',async()=>{
     resolve({result:{siteValid:true,valid:true,cost:10}});await Promise.resolve();f.coordinator.update(.1);
     assert.equal(f.connections.length,0);assert.equal(f.game.gold,60);
   }
+});
+
+test('return-route detours preserve editor node counts and exact station anchors',()=>{
+  const from={x:0,z:0},to={x:110,z:20},baseline={waypointCount:2,handles:[{x:7,z:2},{x:103,z:18}]};
+  assert.deepEqual(loopBotRouteOptions(from,to,'blue'),{ownerId:'blue'});
+  const left=loopBotRouteOptions(from,to,'blue',1,baseline),right=loopBotRouteOptions(from,to,'blue',2,baseline),wider=loopBotRouteOptions(from,to,'blue',5,baseline);
+  for(const options of [left,right,wider]){assert.equal(options.waypoints.length,2);assert.equal(options.controlCount,2);assert.equal(options.ownerId,'blue');}
+  for(let i=0;i<2;i++){
+    const t=(i+1)/3,center={x:7+96*t,z:2+16*t};
+    assert.ok(Math.abs((left.waypoints[i].x+right.waypoints[i].x)/2-center.x)<1e-10);
+    assert.ok(Math.abs((left.waypoints[i].z+right.waypoints[i].z)/2-center.z)<1e-10);
+    assert.ok(Math.hypot(wider.waypoints[i].x-center.x,wider.waypoints[i].z-center.z)>Math.hypot(left.waypoints[i].x-center.x,left.waypoints[i].z-center.z));
+  }
+  assert.equal(loopBotRouteOptions(from,to,'blue',7,baseline),null,'candidate family is bounded');
+});
+
+test('a blocked return is reshaped on later decisions before spending on unrelated outward lines',()=>{
+  const f=fixture(),originalSnapshot=f.railways.snapshot,originalBuild=f.railways.build,built=[];
+  f.railways.snapshot=()=>{const snapshot=originalSnapshot();return{...snapshot,cities:[...snapshot.cities,{id:'other-farm',ownerId:'gray',x:50,z:0,level:2}]};};
+  f.railways.preview=(from,to,options)=>{f.calls.push('preview');return from==='farm'&&!options.waypoints?{siteValid:false,code:'route-blocked',waypointCount:1,handles:[{x:25,z:0},{x:0,z:0}]}:{siteValid:true,cost:10};};
+  f.railways.build=(from,to,options)=>{built.push({from,to,options});return originalBuild.call(f.railways,from,to,options);};
+  f.coordinator.update(1);assert.equal(f.connections.length,1);
+  const before=f.coordinator.stats.previews;f.coordinator.update(3);assert.equal(f.coordinator.stats.previews-before,1);assert.equal(f.connections.length,1);assert.equal(f.coordinator.snapshot()[0].state,'shaping-loop');
+  f.coordinator.update(3);assert.equal(f.connections.length,2);assert.equal(built[1].from,'farm');assert.equal(built[1].to,'own');assert.equal(built[1].options.waypoints.length,1);assert.notEqual(built[1].options.waypoints[0].z,0);
+  f.coordinator.update(3);assert.equal(f.trains.length,1);assert.equal(f.game.gold,20);assert.ok(f.connections.every(link=>!Object.values(link).includes('other-farm')));f.coordinator.dispose();
+});
+
+test('an impossible return exhausts its bounded candidates then cools down without draining the wallet',()=>{
+  const f=fixture();f.coordinator.update(1);const gold=f.game.gold;
+  f.railways.preview=()=>({siteValid:false,code:'route-blocked',waypointCount:1,handles:[{x:25,z:0},{x:0,z:0}]});
+  for(let i=0;i<7;i++){const before=f.coordinator.stats.previews;f.coordinator.update(3);assert.equal(f.coordinator.stats.previews-before,1);}
+  const count=f.coordinator.stats.previews;f.coordinator.update(3);assert.equal(f.coordinator.stats.previews,count);assert.equal(f.connections.length,1);assert.equal(f.game.gold,gold);f.coordinator.dispose();
 });

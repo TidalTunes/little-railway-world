@@ -1,5 +1,6 @@
 import {biomeAt} from './biomes.js';
 import {createDirectedRailNetwork} from './directed-rail-network.js';
+import {createCircuitConsist,TRAIN_CAR_SPACING} from './train-consist.js';
 
 export const LOOP_ECONOMY=Object.freeze({houseWood:8,trainPerCity:10,pickup:10,visitGold:3,speed:5,dwell:1});
 const GOODS=['wood','metal','food'],ALL=[...GOODS,'gold'],EPS=1e-8;
@@ -130,43 +131,52 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
     if(!loop||!Number.isFinite(loop.length)||loop.length<=0)return {ok:false,code:'no-complete-loop',reason:'Complete a one-way loop first'};
     const info=loopInfo(loop);
     if(!info.cityIds.length||!info.cityIds.includes(cityId))return {ok:false,code:'no-complete-loop'};
+    const consist=createCircuitConsist(loop,cityId);
+    if(!consist)return {ok:false,code:'no-complete-loop',reason:'Complete a one-way loop first'};
+    if(!consist.fits)return {ok:false,code:'circuit-too-short',reason:'This circuit is too short for all of its carriages',minimumLength:consist.minimumLength};
     if(!debit(ownerId,'gold',info.cost))return {ok:false,code:'not-enough-gold',reason:`Need ${info.cost} gold for this train`,cost:info.cost};
-    const stops=(loop.stops??[]).filter(stop=>stop.distance>EPS&&stop.distance<loop.length-EPS).sort((a,b)=>a.distance-b.distance);
-    const train={id:`loop-train:${nextTrain++}`,ownerId,homeCityId:cityId,loop,network,locks:keysFor(loop),stops,
-      distance:0,nextStop:0,state:'waiting',stopCityId:cityId,readyAt:time,eventAt:Infinity,departure:time,departureDistance:0,cargo:empty(),laps:0};
+    const train={id:`loop-train:${nextTrain++}`,ownerId,homeCityId:cityId,loop,network,locks:keysFor(loop),stops:consist.stops,
+      origin:consist.origin,departureCars:consist.departure,cars:consist.cars.map(car=>({...car,amount:0})),
+      distance:0,nextStop:0,state:'waiting',stopCityId:cityId,stopCarIndices:[],readyAt:time,eventAt:Infinity,departure:time,departureDistance:0,cargo:empty(),laps:0};
     trains.set(train.id,train);stats.trainsBought++;stats.trainSpent+=info.cost;revision++;
     emit({type:'train-bought',trainId:train.id,ownerId,cityId,cost:info.cost,loopId});dispatch();
     return {ok:true,id:train.id,trainId:train.id,cost:info.cost,loop:info};
   }
-  function stationLocation(train,cityId){
-    const point=train.network.sample(train.loop,train.distance),stationId=train.loop.stops?.find(stop=>stop.cityId===cityId)?.stationId??null;
-    return {stationId,...(point&&{x:point.x,y:Number.isFinite(point.y)?point.y:0,z:point.z})};
+  function stationLocation(train,car){
+    const point=train.network.sample(train.loop,car.stationDistance);
+    return {stationId:car.stationId,carIndex:car.index,...(point&&{x:point.x,y:Number.isFinite(point.y)?point.y:0,z:point.z})};
   }
-  function visit(train,cityId){
+  function visit(train,car){
+    const cityId=car.cityId;
     const city=cities.get(cityId);if(!city)return;
-    train.stopCityId=cityId;
-    if(city.resource!=='gold'){train.cargo[city.resource]+=LOOP_ECONOMY.pickup;stats.pickups[city.resource]+=LOOP_ECONOMY.pickup;}
+    car.resource=city.resource;car.amount=city.resource==='gold'?0:LOOP_ECONOMY.pickup;
+    if(car.amount){train.cargo[city.resource]+=car.amount;stats.pickups[city.resource]+=car.amount;}
     const gold=credit(city.ownerId,'gold',LOOP_ECONOMY.visitGold)?LOOP_ECONOMY.visitGold:0;stats.currencyMinted+=gold;
     emit({type:'pickup',trainId:train.id,ownerId:train.ownerId,cityId,cityOwnerId:city.ownerId,resource:city.resource,
       amount:city.resource==='gold'?0:LOOP_ECONOMY.pickup,gold,resources:gains(city.resource,city.resource==='gold'?0:LOOP_ECONOMY.pickup),
-      ...stationLocation(train,cityId)});revision++;
+      ...stationLocation(train,car)});revision++;
+  }
+  function load(train,indices){
+    train.stopCarIndices=indices;train.stopCityId=train.cars[indices[0]].cityId;
+    for(const index of indices)visit(train,train.cars[index]);
+    train.state='dwell';train.eventAt=time+LOOP_ECONOMY.dwell;
   }
   function dispatch(){
     for(const train of [...trains.values()].filter(item=>item.state==='waiting').sort((a,b)=>a.readyAt-b.readyAt||a.id.localeCompare(b.id))){
       if(train.locks.some(key=>locks.has(key)))continue;
       for(const key of train.locks)locks.set(key,train.id);
-      train.distance=0;train.nextStop=0;visit(train,train.homeCityId);train.state='dwell';train.eventAt=time+LOOP_ECONOMY.dwell;
+      train.distance=0;train.nextStop=0;load(train,train.departureCars);
     }
   }
   function advanceEvent(train){
     if(train.state==='dwell'){
-      train.state='moving';train.stopCityId=null;train.departure=time;train.departureDistance=train.distance;
+      train.state='moving';train.stopCityId=null;train.stopCarIndices=[];train.departure=time;train.departureDistance=train.distance;
       const destination=train.stops[train.nextStop]?.distance??train.loop.length;
       train.eventAt=time+(destination-train.distance)/LOOP_ECONOMY.speed;return;
     }
     if(train.state!=='moving')return;
     const stop=train.stops[train.nextStop];
-    if(stop){train.distance=stop.distance;train.nextStop++;visit(train,stop.cityId);train.state='dwell';train.eventAt=time+LOOP_ECONOMY.dwell;return;}
+    if(stop){train.distance=stop.distance;train.nextStop++;load(train,stop.carIndices);return;}
     train.distance=train.loop.length;
     const delivered=gains();
     for(const resource of GOODS){
@@ -174,8 +184,9 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
       if(credit(train.ownerId,resource,amount)){delivered[resource]=amount;stats.delivered[resource]+=amount;stats.deliveries++;}
     }
     train.laps++;stats.laps++;emit({type:'delivery',trainId:train.id,ownerId:train.ownerId,cityId:train.homeCityId,cargo:copy(train.cargo),resources:delivered,
-      lap:train.laps,...stationLocation(train,train.homeCityId)});
-    train.cargo=empty();train.state='waiting';train.stopCityId=train.homeCityId;train.eventAt=Infinity;train.readyAt=time;revision++;
+      lap:train.laps,...stationLocation(train,train.cars[0])});
+    for(const car of train.cars)car.amount=0;
+    train.cargo=empty();train.state='waiting';train.stopCityId=train.homeCityId;train.stopCarIndices=[];train.eventAt=Infinity;train.readyAt=time;revision++;
     for(const key of train.locks)if(locks.get(key)===train.id)locks.delete(key);
   }
   function update(dt){
@@ -191,15 +202,16 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
   }
   function trainSnapshot(train){
     const along=train.state==='moving'?train.departureDistance+(time-train.departure)*LOOP_ECONOMY.speed:train.distance;
-    const pose=train.network.sample(train.loop,along),wagon=train.network.sample(train.loop,along-2.6);
+    const carPoses=train.cars.map(car=>train.network.sample(train.loop,train.origin+along-car.offset)),pose=carPoses[0];
     const resource=GOODS.find(good=>train.cargo[good]>0)??null;
     const dwellRemaining=train.state==='dwell'?Math.max(0,Math.min(LOOP_ECONOMY.dwell,train.eventAt-time)):0;
-    const nextStop=train.stops[train.nextStop],nextStopCityId=nextStop?.cityId??train.homeCityId;
+    const nextStop=train.stops[train.nextStop],nextStopCityId=nextStop?train.cars[nextStop.carIndices[0]].cityId:train.homeCityId;
     const arrivalRemaining=train.state==='waiting'?null:dwellRemaining+Math.max(0,(nextStop?.distance??train.loop.length)-along)/LOOP_ECONOMY.speed;
     return {id:train.id,ownerId:train.ownerId,homeCityId:train.homeCityId,loopId:train.loop.id,state:train.state,
       stopCityId:train.stopCityId,dwellDuration:LOOP_ECONOMY.dwell,dwellRemaining,dwellProgress:train.state==='dwell'?1-dwellRemaining/LOOP_ECONOMY.dwell:0,
-      nextStopCityId,arrivalRemaining,
-      active:train.state!=='waiting',...pose,pose,carPoses:pose&&wagon?[pose,wagon]:[],distance:along,length:train.loop.length,
+      nextStopCityId,arrivalRemaining,stopCarIndices:[...train.stopCarIndices],stopCityIds:train.stopCarIndices.map(index=>train.cars[index].cityId),
+      cars:train.cars.map(car=>({...car,resource:car.resource??cities.get(car.cityId)?.resource??'gold'})),carCount:train.cars.length,spacing:TRAIN_CAR_SPACING,
+      active:train.state!=='waiting',...pose,pose,carPoses,distance:along,length:train.loop.length,
       resource,amount:resource?train.cargo[resource]:0,quantity:resource?train.cargo[resource]:0,cargo:copy(train.cargo),backing:false,laps:train.laps};
   }
   sync();syncNetwork();

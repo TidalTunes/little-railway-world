@@ -272,7 +272,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   }
 
   return{root,camera,position,renderPosition,cameraTarget:target,velocity,stats,prepareSpawn,update,
-    get swinging(){return swingTime<swingDuration;},get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get pitch(){return pitch;},
+    get swinging(){return swingTime<swingDuration;},get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get facingHeading(){return bodyTurn;},get pitch(){return pitch;},
     enter(focus,initialHeading=0,{respawn=false}={}){
       if(disposed)return false;
       if(initialized&&!respawn){active=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;}

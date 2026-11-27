@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {createCharacterMarker} from '../src/character-marker.js';
 import {surfacePoint,surfaceNormal} from '../src/world-surface.js';
+import {playerColors} from '../src/player-palette.js';
 
 test('the overview locator stays at the character and keeps a modest readable pixel size',()=>{
   const scene=new THREE.Scene(),mapScene=new THREE.Scene(),marker=createCharacterMarker(scene,mapScene,{});
@@ -10,9 +11,9 @@ test('the overview locator stays at the character and keeps a modest readable pi
   camera.position.set(24,180,142);camera.lookAt(position.x,position.y,position.z);camera.updateMatrixWorld(true);
   marker.update({position,initialized:true,camera,viewportHeight:800});assert.equal(marker.root.visible,true);
   assert.equal(marker.root.position.x,position.x);assert.equal(marker.root.position.z,position.z);
-  assert.equal(marker.root.scale.x*800/160,5.4);
+  assert.equal(marker.root.scale.x*800/160,8);
   camera.zoom=2;camera.updateProjectionMatrix();marker.update({position,initialized:true,camera,viewportHeight:800,mapBlend:1});
-  assert.equal(marker.root.visible,false);assert.equal(marker.mapRoot.visible,true);assert.equal(marker.mapRoot.scale.x*800/80,6.5);
+  assert.equal(marker.root.visible,false);assert.equal(marker.mapRoot.visible,true);assert.equal(marker.mapRoot.scale.x*800/80,9);
   assert.equal(marker.mapRoot.position.x,position.x);assert.equal(marker.mapRoot.position.z,position.z);
   marker.dispose();assert.equal(scene.children.length,0);assert.equal(mapScene.children.length,0);
 });
@@ -49,4 +50,37 @@ test('the character locator respects a curved surface and disappears on the far 
   assert.ok(marker.mapRoot.position.distanceTo(surfacePoint(world,position.x,2.4,position.z))<1e-9);
   camera.position.copy(point).addScaledVector(normal,-4000);camera.lookAt(point);camera.updateMatrixWorld(true);
   marker.update({position,initialized:true,camera,mapBlend:1});assert.equal(marker.mapRoot.visible,false);marker.dispose();
+});
+
+
+test('the local traveller is an owner-colored triangle and rivals retain circular locators',()=>{
+  const world={gameplay:{ownerId:'violet'},players:[{id:'violet',color:{l:.65,c:.15,h:300}}]};
+  const own=createCharacterMarker(new THREE.Group(),new THREE.Group(),world),rival=createCharacterMarker(new THREE.Group(),new THREE.Group(),world,{self:false});
+  try{
+    assert.equal(own.root.geometry.attributes.position.count,45);
+    assert.ok(rival.root.geometry.attributes.position.count>own.root.geometry.attributes.position.count);
+    const color=new THREE.Color().fromBufferAttribute(own.root.geometry.attributes.color,0),expected=playerColors(world.players[0]).body;
+    assert.ok(Math.abs(color.r-expected.r)+Math.abs(color.g-expected.g)+Math.abs(color.b-expected.b)<1e-6);
+    const camera=new THREE.OrthographicCamera(-100,100,100,-100,.1,1000);camera.position.set(0,200,0);camera.up.set(0,0,-1);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);
+    const position={x:0,z:0,y:0};own.update({position,initialized:true,camera,mapBlend:1,heading:0});
+    const before=own.mapRoot.quaternion.clone();own.update({position,initialized:true,camera,mapBlend:1,heading:Math.PI/2});
+    assert.ok(Math.abs(before.angleTo(own.mapRoot.quaternion)-Math.PI/2)<1e-7);
+    assert.equal(own.root.geometry,own.mapRoot.geometry);
+  }finally{own.dispose();rival.dispose();}
+});
+
+test('the directional triangle follows screen-space heading on wide and portrait viewports',()=>{
+  const marker=createCharacterMarker(new THREE.Group(),new THREE.Group(),{}),position={x:12,z:-8,y:0},heading=.73;
+  try{
+    for(const aspect of [.6,2.4])for(const perspective of [false,true]){
+      const camera=perspective?new THREE.PerspectiveCamera(54,aspect,.1,1000):new THREE.OrthographicCamera(-100*aspect,100*aspect,100,-100,.1,1000);
+      camera.position.set(60,200,170);camera.lookAt(position.x,0,position.z);camera.updateMatrixWorld(true);
+      marker.update({position,initialized:true,camera,mapBlend:1,heading});
+      const origin=new THREE.Vector3(position.x,position.y,position.z),ahead=origin.clone().add(new THREE.Vector3(Math.sin(heading),0,Math.cos(heading)));
+      origin.project(camera);ahead.project(camera);
+      const expected=new THREE.Vector2((ahead.x-origin.x)*aspect,ahead.y-origin.y).normalize();
+      const actual=new THREE.Vector3(0,1,0).applyQuaternion(marker.mapRoot.quaternion).applyQuaternion(camera.quaternion.clone().invert());
+      assert.ok(expected.distanceTo(new THREE.Vector2(actual.x,actual.y))<1e-7,`${perspective?'perspective':'orthographic'} aspect ${aspect}`);
+    }
+  }finally{marker.dispose();}
 });

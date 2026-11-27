@@ -1,5 +1,6 @@
+import {streamedWoodSourceId} from './harvestable-wood.js';
 import * as THREE from 'three';
-import {tree} from './assets.js';
+import {tree,cactus} from './assets.js';
 import {consolidate} from './geometry.js';
 import {bakeMaterialColors} from './color-batches.js';
 import {applyDetailReveal,createDetailDepthMaterial} from './detail-reveal.js';
@@ -9,7 +10,7 @@ import {rigidSurfacePoseMatrix} from './world-surface.js';
 export const TREE_FALL_DURATION=.78;
 export const TREE_REGROW_DURATION=1.2;
 export const treeVariant=p=>({pine:Math.floor((p.scale??1)*7)%3,round:3,gold:4,light:5,broadleaf:6,acacia:7,birch:8}[p.variant]??0);
-export const treeId=p=>p.id??`tree:${p.x}:${p.y??0}:${p.z}`;
+export const treeId=streamedWoodSourceId;
 
 // Raycast only instances in cells crossed by a short foot/camera ray. The
 // geometry stays shared, and removal only changes a slot's active flag.
@@ -57,7 +58,9 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
   let revision=0,disposed=false;
   function templateFor(variant){
     if(!templates.has(variant)){
-      const source=new THREE.Group();tree(source,{variant});bakeMaterialColors(consolidate(source));
+      const source=new THREE.Group();
+      if(typeof variant==='string'&&variant.startsWith('cactus:'))cactus(source,{variant:Number(variant.slice(7))});
+      else tree(source,{variant});bakeMaterialColors(consolidate(source));
       const mesh=source.children[0];mesh.geometry.computeBoundingBox();mesh.geometry.computeBoundingSphere();
       templates.set(variant,{geometry:mesh.geometry,material:mesh.material});source.clear();
     }
@@ -72,7 +75,7 @@ export function createMutableTrees(world,{onChange=()=>{}}={}){
     const depth=createDetailDepthMaterial(reveal);let bytes=0,triangles=0;
     for(const placement of placements){
       const id=treeId(placement);if(records.has(id))continue;
-      const variant=treeVariant(placement);if(!byVariant.has(variant))byVariant.set(variant,[]);
+      const variant=placement.kind==='cactus'?`cactus:${Number(placement.variant)||0}`:treeVariant(placement);if(!byVariant.has(variant))byVariant.set(variant,[]);
       byVariant.get(variant).push({id,placement,active:!removed.has(id),elapsed:0});
     }
     for(const [variant,items]of byVariant){

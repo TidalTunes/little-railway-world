@@ -9,3 +9,6 @@
 .resource-gain-value[data-resource=gold]{color:#f5d07c}
 .resource-gains [hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){.resource-gain{will-change:opacity}}
+
+.resource-gain:is([data-kind=delivery],[data-kind=production]){padding:0;background:none;box-shadow:none;border-radius:0;color:#fff9df;text-shadow:0 1px 2px #183c3e}
+.resource-gain:is([data-kind=delivery],[data-kind=production]) .resource-gain-icon{width:27px;height:27px}

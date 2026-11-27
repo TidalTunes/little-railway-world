@@ -143,3 +143,16 @@ test('a new house across an active return route triggers bounded replanning with
   }
   assert.ok(sawReroute);assert.ok(earned,'blocked delivery finds a valid route home and eventually credits');
 });
+
+test('manually cut cactus regrows at its own source and blocked rail clearings stay cleared',()=>{
+  const{world,session}=fixture('metal'),cactus={id:'dryland-cactus',kind:'cactus',x:15,z:8,scale:1,variant:1};
+  session.shared.removedTreeIds.add(cactus.id);
+  const work=createResourceWork(world,{session,surfaceAt:ground,tuning:{treeRegrowSeconds:1}});
+  assert.equal(work.trackTree(cactus),true);const events=run(work,2);
+  assert.ok(events.some(event=>event.type==='tree-regrow'&&event.treeId===cactus.id));
+  assert.equal(session.shared.removedTreeIds.has(cactus.id),false);
+  session.shared.removedTreeIds.add(cactus.id);work.trackTree(cactus);assert.equal(work.stats.regrowing,1);
+  session.shared.isSceneryRemoved=id=>id===cactus.id;
+  assert.ok(!run(work,2).some(event=>event.type==='tree-regrow'&&event.treeId===cactus.id));
+  assert.equal(work.stats.regrowing,0,'a new railway cancels pending regrowth rather than retrying forever');work.dispose();
+});

@@ -1,3 +1,4 @@
+import {isHarvestableWood,streamedWoodSourceId} from './harvestable-wood.js';
 import {biomeAt,biomeDistance,fitsBiome} from './biomes.js';
 import {cityRandom} from './development.js';
 import {riverBankDistance} from './hydrology.js';
@@ -97,7 +98,7 @@ function createLoopBotStarts(world,count){
         ||world.mountains.some(m=>mountainFootprintDistance(m,p.x,p.z)<2)
         ||(world.gameplay.reservations??[]).some(r=>distance(p,r)<r.radius+1.2)
         ||guaranteedTrees.some(t=>distance(p,t)<2.3))continue;
-      guaranteedTrees.push({id:`${id}:grove:${guaranteedTrees.length+1}`,kind:'tree',...p,y:0,rotation:angle,scale:.9,variant:candidate.biome==='desert'?7:3,radius:.765,biome:candidate.biome});
+      guaranteedTrees.push({id:`${id}:grove:${guaranteedTrees.length+1}`,kind:candidate.biome==='desert'?'cactus':'tree',...p,y:0,rotation:angle,scale:.9,variant:candidate.biome==='desert'?guaranteedTrees.length%3:3,radius:.765,biome:candidate.biome});
     }
     return{id,ownerId,starterHouse,spawn,biome:candidate.biome,guaranteedTrees};
   });
@@ -131,7 +132,7 @@ export function preparePlayerBotScenery(world,generateRegion){
   for(const request of requests.values()){
     for(const item of generateRegion(world,request).placements){
       if(!bots.some(bot=>distance(bot.starterHouse,item)<=radius+(item.radius??0)))continue;
-      placements.push(item.kind==='tree'&&!item.id?{...item,id:`tree:${item.x}:${item.y??0}:${item.z}`}:item);
+      placements.push(isHarvestableWood(item)&&!item.id?{...item,id:streamedWoodSourceId(item)}:item);
     }
   }
   world.gameplay.botScenery=placements;
