@@ -34,7 +34,7 @@ export function settlementHudRailway(railway,{gold=0,ready=true}={}){
   const cost=Number.isFinite(railway?.cost)?count(railway.cost):5,hasCity=Boolean(railway?.hasCity);
   const missingGold=Math.max(0,cost-count(gold)),affordable=missingGold===0,showConfirm=stage==='preview';
   const source=railway?.sourceLabel||'Your city',target=railway?.targetLabel||'Destination';
-  const selection=stage==='source'?'Choose your city':stage==='destination'&&!railway?.hovering?`${source} → …`:`${source} → ${target}`;
+  const selection=stage==='source'?'Choose a city, station end or track':stage==='destination'&&!railway?.hovering?`${source} → …`:`${source} → ${target}`;
   const reason=typeof railway?.reason==='string'?railway.reason.replace(/[.!]$/,''):'',code=railway?.code;
   // A wallet or worker problem is not evidence that the route is impossible.
   // Local geometric failures still need feedback while a handle is being dragged.
@@ -46,12 +46,12 @@ export function settlementHudRailway(railway,{gold=0,ready=true}={}){
   else if(!hasCity)status=`${railway?.minHomes??3} homes to ${railway?.minHomes===6?'unlock a station':'start'}`;
   else if(siteInvalid){status=reason||'Give the route more room';statusKind='error';}
   else if(stage==='planning')status='Checking route…';
-  else if(stage==='destination'&&railway?.hovering&&railway?.siteValid)status='Click to shape route';
+  else if(stage==='destination'&&railway?.hovering&&railway?.siteValid)status='Click or release to shape route';
   else if(!affordable&&showConfirm){status=`${missingGold} more gold needed`;statusKind='cost';}
   else if(canBuild){status='Drag dots to shape the line';statusKind='success';}
   else if(reason&&code!=='ready'&&code!=='not-enough-gold')status=reason;
   else if(showConfirm)status='Checking route…';
-  else status=stage==='source'?'': 'Hover a city · click to choose';
+  else status=stage==='source'?'Click two ends · or drag between them': 'Choose a city, station end or track';
   return {canReverse:!!railway?.canReverse,reversed:!!railway?.reversed,minHomes:railway?.minHomes??3,stage,cost,hasCity,affordable,missingGold,showConfirm,canBuild,selection,status,statusKind};
 }
 
@@ -191,7 +191,7 @@ export function createSettlementHud({
     buttons['rail-build'].hidden=!rail.showConfirm;buttons['rail-build'].disabled=!railPlanning||!rail.canBuild;
     buttons['rail-build'].setAttribute('aria-label',rail.canBuild?`Build railway. Spend ${rail.cost} gold. ${rail.selection}.`:`Cannot build railway. ${rail.status}.`);
     buttons.rail.hidden=walking;buttons.axe.hidden=!walking;buttons.house.hidden=!walking;
-    buttons.rail.setAttribute('aria-label',`Plan a railway. Costs ${rail.cost} gold. ${rail.hasCity?'Select one of your cities, then a destination.':`Grow to ${rail.minHomes} homes first.`}`);
+    buttons.rail.setAttribute('aria-label',`Plan a railway. Costs ${rail.cost} gold. ${rail.hasCity?'Click two cities, station ends or tracks, or drag between them.':`Grow to ${rail.minHomes} homes first.`}`);
     buttons.axe.setAttribute('aria-pressed',String(tool==='axe'));buttons.house.setAttribute('aria-pressed',String(building));buttons.rail.setAttribute('aria-pressed',String(railPlanning));
     buttons.house.setAttribute('aria-label',`Place a house. Costs ${costLabel}. ${construction.readiness}`);
     buttons.house.title=`Build · B · ${costLabel}. ${construction.readiness}`;

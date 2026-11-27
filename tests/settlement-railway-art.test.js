@@ -354,3 +354,78 @@ test('directed rail arrows follow the travel tangent on built spines and live pr
   for(let i=0;i<20;i++)art.preview({valid:true,lines:[line],stations:[]},{visible:true});assert.equal(arrows.geometry,geometry);
   art.preview(null,{visible:false});assert.equal(arrows.count,0);
 });
+
+
+test('direction overlays fade out for third person without hiding or rebuilding physical rails',t=>{
+  const art=createSettlementRailwayArt(new THREE.Group(),new THREE.Group(),{...world,gameplay:{economy:'loops'}});t.after(()=>art.dispose());
+  art.sync(snapshot);art.preview({valid:true,lines:[line],stations:[]},{visible:true});
+  const rails=art.root.getObjectByName('built-railway-network'),railMeshes=[...rails.children],railGeometry=railMeshes.map(mesh=>mesh.geometry);
+  const arrows=[art.root,art.mapRoot].flatMap(root=>['railway-direction-arrows','railway-preview-direction-arrows'].map(name=>root.getObjectByName(name)));
+  const geometry=arrows.map(batch=>batch.geometry),versions=arrows.map(batch=>batch.instanceMatrix.version),counts=arrows.map(batch=>batch.count),rebuilds=art.stats.rebuilds;
+  for(const mapBlend of [0,.5,1]){
+    art.update({mapBlend,walkingWeight:0});
+    assert.ok(arrows.every(batch=>batch.visible&&batch.material.opacity===1));
+    art.update({mapBlend,walkingWeight:.4});
+    const halfway=arrows[0].material.opacity;assert.ok(halfway>0&&halfway<1);assert.ok(arrows.every(batch=>batch.visible&&batch.material.opacity===halfway));
+    art.update({mapBlend,walkingWeight:.85});assert.ok(arrows.every(batch=>!batch.visible&&batch.material.opacity===0));
+    art.update({mapBlend,walkingWeight:1});assert.ok(arrows.every(batch=>!batch.visible));
+    assert.equal(art.root.visible,mapBlend<.999);assert.equal(art.mapRoot.visible,mapBlend>.001);
+    assert.equal(rails.visible,true);assert.deepEqual(rails.children,railMeshes);assert.deepEqual(railMeshes.map(mesh=>mesh.geometry),railGeometry);
+    art.update({mapBlend,walkingWeight:.4});assert.ok(arrows.every(batch=>batch.visible&&batch.material.opacity===halfway));
+    art.update({mapBlend,walkingWeight:0});assert.ok(arrows.every(batch=>batch.visible&&batch.material.opacity===1));
+  }
+  assert.deepEqual(arrows.map(batch=>batch.geometry),geometry);assert.deepEqual(arrows.map(batch=>batch.instanceMatrix.version),versions);
+  assert.deepEqual(arrows.map(batch=>batch.count),counts);assert.equal(art.stats.rebuilds,rebuilds);
+});
+
+test('committed revisions and changed previews cannot flash direction arrows while walking',t=>{
+  const art=createSettlementRailwayArt(new THREE.Group(),new THREE.Group(),{...world,gameplay:{economy:'loops'}});t.after(()=>art.dispose());
+  art.update({walkingWeight:1});art.sync(snapshot);art.preview({valid:true,lines:[line],stations:[]},{visible:true});
+  const batches=()=>[art.root,art.mapRoot].flatMap(root=>['railway-direction-arrows','railway-preview-direction-arrows'].map(name=>root.getObjectByName(name)));
+  assert.ok(batches().every(batch=>batch.count>0&&!batch.visible));
+  art.sync({...snapshot,revision:2});art.preview({valid:true,lines:[{...line,id:'changed'}],stations:[]},{visible:true});
+  assert.ok(batches().every(batch=>batch.count>0&&!batch.visible));
+  art.update({walkingWeight:0});assert.ok(batches().every(batch=>batch.visible));
+});
+
+test('station port affordances match canonical spine ends and exist only during strategy railway planning',t=>{
+  const art=createSettlementRailwayArt(new THREE.Group(),new THREE.Group(),{...world,gameplay:{economy:'loops'}});t.after(()=>art.dispose());
+  const station={...stations[0],lineId:line.id};art.sync({...snapshot,stations:[station]});
+  const batches=[art.root,art.mapRoot].map(root=>root.getObjectByName('railway-station-ports'));
+  assert.ok(batches.every(mesh=>mesh.count===2&&!mesh.visible));
+  art.preview(null,{visible:true});
+  const matrix=new THREE.Matrix4(),geometry=batches[0].geometry,versions=batches.map(mesh=>mesh.instanceMatrix.version);
+  for(const mesh of batches){
+    assert.ok(mesh.visible);assert.equal(mesh.material.depthTest,false);assert.equal(mesh.material.color.getHexString(),'f4e6b0');
+    for(const [index,z]of [[0,0],[1,20]]){mesh.getMatrixAt(index,matrix);assert.equal(matrix.elements[12],0);assert.equal(matrix.elements[14],z);}
+    assert.deepEqual(mesh.userData.ports.map(port=>[port.stationId,port.cityId,port.role,port.x,port.z]),[
+      ['station-home','home','entry',0,0],['station-home','home','exit',0,20],
+    ]);
+    const shader={uniforms:{},vertexShader:'#include <begin_vertex>'};mesh.material.onBeforeCompile(shader);
+    assert.ok(shader.uniforms.portViewport);assert.match(shader.vertexShader,/portUnit/,'ports retain a modest pixel radius when zoomed out');
+  }
+  for(const walkingWeight of [0,.4,1,.4,0]){
+    art.update({mapBlend:.5,walkingWeight});assert.ok(batches.every(mesh=>mesh.visible===(walkingWeight<.85)));
+  }
+  assert.equal(batches[0].geometry,geometry);assert.equal(batches[1].geometry,geometry);
+  assert.deepEqual(batches.map(mesh=>mesh.instanceMatrix.version),versions,'camera transitions do not rewrite static port positions');
+  art.preview(null,{visible:false});assert.ok(batches.every(mesh=>!mesh.visible));
+  art.update({walkingWeight:1});art.sync({...snapshot,revision:2,stations:[station]});art.preview(null,{visible:true});
+  assert.ok(batches.every(mesh=>!mesh.visible),'new station geometry cannot flash its ports in third person');
+});
+
+test('the owning city range stays anchored while a return route starts at a foreign station',t=>{
+  const {art}=fixture(t),owned={...cities[0],x:-37,z:12},foreign={...cities[1],x:42,z:-16};
+  art.preview(null,{cities:[owned,foreign],sourceCityId:foreign.id,targetCityId:owned.id,rangeCityId:owned.id,maxConnectionDistance:140,visible:true});
+  const matrix=new THREE.Matrix4();
+  for(const root of [art.root,art.mapRoot]){
+    const range=root.getObjectByName('railway-connection-range'),selected=root.getObjectByName('railway-city-targets');
+    range.getMatrixAt(0,matrix);assert.equal(matrix.elements[12],owned.x);assert.equal(matrix.elements[14],owned.z);assert.equal(new THREE.Vector3().setFromMatrixScale(matrix).x,140);
+    assert.equal(selected.count,2);selected.getMatrixAt(0,matrix);assert.equal(matrix.elements[12],foreign.x);assert.equal(matrix.elements[14],foreign.z);
+    selected.getMatrixAt(1,matrix);assert.equal(matrix.elements[12],owned.x);assert.equal(matrix.elements[14],owned.z);
+  }
+  art.preview(null,{cities:[owned,foreign],sourceCityId:foreign.id,rangeCityId:owned.id,maxConnectionDistance:140,visible:true});
+  art.root.getObjectByName('railway-connection-range').getMatrixAt(0,matrix);assert.equal(matrix.elements[12],owned.x);
+  art.preview(null,{cities:[owned,foreign],sourceCityId:foreign.id,rangeCityId:foreign.id,maxConnectionDistance:140,visible:true});
+  art.root.getObjectByName('railway-connection-range').getMatrixAt(0,matrix);assert.equal(matrix.elements[12],foreign.x,'changing only the range anchor refreshes its placement');
+});

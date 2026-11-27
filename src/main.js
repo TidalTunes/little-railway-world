@@ -75,6 +75,7 @@ const geometryUploader=createGeometryUploader(renderer);
 const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
   getTrains:()=>settlement?[...trains,...settlement.tradeArt?.trains??[]]:trains,getWorldRoot:()=>worldRoot,getWorld:()=>model,
   isDetailReady:()=>!!detail?.ready&&shaderReady,
+  isPointerSelectionBlocked:()=>settlement?.railwayPlanning??false,
   onPause:()=>{paused=!paused;},
   onRegenerate:()=>{
     if(!model)return;
@@ -253,7 +254,7 @@ async function loadWorld(input={}){
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
-      onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},reducedMotion});
+      onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},onClaimPointer:()=>view.claimPointer(),reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
       getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
@@ -264,7 +265,7 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Build a railway town. WASD moves, Shift runs, Space jumps. E or click chops trees for wood. B aims a house; click or Enter builds for eight wood. Three nearby homes form a city; six unlock a one-way station. Residents gather wood in forests, metal in deserts, and gold on plains. Gray villages produce food. V switches to overview. T plans a railway: choose your city, choose a partner, drag dots, R reverses direction, Enter builds. Complete an outward and return loop, then buy a train in the route panel. Each visit creates ten resources and pays the city owner three gold; cargo arrives home after a full loop. Tab releases the mouse for controls. Day and night each last five minutes.');
+    if(settlement)canvas.setAttribute('aria-label','Build a railway town. WASD moves, Shift runs, Space jumps. E or click chops trees for wood. B aims a house; click or Enter builds for eight wood. Three nearby homes form a city; six unlock a one-way station. Residents gather wood in forests, metal in deserts, and gold on plains. Gray villages produce food. V switches to overview. T plans a railway: click or drag between cities, station ends or tracks; drag dots to shape, R reverses direction, Enter builds. Red connections cannot be built. Complete an outward and return loop, then buy a train in the route panel. Each visit creates ten resources and pays the city owner three gold; cargo arrives home after a full loop. Tab releases the mouse for controls. Day and night each last five minutes.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(daylightStartedAt===undefined)daylightStartedAt=performance.now();

@@ -165,3 +165,11 @@ test('a snapshotted control count travels with the draft and distinguishes autho
   worker.reply(second.id,{...route(second),waypointCount:4});assert.equal((await next).result.waypointCount,4);
   assert.notEqual(f.adoptions[0][3],f.adoptions[1][3]);assert.equal(f.evaluations[1][2].controlCount,4);
 });
+
+
+test('exact station sides and rail distances survive worker transport without pointer mutation',async t=>{
+  const f=fixture(t),attachments={from:{kind:'station',stationId:'station-a',side:-1,x:7,z:0},to:{kind:'track',lineId:'line-b',distance:12.345678,direction:1,x:28,z:4}};
+  const original=structuredClone(attachments),pending=f.planner.request('a','b',{attachments}),worker=f.workers[0],message=plans(worker)[0];attachments.from.side=1;attachments.to.distance=99;
+  assert.deepEqual(message.options.attachments,original);worker.reply(message.id,{...route(message),siteValid:false,valid:false,code:'wrong-direction',reason:'Start at an exit',attachments:original,directionErrors:['from']});
+  const result=await pending;assert.equal(result.result.code,'wrong-direction');assert.deepEqual(result.result.directionErrors,['from']);assert.deepEqual(result.result.attachments,original);
+});

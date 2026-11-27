@@ -18,7 +18,7 @@ const DETAIL_POLAR_ANGLE=Math.PI/4;
 const POLE_LIMIT=85*Math.PI/180;
 const wrappedLongitude=(value,radius)=>THREE.MathUtils.euclideanModulo(value+Math.PI*radius,2*Math.PI*radius)-Math.PI*radius;
 
-export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true}){
+export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true,isPointerSelectionBlocked=()=>false}){
   // Navigation stores a ground focus and yaw at a fixed local inclination.
   // The overview can rise above that rig without changing its navigation pose.
   const navigation=camera.clone(),chartCamera=camera.clone(),coverageChart=camera.clone(),coverageView=camera.clone(),proposedChart=camera.clone(),proposedView=camera.clone(),presentation=camera.clone();
@@ -273,18 +273,19 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   canvas.addEventListener('blur',releaseKeys);window.addEventListener('blur',releaseKeys);
   canvas.ownerDocument.addEventListener('visibilitychange',()=>{if(canvas.ownerDocument.hidden)releaseKeys();});
   canvas.addEventListener('pointerdown',event=>{
-    if(!inputEnabled)return;
+    if(!inputEnabled||isPointerSelectionBlocked())return;
     pointers.add(event.pointerId);
     if(pointers.size>1){gestureBlocked=true;gesture=null;}
     if(event.button===0&&pointers.size===1){gesture={id:event.pointerId,x:event.clientX,y:event.clientY,moved:false,touch:event.pointerType==='touch'};gestureBlocked=false;}
     zoomGoal=null;
   },{capture:true});
   canvas.addEventListener('pointermove',event=>{
-    if(!inputEnabled)return;
+    if(!inputEnabled||isPointerSelectionBlocked())return;
     if(gesture?.id===event.pointerId&&Math.hypot(event.clientX-gesture.x,event.clientY-gesture.y)>6)gesture.moved=true;
     lastPointer={x:event.clientX,y:event.clientY,touch:event.pointerType==='touch'};
   });
   function pointerEnd(event){
+    if(isPointerSelectionBlocked()){pointers.delete(event.pointerId);gesture=null;hovered=null;lastPointer=null;return;}
     if(!inputEnabled)return;
     const tap=gesture?.id===event.pointerId&&!gesture.moved&&!gestureBlocked&&event.type==='pointerup'
       &&Math.hypot(event.clientX-gesture.x,event.clientY-gesture.y)<=6;
@@ -297,7 +298,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   window.addEventListener('pointercancel',pointerEnd);
   canvas.addEventListener('pointerleave',()=>{hovered=null;lastPointer=null;canvas.style.cursor=selected?'default':'grab';});
   canvas.addEventListener('wheel',()=>{zoomGoal=null;},{passive:true});
-  canvas.addEventListener('dblclick',()=>{if(inputEnabled)reset();});
+  canvas.addEventListener('dblclick',()=>{if(inputEnabled&&!isPointerSelectionBlocked())reset();});
   canvas.addEventListener('keydown',event=>{
     if(!inputEnabled||event.altKey||event.metaKey||event.ctrlKey)return;
     let handled=true;
@@ -360,6 +361,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     blend=mapBlendForZoom(presentation.zoom/zoomScale);
     mode=modeForZoom(presentation.zoom/zoomScale,mode);configureInput();updateCamera();
       hoverClock+=dt;
+      if(isPointerSelectionBlocked()){hovered=null;lastPointer=null;}
       if(hoverClock>.12&&lastPointer&&!lastPointer.touch&&!pointers.size&&!selected){
         hoverClock=0;hovered=pick(lastPointer.x,lastPointer.y);
         canvas.style.cursor=hovered?'pointer':'grab';
@@ -391,6 +393,7 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
   }
   return {
     navigation,chartCamera,controls,reset,updateNavigation,updatePresentation,
+    claimPointer(){clearSelection();gesture=null;gestureBlocked=true;pointers.clear();hovered=null;lastPointer=null;flushControls();},
     setInputEnabled(enabled){
       releaseKeys();clearSelection();hovered=null;lastPointer=null;gesture=null;pointers.clear();
       flushControls();inputEnabled=Boolean(enabled);controls.enabled=inputEnabled;ring.visible=mapRing.visible=false;

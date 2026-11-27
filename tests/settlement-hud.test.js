@@ -38,15 +38,15 @@ test('railway guidance starts with a formed owned city and never offers an endpo
   assert.equal(empty.status,'3 homes to start');
   assert.equal(empty.canBuild,false);assert.equal(empty.showConfirm,false);
   const source=settlementHudRailway({hasCity:true,stage:'source',canBuild:true},{gold:20});
-  assert.equal(source.selection,'Choose your city');
+  assert.equal(source.selection,'Choose a city, station end or track');
   assert.equal(source.canBuild,false);assert.equal(source.showConfirm,false);
   const destination=settlementHudRailway({hasCity:true,stage:'destination',sourceLabel:'Pine Town',canBuild:true},{gold:20});
   assert.equal(destination.selection,'Pine Town → …');
   assert.equal(destination.canBuild,false);assert.equal(destination.showConfirm,false);
-  assert.equal(destination.status,'Hover a city · click to choose');
+  assert.equal(destination.status,'Choose a city, station end or track');
   assert.equal(settlementHudRailway({hasCity:true,stage:'destination'},{gold:0}).status,destination.status,'free route exploration keeps its interaction hint before purchase');
   const hover=settlementHudRailway({hasCity:true,stage:'destination',hovering:true,siteValid:true,sourceLabel:'Pine Town',targetLabel:'River Village',reason:'Connect these cities'},{gold:0});
-  assert.equal(hover.selection,'Pine Town → River Village');assert.equal(hover.status,'Click to shape route');
+  assert.equal(hover.selection,'Pine Town → River Village');assert.equal(hover.status,'Click or release to shape route');
   assert.equal(hover.statusKind,'info');assert.equal(hover.canBuild,false);assert.equal(hover.showConfirm,false);
 });
 

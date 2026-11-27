@@ -62,3 +62,55 @@ test('unchanged failed station sites do not retry terrain work every frame or wa
   for(let frame=0;frame<120;frame++){f.session.player.gold++;f.rail.synchronizeStations();}assert.equal(probes,first);
   f.cities[0].x+=3;f.rail.synchronizeStations();assert.ok(probes>first,'moving a city reconsiders its new station orbit');
 });
+
+test('explicit station ends preserve a wrong-way editable draft and reject payment',()=>{
+  const {rail,session}=fixture();rail.synchronizeStations();const a=rail.stations.find(s=>s.cityId==='a'),b=rail.stations.find(s=>s.cityId==='b');
+  const from=rail.anchorAt(null,{stationId:a.id,side:-1}),to=rail.anchorAt(null,{stationId:b.id,side:-1});
+  assert.equal(from.cityId,'a');assert.equal(from.fromAllowed,false);assert.equal(from.toAllowed,true);
+  const options={attachments:{from:from.attachment,to:to.attachment}},draft=rail.preview('a','b',options);
+  assert.equal(draft.code,'wrong-direction');assert.equal(draft.siteValid,false);assert.deepEqual(draft.directionErrors,['from']);
+  assert.deepEqual(draft.handles[0].attachment,from.attachment);assert.equal(draft.handles[0].x,from.x);assert.equal(draft.handles[0].z,from.z);assert.ok(draft.lines[0].points.length>1);
+  const gold=session.player.gold;assert.equal(rail.build('a','b',options).code,'wrong-direction');assert.equal(session.player.gold,gold);assert.equal(rail.snapshot().connections.length,0);
+  options.attachments.from=rail.anchorAt(null,{stationId:a.id,side:1}).attachment;
+  assert.equal(rail.evaluate('a','b',options).valid,true);
+});
+
+test('coordinate dragging can select either station end without silently flipping it',()=>{
+  const {rail}=fixture();rail.synchronizeStations();const station=rail.stations.find(s=>s.cityId==='a'),entry=rail.anchorAt(null,{stationId:station.id,side:-1});
+  const result=rail.preview('a','b',{attachments:{from:{x:entry.x,z:entry.z}}});assert.equal(result.code,'wrong-direction');assert.equal(result.handles[0].attachment.side,-1);
+  assert.ok(Math.hypot(result.handles[0].x-entry.x,result.handles[0].z-entry.z)<1e-8);
+});
+
+test('multiple physical routes between the same cities retain unique infrastructure identities',()=>{
+  const {rail}=fixture();rail.synchronizeStations();const first=rail.build('a','b');assert.ok(first.ok,first.reason);
+  const options={waypoints:[{x:60,z:-50}]},second=rail.build('a','b',options);assert.ok(second.ok,second.reason);assert.notEqual(first.connection.id,second.connection.id);assert.notEqual(first.lines[0].id,second.lines[0].id);
+  assert.equal(rail.snapshot().connections.filter(connection=>connection.from==='a'&&connection.to==='b').length,2);
+  const firstPoints=first.lines[0].points,secondPoints=second.lines[0].points;assert.notDeepEqual(firstPoints,secondPoints);
+  const ids=rail.lines.map(line=>line.id);assert.equal(new Set(ids).size,ids.length);
+  const count=rail.lines.length;assert.equal(rail.build('a','b',options).ok,false,'an overlapping duplicate cannot be placed');assert.equal(rail.lines.length,count);
+});
+
+test('typed track anchors stay on the selected physical line and reverse directions are rejected',()=>{
+  const {rail}=fixture();rail.synchronizeStations();const first=rail.build('a','b');assert.ok(first.ok);const line=first.lines.at(-1),point=sampleAlignment(line.alignment,line.length*.25);
+  const anchor=rail.anchorAt({...point,x:point.x+.05},{lineId:line.id,distance:line.length*.25,ownerId:'teal',maxDistance:.001});
+  assert.equal(anchor.attachment.lineId,line.id);assert.equal(anchor.cityId,'a');assert.equal(anchor.accessible,true);
+  const exact=sampleAlignment(line.alignment,anchor.attachment.distance);assert.ok(Math.hypot(exact.x-anchor.x,exact.z-anchor.z)<1e-7);
+  const draft=rail.preview('a','c',{attachments:{from:{...anchor.attachment,direction:-1}}});assert.equal(draft.code,'wrong-direction');assert.deepEqual(draft.directionErrors,['from']);
+  assert.equal(draft.handles[0].attachment.lineId,line.id);assert.equal(draft.handles[0].attachment.direction,-1);
+});
+
+test('blocked drafts retain explicit station and track anchors before any interior edits',()=>{
+  const {rail,session}=fixture();rail.synchronizeStations();const built=rail.build('a','b');assert.ok(built.ok);
+  const a=rail.stations.find(s=>s.cityId==='a'),b=rail.stations.find(s=>s.cityId==='b'),c=rail.stations.find(s=>s.cityId==='c');
+  const stationFrom=rail.anchorAt(null,{stationId:a.id,side:1}).attachment,stationTo=rail.anchorAt(null,{stationId:b.id,side:-1}).attachment;
+  const blocked=rail.preview('a','b',{attachments:{from:stationFrom,to:stationTo}});assert.equal(blocked.code,'route-blocked');
+  assert.deepEqual(blocked.handles[0].attachment,stationFrom);assert.deepEqual(blocked.handles.at(-1).attachment,stationTo);
+  const line=built.lines.at(-1),track=rail.anchorAt(null,{lineId:line.id,distance:line.length*.25}).attachment,to=rail.anchorAt(null,{stationId:c.id,side:-1}).attachment;
+  session.buildings.push({id:'block-the-anchor',kind:'house',x:track.x,z:track.z,width:8,depth:8});
+  const result=rail.preview('a','c',{attachments:{from:track,to}});assert.equal(result.code,'route-blocked');
+  const retained=result.handles[0].attachment;
+  assert.equal(retained.kind,'track');assert.equal(retained.lineId,track.lineId);assert.equal(retained.direction,track.direction);
+  assert.ok(Math.abs(retained.distance-track.distance)<1e-7);assert.ok(Math.hypot(retained.x-track.x,retained.z-track.z)<1e-7);
+  assert.deepEqual(result.handles.at(-1).attachment,to);
+  result.handles[0].attachment.distance=999;assert.notEqual(track.distance,999,'returned handles cannot mutate the submitted anchor');
+});

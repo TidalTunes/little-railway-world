@@ -27,7 +27,7 @@ function event(type, properties = {}) {
   return value;
 }
 
-function fixture(t, {reduced = false, isDetailReady = () => true} = {}) {
+function fixture(t, {reduced = false, isDetailReady = () => true, isPointerSelectionBlocked = () => false} = {}) {
   const oldWindow = globalThis.window;
   const document = new EventTarget(), window = new EventTarget();
   globalThis.window = window;
@@ -50,7 +50,7 @@ function fixture(t, {reduced = false, isDetailReady = () => true} = {}) {
   let paused = false, regenerationCount = 0;
   const reducedMotion = {matches: reduced};
   const view = createViewController({canvas, camera, scene, mapScene, reducedMotion,
-    isDetailReady,
+    isDetailReady,isPointerSelectionBlocked,
     getTrains: () => trains, getWorldRoot: () => root,
     onPause: () => { paused = !paused; },
     onRegenerate: () => {
@@ -348,4 +348,21 @@ test('a character overview endpoint preserves the walking bearing while restorin
   assert.ok(Math.abs(Math.atan2(-offset.x,-offset.z)-heading)<1e-8);
   assert.equal(view.navigation.zoom,2);assert.equal(f.camera.zoom,2);assert.equal(view.controls.enabled,false);
   const focus=view.renderTarget.clone();focus.project(f.camera);assert.ok(Math.abs(focus.x)+Math.abs(focus.y)<1e-8);
+});
+
+test('rail planning owns clicks without selecting a train or resetting the camera', t => {
+  let blocked=true;
+  const f=fixture(t,{isPointerSelectionBlocked:()=>blocked});f.zoom(.65);
+  const position=f.view.navigation.position.clone(),target=f.view.controls.target.clone();
+  f.tap();assert.equal(f.view.selected,null);
+  f.canvas.dispatchEvent(event('dblclick'));nearVector(f.view.navigation.position,position);nearVector(f.view.controls.target,target);
+  blocked=false;f.tap();assert.equal(f.view.selected,'first','normal train selection resumes after the tool closes');
+});
+
+test('claiming a rail handle cancels an earlier view pointerdown before release', t => {
+  const f=fixture(t);f.zoom(.65);const point=f.location();
+  f.pointer('pointerdown',point.x,point.y);f.view.claimPointer();f.pointer('pointerup',point.x,point.y);
+  assert.equal(f.view.selected,null);
+  f.tap();assert.equal(f.view.selected,'first','the next ordinary gesture is not stuck');
+  f.view.claimPointer();assert.equal(f.view.selected,null,'drawing stops an existing train follow so the ground anchor stays fixed');
 });

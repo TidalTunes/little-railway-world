@@ -181,3 +181,11 @@ test('disposal prevents a late reply from reviving the route or scheduling more 
   assert.equal(state.result,null);assert.equal(state.confirmed,false);assert.equal(state.checking,false);
   assert.equal(f.previews.length,1);assert.equal(f.requests.length,1);
 });
+
+
+test('wrong-way endpoint drafts stay editable red without terrain work or wallet revalidation',t=>{
+  const f=fixture(t),handles=[{kind:'from',x:2,z:3,attachment:{kind:'station',stationId:'s',side:-1,x:2,z:3}},{kind:'to',x:20,z:30}];
+  f.railways.preview=()=>({provisional:true,siteValid:false,valid:false,cost:10,code:'wrong-direction',reason:'Start at an exit',handles,lines:[{points:handles}],directionErrors:['from']});
+  for(const gold of [0,10,100]){const state=f.editor.update('a','b',{}, {gold});assert.equal(state.checking,false);assert.equal(state.confirmed,false);assert.equal(state.result.valid,false);assert.equal(state.result.code,'wrong-direction');assert.deepEqual(state.result.handles,handles);}
+  assert.equal(f.requests.length,0);
+});
