@@ -86,7 +86,7 @@ test('the initialized traveller starts on dry ground facing an accessible tree a
   }finally{player.dispose();}
 });
 
-test('the real starter grove supplies enough timber and clear connected ground for the first new home',()=>{
+test('the real starter grove supplies enough timber and clear neighbouring ground for the first new home',()=>{
   const config=createSettlementWorld(),world=generateWorld(config,{detail:'network'}),game=createSettlementGame(world);
   const placements=surroundings(world).flatMap(region=>region.placements);
   for(const tree of config.gameplay.guaranteedTrees)assert.equal(game.chop(tree).ok,true);
@@ -94,8 +94,8 @@ test('the real starter grove supplies enough timber and clear connected ground f
   assert.ok(before>=20);
   const site={x:-88,z:-40,rotation:0},context={player:config.gameplay.spawn,placements,ready:true};
   const preview=game.evaluateBuild(site,context);
-  assert.equal(preview.valid,true);assert.equal(preview.connected,true);
+  assert.equal(preview.valid,true);assert.equal(preview.connected,false);assert.equal(preview.cityHouseCount,2);
   const result=game.build(site,context);
   assert.equal(result.ok,true);assert.equal(game.logs,before-10);assert.equal(game.houses.length,2);
-  assert.equal(game.houses.every(home=>home.connected),true);
+  assert.equal(game.houses.every(home=>!home.connected),true);assert.deepEqual(game.cities,[]);assert.deepEqual(game.paths,[]);
 });

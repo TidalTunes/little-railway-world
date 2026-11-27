@@ -57,8 +57,8 @@ let transitionMapStart=0,renderedMapBlend=0;
 let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,loadStarted=0;
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 let characterTransition=createCharacterTransition({reducedMotion});
-const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer,reducedMotion,
-  initialNight:new URLSearchParams(location.search).get('time')==='night'});
+const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer});
+let daylightStartedAt;
 const nightSky=createNightSky(scene,mapScene);
 const walkingSky=createWalkingSky(scene),walkingSunDirection=new THREE.Vector3();
 let paused=reducedMotion.matches;
@@ -143,10 +143,6 @@ function leaveWalking(){
 let frameWidth=170,frameHeight=112,time=0;
 const cameraDirection=new THREE.Vector3(115,125,145).normalize(),sunDirection=new THREE.Vector3(-72,94,54);
 const lightFrame=new THREE.Matrix4(),localSun=new THREE.Vector3();
-canvas.addEventListener('keydown',event=>{
-  if(event.key.toLowerCase()!=='n'||event.repeat||event.ctrlKey||event.metaKey||event.altKey)return;
-  event.preventDefault();daylight.toggle();
-});
 function disposeLife(){
   if(!life)return;
   life.dispose();life=null;
@@ -243,7 +239,7 @@ async function loadWorld(input={}){
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
-    if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,detail,getPlayer:()=>walker,
+    if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
       onView:()=>walkingMode?leaveWalking():enterWalking(),reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
       getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
@@ -255,9 +251,10 @@ async function loadWorld(input={}){
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. New houses face the current center of their settlement and connect by paths. At 3, 5, 8 and 12 connected homes, a well, market, clock tower and town hall appear when there is clear space. Larger towns unlock a water tower, fountain garden, library, guild hall and chapel. V switches between your traveller and overview; N changes day and night.');
+    if(settlement)canvas.setAttribute('aria-label','Your island settlement. WASD moves, Shift runs, Space jumps. Face a nearby tree and press E or click to chop. Each tree gives 2 to 4 logs. Press B to preview a house costing 10 logs; move the pointer to aim, click or Enter to build, Escape to cancel. Red means blocked or unaffordable. House lots follow your facing direction, with doors more likely to face nearby homes. Three homes form a city and connect by paths. City levels 1 through 5 unlock at 3, 6, 9, 12 and 15 homes, marked by a well, market, water tower, fountain garden and town hall. Residents wander the paths. V switches between your traveller and overview. Day and night each last five minutes.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
+    if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
     clearMeasurements();return model;
   }catch(error){
@@ -306,7 +303,7 @@ function metrics(now,interval,cpu){
     trafficCpu:trafficCpu.toFixed(2),detailCpu:detailCpu.toFixed(2),viewCpu:viewCpu.toFixed(2),renderCpu:renderCpu.toFixed(2),
     simulationSeconds:time.toFixed(1),
     simulationCpu:(railway.stats.simulationMs??0).toFixed(2),poseCpu:(railway.stats.poseMs??0).toFixed(2),
-    generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),
+    generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),dayPhase:daylight.phase,dayElapsed:((now-(daylightStartedAt??now))/1000).toFixed(1),
     walking:String(walkingMode),playerX:walker?.position.x.toFixed(3),playerY:walker?.position.y.toFixed(3),playerZ:walker?.position.z.toFixed(3),
     playerGrounded:String(walker?.grounded),playerSwings:String(walker?.stats.swings??0),walkingInstances:String(walkingDetail?.stats.instances??0),
     lifeInstances:String(life?.stats?.instances??life?.stats?.active??0),lifeSheep:String(life?.stats?.sheep??0),lifeBirds:String(life?.stats?.birds??0)});
@@ -315,7 +312,7 @@ function frame(now){
   const start=performance.now(),interval=now-last,dt=THREE.MathUtils.clamp(interval/1000,0,.05);last=now;
   if(model){
     if(!paused)time+=dt;
-    daylight.update(dt,time);nightSky.update();scene.fog.color.copy(scene.background);
+    daylight.update(dt,time,(now-(daylightStartedAt??now))/1000);nightSky.update();scene.fog.color.copy(scene.background);
     let stamp=performance.now();
     railway.update(paused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
@@ -346,7 +343,7 @@ function frame(now){
       groundFocus,groundRadius,groundOnly:groundLayer,
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
-    settlement?.update(dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend});
+    settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:settlement?.cityStreets??detail.cityStreets,visible:walkingWeight>.001,visibilityWeight:walkingWeight,time,night:daylight.night});
@@ -368,7 +365,7 @@ function frame(now){
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
     const renderFocus=groundLayer?walker.renderPosition:view.renderTarget;
-    clockHands.update(time,{focus:renderFocus,placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
+    clockHands.update(daylight.clockTime,{focus:renderFocus,placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       visible:blend<.999,reducedMotion:reducedMotion.matches});
     detail.updateVisibility(activeCamera,{dt,reveal:shaderReady&&blend<.999,reducedMotion:reducedMotion.matches||entryFrame});
     entryFrame=false;detailBase.root.visible=groundLayer||!detail.settled;
@@ -415,7 +412,6 @@ window.__railway={
   get camera(){return {zoom:camera.zoom,width:innerWidth,height:innerHeight,mode:walkingMode?'person':view.mode,mapBlend:renderedMapBlend,following:view.selected,transitioning:characterTransition.active};},
 };
 window.railway=Object.freeze({
-  setNight:enabled=>daylight.setNight(enabled),
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),generateWorld,validateWorld,createStressWorld,
 });

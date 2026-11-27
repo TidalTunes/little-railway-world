@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Box3,Group,Matrix4,Raycaster,Vector3} from 'three';
 import {buildSettlementBuilding} from '../src/settlement-building-assets.js';
-import {SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
+import {SETTLEMENT_BUILDINGS as SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
 import {createPlayerPalette} from '../src/player-palette.js';
 import {M} from '../src/palette.js';
 import {consolidate} from '../src/geometry.js';

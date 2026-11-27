@@ -42,9 +42,9 @@ export function createClockHands(parent,world){
       if(placements!==previousPlacements||revision!==previousRevision||!lastFocus||surfaceDistance(world,focus,lastFocus)>16){
         rebuild(placements,focus);previousPlacements=placements;previousRevision=revision;lastFocus={x:focus.x,z:focus.z};
       }
-      // 12 Hz is more than enough for an unnoticeably smooth clock, and avoids
-      // uploading unchanged instance buffers on the majority of frames.
-      const tick=reducedMotion?0:Math.floor(time*12)/12;
+      // Reduced motion uses deliberate minute steps but still tells the same
+      // time. Normal updates stay bounded instead of uploading every frame.
+      const tick=reducedMotion?Math.floor(time):Math.floor(time*12)/12;
       if(tick===lastTime)return;lastTime=tick;
       let index=0;
       for(const frame of frames)for(const [handIndex,hand]of CLOCK_HANDS.entries()){

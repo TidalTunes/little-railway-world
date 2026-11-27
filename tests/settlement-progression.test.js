@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSettlementGame,SETTLEMENT} from '../src/settlement-game.js';
-import {SETTLEMENT_MILESTONES,settlementMilestone,settlementCenter} from '../src/settlement-progression.js';
-import {settlementHouseRotation,settlementDoor,houseBlocksSettlementPath,sampleSettlementPath} from '../src/settlement-paths.js';
+import {SETTLEMENT_MILESTONES,SETTLEMENT_BUILDINGS,settlementMilestone,settlementCenter,settlementCityLevel} from '../src/settlement-progression.js';
+import {settlementHouseRotation,settlementCenterFacing,settlementDoor,houseBlocksSettlementPath,sampleSettlementPath} from '../src/settlement-paths.js';
 import {farmFootprintsOverlap} from '../src/farm-footprints.js';
 
 const flat=()=>({type:'ground',height:0});
@@ -27,23 +27,26 @@ function blockedCivicTown(surfaceAt=flat){
 
 test('milestone specifications are shared, immutable, and have full art and collision envelopes',()=>{
   assert.deepEqual(SETTLEMENT_MILESTONES.map(({type,houses})=>[type,houses]),[
-    ['well',3],['market',5],['clock',8],['hall',12],['waterTower',16],['plaza',20],['library',24],['guildhall',30],['chapel',36],
+    ['well',3],['market',6],['waterTower',9],['plaza',12],['hall',15],
   ]);
   for(const spec of SETTLEMENT_MILESTONES){
     assert.equal(settlementMilestone(spec.type),spec);assert.ok(Object.isFrozen(spec));
     assert.ok(spec.collisionWidth<=spec.width&&spec.collisionDepth<=spec.depth);
     assert.ok(spec.doorOffset<=spec.depth/2&&spec.height>0);
   }
+  assert.equal(SETTLEMENT_BUILDINGS.length,9);assert.equal(new Set(SETTLEMENT_BUILDINGS.map(spec=>spec.type)).size,9);
+  for(const type of ['clock','library','guildhall','chapel'])assert.ok(settlementMilestone(type),'special city art remains available');
   assert.equal(settlementMilestone('missing'),null);
+  assert.deepEqual([0,1,2,3,5,6,8,9,11,12,14,15,100].map(settlementCityLevel),[0,0,0,1,1,2,2,3,3,4,4,5,5]);
 });
 
-test('frontages face arbitrary city centroids and retain a stable yaw at an exact zero vector',()=>{
+test('civic frontages face arbitrary city centroids and retain a stable yaw at an exact zero vector',()=>{
   const homes=[{x:-3,z:-2,rotation:.37},{x:7,z:2,rotation:1},{x:2,z:9,rotation:-1}];
   const center=settlementCenter({},homes);assert.deepEqual(center,{x:2,z:3});
   for(const point of [{x:10,z:8},{x:-6,z:5},{x:-2,z:-9},{x:1,z:12}]){
-    const rotation=settlementHouseRotation({},point,homes);assertFrontFaces({...point,rotation},center);
+    const rotation=settlementCenterFacing({},point,homes);assertFrontFaces({...point,rotation},center);
   }
-  assert.equal(settlementHouseRotation({},center,homes),.37);
+  assert.equal(settlementCenterFacing({},center,homes),.37);
 });
 
 test('new homes use their connected city, exclude distant outposts and civic structures, and never rotate old homes',()=>{
@@ -51,12 +54,13 @@ test('new homes use their connected city, exclude distant outposts and civic str
   assert.equal(game.build({x:5,z:0}).ok,true);
   const before=game.houses;
   assert.equal(game.build({x:40,z:40}).ok,true);
-  const point={x:5,z:5},preview=game.evaluateBuild(point);assertFrontFaces(preview.house,{x:2.5,z:0});
+  const point={x:5,z:5},preview=game.evaluateBuild(point);
+  assert.equal(preview.house.rotation,settlementHouseRotation({seed:'progression'},point,before,{placement:4}));
   assert.equal(game.build(point).ok,true);
   for(const old of before)assert.equal(game.houses.find(home=>home.id===old.id).rotation,old.rotation);
   assert.equal(game.buildings.length,1,'three connected homes unlock the well despite a separate outpost');
   const connected=game.houses.filter(home=>home.connected),center=settlementCenter({},connected);
-  const next=game.evaluateBuild({x:-5,z:5});assertFrontFaces(next.house,center);
+  const next=game.evaluateBuild({x:-5,z:5});assert.equal(next.house.rotation,settlementHouseRotation({seed:'progression'},next.house,connected,{placement:5}));
   assert.equal(game.houses.find(home=>home.x===40).connected,false);
 });
 
@@ -66,6 +70,7 @@ test('exact thresholds add one free civic building each, with paths and preserve
     const oldHomes=game.houses,result=game.build({x:index*5,z:0});assert.equal(result.ok,true);
     finish(game);
     assert.equal(game.houses.length,index+1);
+    assert.equal(game.clusters[0].level,Math.floor((index+1)/3));assert.equal(game.cities.length,index+1>=3?1:0);
     assert.equal(game.logs,startingLogs-index*SETTLEMENT.houseCost,'civic development never consumes extra logs');
     const eligible=SETTLEMENT_MILESTONES.filter(spec=>spec.houses<=index+1);
     assert.deepEqual(game.buildings.map(building=>building.buildingType),eligible.map(spec=>spec.type));
@@ -118,7 +123,7 @@ test('outpost houses do not trigger city development until an actual connecting 
   const game=make();earn(game);
   assert.equal(game.build({x:16,z:0}).ok,true);assert.equal(game.build({x:23,z:0}).ok,true);
   assert.equal(game.houses.length,3);assert.equal(game.buildings.length,0);assert.deepEqual(game.pendingMilestones,[]);
-  const preview=game.evaluateBuild({x:8,z:0});assertFrontFaces(preview.house,{x:13,z:0});
+  const preview=game.evaluateBuild({x:8,z:0});assert.equal(preview.cityHouseCount,4);
   assert.equal(game.build({x:8,z:0}).ok,true);finish(game);
   assert.ok(game.houses.every(home=>home.connected));assert.deepEqual(game.buildings.map(building=>building.buildingType),['well']);
 });
@@ -159,4 +164,66 @@ test('movement during a bounded pass schedules one final revisit of sites alread
   context.player={x:105,z:100};finish(game,context);
   assert.equal(samples,onePassSamples*2,'a complete pass is followed by one full revisit using the new player anchor');
   assert.equal(game.develop(context).searching,false,'the final stationary pass stays exhausted');
+});
+
+test('lot corners follow the traveller while four seeded doorway choices favour the local centre',()=>{
+  const homes=[{x:0,z:10}],point={x:0,z:0},counts=[0,0,0,0];
+  for(let seed=0;seed<2000;seed++){
+    const rotation=settlementHouseRotation({},point,homes,{seed,placement:2});
+    counts[Math.round(rotation/(Math.PI/2))]++;
+    assert.equal(settlementHouseRotation({},point,homes,{seed,placement:2}),rotation,'repeated previews use no time-dependent randomness');
+  }
+  assert.ok(counts.every(count=>count>50),'every frontage is possible');
+  assert.ok(counts[0]>counts[1]*3&&counts[0]>counts[3]*3&&counts[0]>counts[2]*8,'inward doors dominate without being mandatory');
+  const heading=.367,cornerSet=angle=>[-1,1].flatMap(x=>[-1,1].map(z=>[
+    (x*Math.cos(angle)+z*Math.sin(angle)).toFixed(8),(z*Math.cos(angle)-x*Math.sin(angle)).toFixed(8),
+  ].join(':'))).sort();
+  for(let seed=0;seed<100;seed++){
+    const rotation=settlementHouseRotation({},point,homes,{heading,seed,placement:2});
+    assert.deepEqual(cornerSet(rotation),cornerSet(heading),'doorway randomness must never rotate the square lot corners');
+  }
+  const game=make();earn(game);const pose={x:5,z:5},context={heading};
+  const preview=game.evaluateBuild(pose,context);assert.equal(game.evaluateBuild(pose,context).house.rotation,preview.house.rotation);
+  assert.equal(game.build(pose,context).house.rotation,preview.house.rotation,'commit preserves the preview choice');
+});
+
+test('separate outposts become their own cities at three homes and merge without replacing civic assets',()=>{
+  const game=make();earn(game);
+  for(const x of [5,10,27,32,37]){assert.equal(game.build({x,z:0}).ok,true);finish(game);}
+  assert.equal(game.cities.length,2);assert.ok(game.cities.every(city=>city.houseCount===3&&city.level===1));
+  const before=game.buildings;assert.equal(before.length,2);assert.ok(before.every(building=>building.buildingType==='well'));
+  assert.equal(new Set(before.map(building=>building.id)).size,2,'reward IDs are unique per city');
+  for(const city of game.cities){
+    assert.deepEqual(city.houseIds,game.houses.filter(home=>home.cityId===city.id).map(home=>home.id));
+    assert.equal(game.paths.filter(path=>path.cityId===city.id).length,3,'two home lanes and one civic lane');
+  }
+  assert.equal(game.build({x:18,z:0}).ok,true);finish(game);
+  assert.equal(game.cities.length,1);const city=game.cities[0];
+  assert.equal(city.id,'city:home-1');assert.equal(city.level,2);assert.equal(city.houseCount,7);
+  assert.ok(game.houses.every(home=>home.cityId===city.id));assert.ok(game.paths.every(path=>path.cityId===city.id));
+  assert.ok(game.buildings.every(building=>building.cityId===city.id));
+  for(const old of before){const kept=game.buildings.find(building=>building.id===old.id);assert.ok(kept);assert.equal(kept.x,old.x);assert.equal(kept.z,old.z);assert.equal(kept.rotation,old.rotation);}
+  assert.deepEqual(game.buildings.map(building=>building.buildingType),['well','well','market'],'merging retains both wells and only unlocks the next new type');
+  const snapshot=game.snapshot();game.cities[0].houseIds.length=0;game.snapshot().cities[0].level=99;assert.deepEqual(game.snapshot(),snapshot);
+});
+
+test('pending civic rewards are tracked independently for cities with blocked and clear sites',()=>{
+  const game=make();earn(game);const placements=[];
+  const corridor=point=>Math.abs(point.z)<2.1&&(point.x>=-1.4&&point.x<=11.4||point.x>=38.6&&point.x<=51.4);
+  const restricted={placements,isReadyAt:corridor};
+  for(const x of [5,10,40,45,50]){assert.equal(game.build({x,z:0},restricted).ok,true);finish(game,restricted);}
+  assert.equal(game.cities.length,2);assert.equal(game.buildings.length,0);
+  assert.deepEqual(game.pendingDevelopments.map(({cityId,type})=>[cityId,type]),[['city:home-1','well'],['city:home-4','well']]);
+  finish(game,{placements,isReadyAt:point=>point.x<20||corridor(point)});
+  assert.equal(game.buildings.length,1);assert.equal(game.buildings[0].cityId,'city:home-1');
+  assert.deepEqual(game.pendingDevelopments.map(({cityId,type})=>[cityId,type]),[['city:home-4','well']]);
+  finish(game,{placements,isReadyAt:()=>true});assert.equal(game.buildings.length,2);assert.deepEqual(game.pendingDevelopments,[]);
+});
+
+test('city level remains five after fifteen homes and extra buildings stay reserved for special types',()=>{
+  const game=make();earn(game,160);
+  for(let index=1;index<18;index++){assert.equal(game.build({x:index*5,z:0}).ok,true);finish(game);}
+  assert.equal(game.cities[0].houseCount,18);assert.equal(game.cities[0].level,5);
+  assert.deepEqual(game.buildings.map(building=>building.buildingType),['well','market','waterTower','plaza','hall']);
+  assert.deepEqual(game.pendingMilestones,[]);
 });

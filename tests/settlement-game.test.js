@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSettlementGame,SETTLEMENT,settlementTreeId,treeLogYield} from '../src/settlement-game.js';
+import {houseBlocksSettlementPath} from '../src/settlement-paths.js';
 
 const flat=()=>({type:'ground',height:0});
 const config=()=>({ownerId:'teal',starterHouse:{id:'home-1',x:0,y:0,z:0,rotation:0,kind:'house',scale:1,variant:0,ownerId:'teal'}});
@@ -12,7 +13,8 @@ test('settlements begin with one owned home, no logs, and independent session st
   const input=config(),world={seed:'first',gameplay:input},before=structuredClone(world);
   const game=createSettlementGame(world,{surfaceAt:flat}),other=createSettlementGame(world,{surfaceAt:flat});
   assert.equal(game.logs,0);assert.equal(game.houses.length,1);assert.equal(game.houses[0].ownerId,'teal');
-  assert.equal(game.houses[0].connected,true);assert.deepEqual(world,before);
+  assert.equal(game.houses[0].connected,false);assert.equal(game.houses[0].cityId,null);assert.deepEqual(game.cities,[]);assert.deepEqual(game.paths,[]);
+  assert.deepEqual(game.clusters,[{id:'city:home-1',x:0,z:0,ownerId:'teal',level:0,houseCount:1,houseIds:['home-1']}]);assert.deepEqual(world,before);
   game.houses[0].x=100;game.snapshot().houses[0].z=100;
   assert.equal(game.houses[0].x,0);assert.equal(game.houses[0].z,0);
   game.chop(tree(0));assert.equal(other.logs,0);assert.equal(other.revision,0);
@@ -49,8 +51,8 @@ test('a house costs exactly ten logs, belongs to the player, and repeated overla
   assert.equal(game.build(point).ok,false);assert.equal(game.revision,0);
   earn(game);const before=game.logs,result=game.build(point);
   assert.equal(result.ok,true);assert.equal(game.logs,before-10);
-  assert.equal(result.house.ownerId,'teal');assert.equal(result.house.rotation,-Math.PI/2,'the new front door faces the city centre');
-  assert.equal(result.house.connected,true);assert.equal(game.houses.length,2);
+  assert.equal(result.house.ownerId,'teal');assert.ok(Math.abs(Math.sin(result.house.rotation)+1)<1e-9,'this seeded front door faces inward');
+  assert.equal(result.house.connected,false);assert.equal(game.houses.length,2);assert.equal(game.paths.length,0);
   const after=game.logs,revision=game.revision;
   assert.equal(game.build(point).code,'house-blocked');assert.equal(game.logs,after);assert.equal(game.revision,revision);
 });
@@ -63,7 +65,7 @@ test('city membership follows the house graph and bridges can join earlier outpo
   assert.equal(game.build({x:8,z:0}).connected,true);
   assert.equal(game.houses.find(home=>home.x===16).connected,true,'the new middle house joins both ends');
   assert.equal(game.evaluateBuild({x:23,z:0}).connected,true,'membership grows transitively');
-  assert.ok(game.houses.every(home=>home.cityId==='settlement'));
+  assert.ok(game.houses.every(home=>home.cityId==='city:home-1'));
 });
 
 test('the full rotated footprint rejects water, boundaries and steep terrain even when its center is dry',()=>{
@@ -71,7 +73,7 @@ test('the full rotated footprint rejects water, boundaries and steep terrain eve
   assert.equal(game.evaluateBuild({x:5,z:0}).code,'wet-ground');
   const angled=config();angled.starterHouse.rotation=Math.PI/4;
   game=createSettlementGame({seed:'rules-test',gameplay:angled},{surfaceAt:(x,z)=>({type:x>6.3?'outside':'ground',height:0})});
-  assert.equal(game.evaluateBuild({x:5,z:5}).code,'wet-ground');
+  assert.equal(game.evaluateBuild({x:5,z:5},{heading:Math.PI/4}).code,'wet-ground');
   game=make((x,z)=>({type:'mountain',height:(x-5)*.4}));
   assert.equal(game.evaluateBuild({x:5,z:0}).code,'steep-ground');
   game=make(()=>({type:'mountain',height:2}));earn(game);
@@ -89,7 +91,7 @@ test('blueprints reject unloaded ground, distant locations and the player footpr
   assert.equal(game.evaluateBuild({x:5,z:0},{player:{x:5,z:0}}).code,'player-blocked');
   assert.equal(game.evaluateBuild({x:5,z:0},{player:{x:2.8,z:0}}).valid,true);
   assert.equal(game.evaluateBuild({x:NaN,z:0}).code,'invalid-position');
-  assert.equal(game.evaluateBuild({x:5,z:0,rotation:Infinity}).house.rotation,-Math.PI/2,'a caller cannot override the city orientation');
+  assert.equal(game.evaluateBuild({x:5,z:0,rotation:Infinity}).house.rotation,game.evaluateBuild({x:5,z:0}).house.rotation,'saved placement data cannot override the traveller-facing lot');
 });
 
 test('overview can build at a distance without building over or trapping the persistent traveller',()=>{
@@ -131,19 +133,20 @@ test('house spacing uses oriented foundations instead of oversized circular city
 });
 
 
-test('new homes face the city centre, their lanes join doors, and snapshots cannot mutate them',()=>{
+test('the third home materializes saved door connections and snapshots cannot mutate their paths',()=>{
   const input=config();input.starterHouse.rotation=Math.PI/2;
-  const game=createSettlementGame({seed:'aligned',gameplay:input},{surfaceAt:flat});earn(game);
-  const preview=game.evaluateBuild({x:0,z:5,rotation:-.4});
-  assert.equal(preview.house.rotation,Math.PI);
-  assert.ok(preview.path);assert.equal(preview.path.toHouseId,'home-1');
-  const result=game.build({x:0,z:5,rotation:-.4});
-  assert.equal(result.ok,true);assert.equal(result.house.rotation,Math.PI);
-  assert.equal(result.paths.length,1);assert.equal(result.paths[0].fromHouseId,result.house.id);
-  assert.ok(Math.abs(game.paths[0].points[0].x)<1e-8);
-  assert.equal(game.paths[0].points[0].z,4.1);
-  game.paths[0].points[0].x=100;game.snapshot().paths.length=0;
-  assert.ok(Math.abs(game.paths[0].points[0].x)<1e-8);assert.equal(game.paths.length,1);
+  const game=createSettlementGame({seed:'aligned',gameplay:input},{surfaceAt:flat});earn(game,12);
+  const preview=game.evaluateBuild({x:0,z:5});
+  assert.equal(preview.path,null);assert.deepEqual(preview.paths,[]);
+  const second=game.build({x:0,z:5});assert.equal(second.ok,true);assert.equal(second.paths.length,0);
+  const third=game.build({x:5,z:5});assert.equal(third.ok,true);assert.equal(third.paths.length,2);
+  assert.ok(game.houses.every(home=>home.connected));
+  const oldConnection=game.paths.find(path=>path.fromHouseId===second.house.id);
+  assert.equal(oldConnection.toHouseId,'home-1');
+  assert.ok(Math.abs(oldConnection.points[0].x-Math.sin(second.house.rotation)*.9)<1e-8);
+  assert.ok(Math.abs(oldConnection.points[0].z-(5+Math.cos(second.house.rotation)*.9))<1e-8);
+  const before=game.paths;game.paths[0].points[0].x=100;game.snapshot().paths.length=0;
+  assert.deepEqual(game.paths,before);
 });
 
 test('established lanes stay open and unloaded routes cannot silently become town connections',()=>{
@@ -151,7 +154,9 @@ test('established lanes stay open and unloaded routes cannot silently become tow
   assert.equal(game.evaluateBuild({x:7,z:0},{isReadyAt:p=>p.x<2||p.x>5}).code,'loading');
   assert.equal(game.paths.length,0);
   assert.equal(game.build({x:7,z:0}).ok,true);
-  assert.equal(game.paths.length,1);
+  assert.equal(game.paths.length,0);
+  assert.equal(game.build({x:7,z:7}).ok,true);
+  assert.ok(game.paths.length>=2);
   assert.equal(game.evaluateBuild({x:3.5,z:1.5}).code,'path-blocked');
   const original=game.snapshot();
   assert.equal(game.build({x:3.5,z:1.5}).ok,false);
@@ -163,4 +168,15 @@ test('water separating neighbouring plots does not produce an imaginary city con
   const before=game.snapshot(),preview=game.evaluateBuild({x:5,z:0});
   assert.equal(preview.code,'path-blocked');assert.equal(preview.valid,false);
   assert.equal(game.build({x:5,z:0}).ok,false);assert.deepEqual(game.snapshot(),before);
+});
+
+test('a third house can occupy an unseen future lane and the emerging city reroutes that lane safely',()=>{
+  const game=make();earn(game,20);
+  const second=game.build({x:7,z:0});assert.equal(second.ok,true);assert.deepEqual(game.paths,[]);
+  const third=game.build({x:3.5,z:1.5});assert.equal(third.ok,true);assert.equal(third.paths.length,2);
+  const oldLane=game.paths.find(path=>path.fromHouseId===second.house.id);assert.ok(oldLane);
+  // The former straight route crosses this new foundation. City formation
+  // must route it again instead of exposing the previously planned segment.
+  assert.equal(houseBlocksSettlementPath({},third.house,oldLane,0),false);
+  assert.ok(oldLane.points.length>4);
 });

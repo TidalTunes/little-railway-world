@@ -7,13 +7,30 @@ const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 const finitePoint=point=>Number.isFinite(point?.x)&&Number.isFinite(point?.z);
 const radiusOf=item=>item.radius??({tree:.85,rock:.6,cactus:.7,landmark:2,station:3.42,apartment:2.05,civic:2.8,tower:2.1}[item.kind]??1)*(item.scale??1);
 
-/** New frontages face the homes in their own city at placement time. Existing
- * homes retain their saved yaw as the centre of mass moves with later growth. */
-export function settlementHouseRotation(world,point,homes){
+/** Civic frontages look toward the local homes at placement time. Their
+ * saved yaw stays fixed as the centre of mass moves with later growth. */
+export function settlementCenterFacing(world,point,homes){
   if(!homes.length)return 0;
   let x=0,z=0;
   for(const home of homes){const delta=surfaceDisplacement(world,point,home);x+=delta.x;z+=delta.z;}
   return Math.hypot(x,z)>1e-7?Math.atan2(x,z):(homes[0].rotation??0);
+}
+
+/** A square lot follows the traveller's facing. Only the choice of frontage
+ * changes: four quarter-turns preserve exactly the same corners. A saved seed
+ * gives each placement its own preference without frame-to-frame randomness. */
+export function settlementHouseRotation(world,point,homes,{heading=0,seed=world.seed??0,placement=0}={}){
+  const axis=Number.isFinite(heading)?heading:0;
+  let value=2166136261;
+  for(const letter of `${seed}:${placement}:frontage`){value^=letter.charCodeAt(0);value=Math.imul(value,16777619);}
+  // Final avalanche keeps adjacent placement numbers and seeds decorrelated.
+  value^=value>>>16;value=Math.imul(value,0x7feb352d);value^=value>>>15;value=Math.imul(value,0x846ca68b);value^=value>>>16;
+  const draw=(value>>>0)/4294967296,center=settlementCenterFacing(world,point,homes);
+  const weights=Array.from({length:4},(_,quarter)=>homes.length?Math.exp(1.45*Math.cos(axis+quarter*Math.PI/2-center)):1);
+  let remaining=draw*weights.reduce((sum,weight)=>sum+weight,0);
+  for(let quarter=0;quarter<4;quarter++){
+    remaining-=weights[quarter];if(remaining<=0||quarter===3)return axis+quarter*Math.PI/2;
+  }
 }
 
 export function settlementDoor(world,house,offset=house.doorOffset??SETTLEMENT_PATH.doorOffset){

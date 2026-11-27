@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import {dayCycleAt} from './day-cycle.js';
 
 // Shared uniforms keep every streamed cell and instanced carriage in sync.
-// Time is simulation time: pause, reduced motion, and hidden tabs stop it too.
+// Animation time can pause while the independent day/night calendar continues.
 export const styleUniforms={night:{value:0},time:{value:0}};
 const styledMaterials=new WeakSet();
 
@@ -65,17 +66,16 @@ export function applySceneStyle(material,{kind=material.userData.sceneStyle??'as
   return material;
 }
 
-export function createDaylight({scene,mapScene,sky,sun,fill,renderer,reducedMotion,initialNight=false}){
-  let target=initialNight?1:0,night=target;
+export function createDaylight({scene,mapScene,sky,sun,fill,renderer}){
+  const cycle=dayCycleAt(0);
   const dayBackground=new THREE.Color(0xb8d5d9),nightBackground=new THREE.Color(0x081626);
   const daySky=new THREE.Color(0xc5e6ef),nightSky=new THREE.Color(0x6786b7);
   const dayGround=new THREE.Color(0x6d806c),nightGround=new THREE.Color(0x243c5e);
   const daySun=new THREE.Color(0xffe2ac),nightSun=new THREE.Color(0xb7d6ff);
   const dayFill=new THREE.Color(0xa1c7e5),nightFill=new THREE.Color(0x637eac);
   const background=dayBackground.clone();scene.background=mapScene.background=background;
-  function update(dt,time){
-    night=reducedMotion.matches?target:THREE.MathUtils.damp(night,target,2.5,dt);
-    if(Math.abs(night-target)<.0001)night=target;
+  function update(dt,time,elapsedSeconds=time){
+    const night=dayCycleAt(elapsedSeconds,cycle).night;
     styleUniforms.night.value=night;styleUniforms.time.value=time;
     background.copy(dayBackground).lerp(nightBackground,night);
     sky.color.copy(daySky).lerp(nightSky,night);sky.groundColor.copy(dayGround).lerp(nightGround,night);
@@ -86,5 +86,5 @@ export function createDaylight({scene,mapScene,sky,sun,fill,renderer,reducedMoti
     return night;
   }
   update(0,0);
-  return{update,toggle(){target=1-target;},setNight(value){target=value?1:0;},get night(){return night;},get target(){return target;}};
+  return{update,get night(){return cycle.night;},get phase(){return cycle.phase;},get clockTime(){return cycle.clockTime;}};
 }

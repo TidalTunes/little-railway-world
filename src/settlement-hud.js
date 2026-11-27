@@ -110,13 +110,13 @@ export function createSettlementHud({
 
   function update(next = {}) {
     current = { ...current, ...next };
-    const { logs = 0, houses = 1, connectedHouses = houses, tool = 'axe', walking = true,
+    const { logs = 0, houses = 1, connectedHouses = houses, cityHouses = connectedHouses, cityLevel = Math.min(5,Math.floor(cityHouses/3)), tool = 'axe', walking = true,
       ready = true, canBuild = false, connected = true, reason = '', targetTree = false,
       message = '', visible = true, buildings = [], pendingMilestones = [] } = current;
     const earned = new Set(buildings.map(building => building.buildingType));
     const pending = new Set(pendingMilestones);
     const milestoneState = SETTLEMENT_MILESTONES.map(milestone => [earned.has(milestone.type), pending.has(milestone.type)]);
-    const signature = JSON.stringify([logs, houses, connectedHouses, tool, walking, ready,
+    const signature = JSON.stringify([logs, houses, connectedHouses, cityHouses, cityLevel, tool, walking, ready,
       Boolean(canBuild), Boolean(connected), reason, Boolean(targetTree), message, visible, milestoneState]);
     if (signature === rendered) return;
     rendered = signature;
@@ -136,7 +136,7 @@ export function createSettlementHud({
       mark.dataset.connected = String(index < connectedHouses);
     });
     nodes.stockpile.setAttribute('aria-label', `${logs} logs. Ten logs builds one house.`);
-    nodes.homes.setAttribute('aria-label', `${houses} ${houses === 1 ? 'house' : 'houses'}, ${connectedHouses} connected to your settlement.`);
+    nodes.homes.setAttribute('aria-label', `${houses} ${houses === 1 ? 'house' : 'houses'}. ${cityLevel ? `Nearest city: level ${cityLevel}, ${cityHouses} homes.` : `${cityHouses} nearby ${cityHouses===1?'home':'homes'}; three form a city.`}`);
     let developmentAnnouncement = '';
     earnedMarks.forEach(mark => {
       const milestone = SETTLEMENT_MILESTONES.find(item => item.type === mark.dataset.milestone);
@@ -149,12 +149,12 @@ export function createSettlementHud({
     nodes.development.dataset.complete = String(!upcoming);
     if (upcoming) {
       const previous = SETTLEMENT_MILESTONES[upcomingIndex - 1]?.houses ?? 0;
-      const progress = Math.max(0, Math.min(1, (connectedHouses - previous) / (upcoming.houses - previous)));
-      const waitingForSpace = pending.has(upcoming.type) || connectedHouses >= upcoming.houses;
+      const progress = Math.max(0, Math.min(1, (cityHouses - previous) / (upcoming.houses - previous)));
+      const waitingForSpace = pending.has(upcoming.type) || cityHouses >= upcoming.houses;
       setIcon(nodes['next-symbol'], upcoming.type);
       nodes.next.dataset.pending = String(waitingForSpace);
       nodes.progress.setAttribute('stroke-dasharray', `${progress} 1`);
-      const needed = Math.max(0, upcoming.houses - connectedHouses);
+      const needed = Math.max(0, upcoming.houses - cityHouses);
       developmentAnnouncement = waitingForSpace
         ? `Free ${milestoneNames[upcoming.type]} earned at ${upcoming.houses} connected homes. Clear space near the settlement for it to appear.`
         : `${needed} more connected ${needed === 1 ? 'home unlocks' : 'homes unlock'} a free ${milestoneNames[upcoming.type]} at ${upcoming.houses} homes.`;
@@ -164,7 +164,7 @@ export function createSettlementHud({
     const placementKind = connected ? 'link' : 'outpost';
     setIcon(nodes.placement, placementKind);
     nodes.placement.dataset.connected = String(Boolean(connected));
-    nodes.placement.setAttribute('aria-label', connected ? 'Joins your settlement with a path' : 'Starts a new outpost');
+    nodes.placement.setAttribute('aria-label', connected ? 'Joins a city with a path' : 'Places a home; paths form at three nearby homes');
     const invalidReason = reason || (logs < 10 ? 'Gather ten logs to build a house.' : 'Choose clear, level ground.');
     const validity = canBuild ? 'check' : logs < 10 ? 'logs' : /tree|forest/i.test(reason) ? 'tree' : /water|dry ground/i.test(reason) ? 'water' : 'blocked';
     setIcon(nodes.validity, validity);
@@ -176,7 +176,7 @@ export function createSettlementHud({
     buttons.house.setAttribute('aria-label', `Place a house. Costs ten logs. ${logs >= 10 ? 'Enough logs gathered.' : `${10 - logs} more logs needed.`}`);
     for (const key of ['axe', 'house', 'view', 'cancel']) buttons[key].disabled = !ready;
     buttons.build.disabled = !ready || !canBuild;
-    buttons.build.setAttribute('aria-label', canBuild ? `Build house. Spend ten logs. ${connected ? 'Joins your settlement.' : 'Starts a new outpost.'}` : `Cannot build here. ${invalidReason}`);
+    buttons.build.setAttribute('aria-label', canBuild ? `Build house. Spend ten logs. ${connected ? 'Joins a city.' : 'Paths form at three nearby homes.'}` : `Cannot build here. ${invalidReason}`);
     setIcon(nodes['view-icon'], walking ? 'view' : 'person');
     buttons.view.setAttribute('aria-label', walking ? 'Switch to overview' : 'Return to your traveller');
     // Aim validity is described on its symbols, rather than announced each frame.

@@ -1,27 +1,35 @@
 import {surfaceDisplacement,surfaceOffset} from './world-surface.js';
 
-/** Art envelopes and unlock thresholds are shared by the rules, renderer and
- * wordless HUD. Bonus civic buildings never count as homes themselves. */
-export const SETTLEMENT_MILESTONES=Object.freeze([
-  {type:'well',houses:3,width:2.2,depth:2.2,doorOffset:.9,height:1.8,collisionWidth:1.3,collisionDepth:1.14,collisionOffsetZ:0},
-  {type:'market',houses:5,width:3.4,depth:2.6,doorOffset:1.12,height:2.3,collisionWidth:2.98,collisionDepth:2.02,collisionOffsetZ:0},
-  {type:'clock',houses:8,width:2.2,depth:2.2,doorOffset:.9,height:4.5,collisionWidth:1.66,collisionDepth:1.66,collisionOffsetZ:0},
-  {type:'hall',houses:12,width:3.9,depth:3.9,doorOffset:1.9,height:4.9,collisionWidth:3.48,collisionDepth:3.4,collisionOffsetZ:.08},
-  {type:'waterTower',houses:16,width:2.3,depth:2.3,doorOffset:1.1,height:4.0,collisionWidth:1.30,collisionDepth:1.30,collisionOffsetZ:0},
-  {type:'plaza',houses:20,width:5.2,depth:5.2,doorOffset:2.48,height:.9,collisionWidth:1.72,collisionDepth:1.72,collisionOffsetZ:0,
+/** Full civic art catalog, independent of ordinary city progression. Bonus
+ * buildings reserve their actual art envelopes and never count as homes. */
+export const SETTLEMENT_BUILDINGS=Object.freeze([
+  {type:'well',width:2.2,depth:2.2,doorOffset:.9,height:1.8,collisionWidth:1.3,collisionDepth:1.14,collisionOffsetZ:0},
+  {type:'market',width:3.4,depth:2.6,doorOffset:1.12,height:2.3,collisionWidth:2.98,collisionDepth:2.02,collisionOffsetZ:0},
+  {type:'clock',width:2.2,depth:2.2,doorOffset:.9,height:4.5,collisionWidth:1.66,collisionDepth:1.66,collisionOffsetZ:0},
+  {type:'hall',width:3.9,depth:3.9,doorOffset:1.9,height:4.9,collisionWidth:3.48,collisionDepth:3.4,collisionOffsetZ:.08},
+  {type:'waterTower',width:2.3,depth:2.3,doorOffset:1.1,height:4.0,collisionWidth:1.30,collisionDepth:1.30,collisionOffsetZ:0},
+  {type:'plaza',width:5.2,depth:5.2,doorOffset:2.48,height:.9,collisionWidth:1.72,collisionDepth:1.72,collisionOffsetZ:0,
     collisionBoxes:Object.freeze([
       {x:0,z:0,width:1.72,depth:1.72},
       ...[-1,1].map(side=>({x:side*1.52,z:0,width:.38,depth:1.20})),
       ...[-1,1].flatMap(x=>[-1,1].map(z=>({x:x*1.43,z:z*1.43,width:1,depth:1}))),
     ].map(Object.freeze))},
-  {type:'library',houses:24,width:3.9,depth:3.9,doorOffset:1.9,height:3.9,collisionWidth:3.48,collisionDepth:3.4,collisionOffsetZ:.08},
-  {type:'guildhall',houses:30,width:3.9,depth:3.9,doorOffset:1.9,height:4.0,collisionWidth:3.48,collisionDepth:3.4,collisionOffsetZ:.08},
-  {type:'chapel',houses:36,width:2.2,depth:2.9,doorOffset:1.4,height:4.3,collisionWidth:1.82,collisionDepth:2.60,collisionOffsetZ:0},
+  {type:'library',width:3.9,depth:3.9,doorOffset:1.9,height:3.9,collisionWidth:3.48,collisionDepth:3.4,collisionOffsetZ:.08},
+  {type:'guildhall',width:3.9,depth:3.9,doorOffset:1.9,height:4.0,collisionWidth:3.48,collisionDepth:3.4,collisionOffsetZ:.08},
+  {type:'chapel',width:2.2,depth:2.9,doorOffset:1.4,height:4.3,collisionWidth:1.82,collisionDepth:2.60,collisionOffsetZ:0},
 ].map(Object.freeze));
 
-export const SETTLEMENT_CIVIC_SEARCH=Object.freeze({routeBudget:4,maxRouteNodes:700});
+// Ordinary cities share five readable growth stages. The remaining art stays
+// available for future specialised settlements without entering this sequence.
+export const SETTLEMENT_MILESTONES=Object.freeze([
+  ['well',3],['market',6],['waterTower',9],['plaza',12],['hall',15],
+].map(([type,houses])=>Object.freeze({...SETTLEMENT_BUILDINGS.find(spec=>spec.type===type),houses})));
 
-export function settlementMilestone(type){return SETTLEMENT_MILESTONES.find(spec=>spec.type===type)??null;}
+export const settlementCityLevel=houseCount=>Math.min(5,Math.floor(Math.max(0,houseCount)/3));
+
+export const SETTLEMENT_CIVIC_SEARCH=Object.freeze({routeBudget:4,candidateBudget:64,maxRouteNodes:700});
+
+export function settlementMilestone(type){return SETTLEMENT_MILESTONES.find(spec=>spec.type===type)??SETTLEMENT_BUILDINGS.find(spec=>spec.type===type)??null;}
 
 export function settlementCenter(world,homes){
   if(!homes.length)return null;

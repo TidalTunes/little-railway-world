@@ -7,7 +7,7 @@ import {consolidate} from '../src/geometry.js';
 import {M} from '../src/palette.js';
 import {createWalkingPlayer} from '../src/walking-player.js';
 import {buildSettlementBuilding} from '../src/settlement-building-assets.js';
-import {SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
+import {SETTLEMENT_BUILDINGS as SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
 
 function world(){return {seed:'art-test',players:[{id:'teal',color:{l:.62,c:.12,h:170}}],
   gameplay:{ownerId:'teal'},outline:[[-100,-100],[100,-100],[100,100],[-100,100]],mountains:[],cities:[],stations:[],placements:[],lines:[],
@@ -15,7 +15,7 @@ function world(){return {seed:'art-test',players:[{id:'teal',color:{l:.62,c:.12,
 function setup(){const scene=new Group(),map=new Group(),model=world();return{scene,map,model,art:createSettlementArt(scene,map,model)};}
 const homes=()=>Array.from({length:4},(_,variant)=>({id:`home-${variant}`,kind:'house',x:variant*5-7,y:variant*.2,z:variant*3+2,
   rotation:variant*Math.PI/5,variant,ownerId:'teal',scale:1}));
-const civics=()=>SETTLEMENT_MILESTONES.map((spec,index)=>({...spec,id:`civic-${spec.type}`,kind:'civic',buildingType:spec.type,
+const civics=()=>SETTLEMENT_MILESTONES.map((spec,index)=>({...spec,id:`civic-${spec.type}`,kind:'civic',buildingType:spec.type,cityId:'city:home-0',
   x:index*6-9,y:index*.08,z:-6-index,rotation:index*Math.PI/6,ownerId:'teal',scale:1}));
 function nearBounds(actual,expected){for(const bound of ['min','max'])for(const axis of ['x','y','z'])
   assert.ok(Math.abs(actual[bound][axis]-expected[bound][axis])<1e-5,`${bound}.${axis}: ${actual[bound][axis]} versus ${expected[bound][axis]}`);}
@@ -141,7 +141,7 @@ test('milestone templates retain their exact placement, distinguish map marks an
       nearBounds(actual,expected);
       assert.ok(art.meshes.some(mesh=>mesh.userData.buildingType===item.buildingType));
       const marker=art.mapRoot.getObjectByName(`settlement-civic-map-${item.buildingType}`),pose=new Matrix4();marker.getMatrixAt(0,pose);
-      assert.equal(marker.count,1);assert.equal(pose.elements[12],item.x);assert.equal(pose.elements[14],item.z);
+      assert.equal(marker.count,0,'city landmarks defer to the single level numeral');
       glyphs.push(Array.from(marker.geometry.attributes.position.array).join(','));
       for(const mesh of original.children)mesh.geometry.dispose();
     }
@@ -193,5 +193,15 @@ test('the connection preview follows the proposed door path instead of crossing 
       assert.equal(preview.geometry.attributes.position.getX(4),8);
     }
     art.preview({house:homes()[0],valid:true,connected:false},{visible:true});assert.equal(path.visible,false);assert.equal(art.mapRoot.getObjectByName('settlement-path-preview').visible,false);
+  }finally{art.dispose();}
+});
+
+
+test('the far map retains only isolated home symbols rather than logos for city members',()=>{
+  const {art}=setup();
+  try{
+    art.sync(homes().map((home,index)=>({...home,cityId:index<3?'city:one':null})));
+    const markers=art.mapRoot.children.filter(mesh=>mesh.isInstancedMesh&&!mesh.userData.buildingType);
+    assert.equal(markers.length,1);assert.equal(markers[0].count,1);
   }finally{art.dispose();}
 });

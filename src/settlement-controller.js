@@ -2,17 +2,20 @@ import * as THREE from 'three';
 import {createSettlementGame,SETTLEMENT} from './settlement-game.js';
 import {createSettlementArt} from './settlement-art.js';
 import {createSettlementHud} from './settlement-hud.js';
+import {createSettlementResidents} from './settlement-residents.js';
+import {createCityLevelMarkers} from './city-level-markers.js';
 import {surfaceDistance,surfaceOffset} from './world-surface.js';
 
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
-export function createSettlementController({canvas,world,parent,mapParent,detail,getPlayer,onView,reducedMotion}){
+export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,reducedMotion}){
   const game=createSettlementGame(world),art=createSettlementArt(parent,mapParent,world);
+  const residents=createSettlementResidents(parent,world),levels=createCityLevelMarkers(markerParent,markerMapParent,world);
   let snapshot=game.snapshot(),tool='axe',pointer=null,press=null,placement=null,targetTree=null;
   let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingHit=null,message='',messageTime=0;
   let revision=-1,detailRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),intersection=new THREE.Vector3();
-  const listeners=[];
+  const listeners=[],facing=new THREE.Vector3();
   const focusCanvas=()=>canvas.focus({preventScroll:true});
   function selectTool(next){tool=next;pointer=null;pendingBuild=false;previewKey='';message='';focusCanvas();}
   const hud=createSettlementHud({parent:canvas.parentElement,playerColor:'#257d70',
@@ -44,6 +47,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       const previousCount=snapshot.houses.length,previousBuildings=snapshot.buildings?.length??0;snapshot=game.snapshot();
       if(revision<0||snapshot.houses.length!==previousCount||(snapshot.buildings?.length??0)!==previousBuildings){
         art.sync(snapshot.houses,snapshot.paths??[],snapshot.buildings??[]);houseMeshes=art.meshes;
+        residents.sync(snapshot);levels.sync(snapshot.cities??[]);
       }
       revision=game.revision;
     }
@@ -80,7 +84,9 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
   // Overview lifts the arm's-reach limit, but the traveller still occupies a
   // real footprint. Never allow a new house to trap the persistent character.
   const isReadyAt=point=>detail.hasCoverageAt(point,1);
-  function context(player,pose){return {player:player.position,enforceReach:walking,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
+  function context(player,pose){
+    const heading=walking||!camera?player.heading:Math.atan2(camera.getWorldDirection(facing).x,facing.z);
+    return {player:player.position,heading,enforceReach:walking,placements:scenery,ready:detail.hasCoverageAt(pose,2),isReadyAt};}
   function notify(text){message=text;messageTime=3.2;}
   function develop(player){
     if(!snapshot.pendingMilestones?.length)return;
@@ -89,7 +95,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
   }
   synchronize();
   return{
-    game,art,hud,
+    game,art,hud,residents,
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${revision}`;},
     get cityStreets(){synchronize();return streets;},
     getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
@@ -112,7 +118,7 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       if(!tree)notify('Step closer and face a tree');
     },
     cancelBuild(){selectTool('axe');},
-    update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0}={}){
+    update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0,walkingWeight=Number(walkingNow),focus,viewportHeight=800}={}){
       if(disposed)return;
       walking=walkingNow;transitioning=transitionNow;camera=activeCamera;const player=getPlayer();
       detail.updateTrees(reducedMotion?.matches?1:dt);synchronize();
@@ -138,26 +144,36 @@ export function createSettlementController({canvas,world,parent,mapParent,detail
       targetTree=ready&&walking&&!transitioning&&tool==='axe'?findTree(player):null;
       if(ready&&tool==='house'&&!transitioning){
         const pose=candidate(player),buildContext=context(player,pose);
-        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${walking}:${buildContext.ready}:${revision}:${detailRevision}`;
+        const key=`${pose.x}:${pose.z}:${player.position.x}:${player.position.z}:${buildContext.heading}:${walking}:${buildContext.ready}:${revision}:${detailRevision}`;
         // An idle blueprint keeps its route. Re-plan only after aim, world or
         // player changes; the final build still validates the current scene.
         if(key!==previewKey){placement=game.evaluateBuild(pose,buildContext);previewKey=key;}
         if(pendingBuild){
           const result=game.build(pose,context(player,pose));
-          if(result.ok){notify(result.connected?'House built · settlement expanded':'House built · new outpost');synchronize();tool='axe';pointer=null;}
+          if(result.ok){notify(result.connected?'House built · city expanded':result.cityHouseCount>1?'House built · settlement expanded':'House built · new outpost');synchronize();tool='axe';pointer=null;}
           else{message='';messageTime=0;}
         }
       }else{placement=null;previewKey='';}
       pendingBuild=false;
       art.preview(placement,{visible:tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
-      hud.update({logs:snapshot.logs,houses:snapshot.houses.length,connectedHouses,buildings:snapshot.buildings??[],pendingMilestones:snapshot.pendingMilestones??[],tool,walking,ready,
+      const target=placement?.house??player?.position??{x:0,z:0};
+      let nearest=null,distance=Infinity;
+      for(const cluster of snapshot.clusters??snapshot.cities??[]){const d=surfaceDistance(world,cluster,target);if(d<distance){distance=d;nearest=cluster;}}
+      if(placement?.connectionHouseId)nearest=(snapshot.clusters??[]).find(cluster=>cluster.houseIds.includes(placement.connectionHouseId))??nearest;
+      else if(placement&&!placement.connectionHouseId)nearest=null;
+      const cityBuildings=(snapshot.buildings??[]).filter(item=>item.cityId===nearest?.id);
+      const cityPending=(snapshot.pendingDevelopments??[]).filter(item=>item.cityId===nearest?.id).map(item=>item.type);
+      residents.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches});
+      levels.update({camera,mapBlend,walkingWeight,viewportHeight});
+      hud.update({logs:snapshot.logs,houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
         canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message});
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
+        cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(residents.stats?.residents??residents.stats?.count??0),
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
     },
-    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();},
+    dispose(){disposed=true;for(const remove of listeners)remove();hud.dispose();art.dispose();residents.dispose();levels.dispose();},
   };
 }

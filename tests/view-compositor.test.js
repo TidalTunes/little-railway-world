@@ -139,3 +139,26 @@ test('surface and depth proxy programs remain retained across preparations and f
   await assert.rejects(pending,/depth program failed/);
   assert.equal(f.state.calls.length,20);f.restored();f.dispose();
 });
+
+test('day and night exposure changes remain continuous across direct detail and crossfade renders',()=>{
+  const world=new THREE.Scene(),map=new THREE.Scene(),view=new THREE.Camera(),draws=[];
+  const renderer={toneMappingExposure:1.15,setRenderTarget(){},render(source){
+    draws.push({source,exposure:source===world?this.toneMappingExposure:source.children[0]?.material?.uniforms?.toneMappingExposure?.value});
+  }};
+  const compositor=createViewCompositor(renderer);
+  try{
+    // Lighting updates after compositor construction, including while a zoom
+    // crosses the boundary. Both rendering paths must expose the same scene.
+    for(const exposure of [1.03,.90,.965,1.03]){
+      renderer.toneMappingExposure=exposure;
+      compositor.render(world,map,view,0);const direct=draws.at(-1);
+      assert.equal(direct.source,world);assert.equal(direct.exposure,exposure);
+      for(const blend of [.0011,.5,.9989]){
+        compositor.render(world,map,view,blend);
+        const composite=draws.at(-1);assert.notEqual(composite.source,world);assert.notEqual(composite.source,map);
+        assert.equal(composite.exposure,direct.exposure,'a blend cannot brighten the detailed scene back to startup exposure');
+      }
+      compositor.render(world,map,view,1);assert.equal(draws.at(-1).source,map);
+    }
+  }finally{compositor.dispose();}
+});

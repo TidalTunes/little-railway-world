@@ -119,6 +119,9 @@ export function createViewCompositor(renderer){
       renderer.setRenderTarget(worldTarget);renderer.render(world,view);
       renderer.setRenderTarget(mapTarget);renderer.render(map,view);
       renderer.setRenderTarget(null);material.uniforms.blend.value=blend;
+      // Offscreen detail is still linear. Its final ACES pass must use the
+      // current daylight exposure, just like a direct detailed frame.
+      material.uniforms.toneMappingExposure.value=renderer.toneMappingExposure;
       renderer.render(scene,camera);
     },
     dispose(){

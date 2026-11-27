@@ -1,8 +1,8 @@
 import {worldSurface} from './world-model.js';
 import {surfaceDistance,surfaceDisplacement,surfaceOffset} from './world-surface.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
-import {settlementHouseRotation,planSettlementPath,houseBlocksSettlementPath,sampleSettlementPath} from './settlement-paths.js';
-import {pendingSettlementMilestones,settlementCivicSites,SETTLEMENT_CIVIC_SEARCH} from './settlement-progression.js';
+import {settlementHouseRotation,settlementCenterFacing,planSettlementPath,houseBlocksSettlementPath,sampleSettlementPath} from './settlement-paths.js';
+import {pendingSettlementMilestones,settlementCenter,settlementCityLevel,settlementCivicSites,SETTLEMENT_CIVIC_SEARCH} from './settlement-progression.js';
 
 export const SETTLEMENT=Object.freeze({houseCost:10,houseWidth:2.2,houseDepth:2.2,
   connectionRange:9,buildReach:7,chopReach:1.1,clearance:.22,maxHeightDifference:.14,
@@ -52,37 +52,56 @@ function overlaps(world,house,item){
 export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z)=>worldSurface(world,x,z)}={}){
   if(!config?.starterHouse||!finitePoint(config.starterHouse))throw new TypeError('Settlement requires a finite starter house');
   const ownerId=config.ownerId??config.starterHouse.ownerId??'teal';
-  const starter={...copy(config.starterHouse),kind:'house',ownerId,cityId:'settlement',connected:true};
-  const homes=[starter],buildings=[],paths=[],removed=new Set();
+  const starter={...copy(config.starterHouse),kind:'house',ownerId,cityId:null,connected:false};
+  const homes=[starter],buildings=[],paths=[],links=[],removed=new Set();
+  let cities=[],clusters=[];
   let logs=0,revision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
 
-  function homeComponents(){
-    const groups=new Map(homes.map(home=>[home.id,home.id]));
+  function homeComponents(items=homes,edges=links){
+    const groups=new Map(items.map(home=>[home.id,home.id])),order=new Map(items.map((home,index)=>[home.id,index]));
     const root=id=>{while(groups.get(id)!==id)id=groups.get(id);return id;};
-    for(const path of paths){
-      if(!groups.has(path.fromHouseId)||!groups.has(path.toHouseId))continue;
-      const a=root(path.fromHouseId),b=root(path.toHouseId);if(a!==b)groups.set(b,a);
+    for(const edge of edges){
+      if(!groups.has(edge.fromHouseId)||!groups.has(edge.toHouseId))continue;
+      const a=root(edge.fromHouseId),b=root(edge.toHouseId);
+      if(a!==b)groups.set(order.get(a)<order.get(b)?b:a,order.get(a)<order.get(b)?a:b);
     }
-    return new Map(homes.map(home=>[home.id,root(home.id)]));
+    return new Map(items.map(home=>[home.id,root(home.id)]));
   }
 
+  const cityIdFor=anchor=>`city:${anchor}`;
   function refreshConnections(){
-    const components=homeComponents(),city=components.get(starter.id);
-    for(const home of homes){home.connected=components.get(home.id)===city;home.cityId=home.connected?'settlement':null;}
+    const components=homeComponents(),groups=new Map();
+    for(const home of homes){const root=components.get(home.id);if(!groups.has(root))groups.set(root,[]);groups.get(root).push(home);}
+    const previous=new Map(homes.map(home=>[home.id,home.cityId]));
+    cities=[];clusters=[];
+    for(const [anchor,cluster] of groups){
+      const cityId=cluster.length>=3?cityIdFor(anchor):null;
+      for(const home of cluster){home.connected=Boolean(cityId);home.cityId=cityId;}
+      const center=settlementCenter(world,cluster),record={id:cityIdFor(anchor),...center,ownerId,level:settlementCityLevel(cluster.length),houseCount:cluster.length,houseIds:cluster.map(home=>home.id)};
+      clusters.push(record);
+      if(!cityId)continue;
+      const oldIds=new Set(cluster.map(home=>previous.get(home.id)).filter(Boolean));
+      for(const building of buildings)if(oldIds.has(building.cityId))building.cityId=cityId;
+      cities.push(record);
+    }
+    const byId=new Map([...homes,...buildings].map(item=>[item.id,item]));
+    for(const path of paths)path.cityId=byId.get(path.fromHouseId)?.cityId??byId.get(path.toHouseId)?.cityId??null;
   }
 
   function orientationHomes(point){
-    if(!finitePoint(point))return [starter];
+    if(!finitePoint(point))return [];
     const components=homeComponents(),reached=new Set();
     for(const home of homes)if(surfaceDistance(world,point,home)<=SETTLEMENT.connectionRange)reached.add(components.get(home.id));
-    if(!reached.size){
-      let nearest=homes[0],distance=Infinity;
-      for(const home of homes){const d=surfaceDistance(world,point,home);if(d<distance){distance=d;nearest=home;}}
-      reached.add(components.get(nearest.id));
-    }
+    // A distant outpost has no imaginary relationship with a far-away town.
     return homes.filter(home=>reached.has(components.get(home.id)));
   }
+
+  function pendingDevelopments(){
+    return cities.flatMap(city=>pendingSettlementMilestones(homes.filter(home=>home.cityId===city.id),buildings.filter(building=>building.cityId===city.id))
+      .map(spec=>({...spec,cityId:city.id})));
+  }
+  const pendingTypes=()=>[...new Set(pendingDevelopments().map(spec=>spec.type))];
 
   function validateSite(building,{player,placements=[],ready=true,isReadyAt}={}){
     if(!finitePoint(building)||!Number.isFinite(building.rotation))return ['invalid-position','Choose a place for your house'];
@@ -111,92 +130,101 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     return null;
   }
 
-  function evaluateBuild(pose,{player,placements=[],ready=true,enforceReach=true,isReadyAt}={}){
-    const house=houseFootprint({kind:'house',x:pose?.x,z:pose?.z,rotation:finitePoint(pose)?settlementHouseRotation(world,pose,orientationHomes(pose)):0,
+  function evaluateBuild(pose,{player,heading=0,placements=[],ready=true,enforceReach=true,isReadyAt}={}){
+    const neighbours=orientationHomes(pose);
+    const house=houseFootprint({id:`home-${nextHouse}`,kind:'house',x:pose?.x,z:pose?.z,
+      rotation:finitePoint(pose)?settlementHouseRotation(world,pose,neighbours,{heading,seed:world.seed,placement:nextHouse}):0,
       scale:1,ownerId,variant:nextHouse%4});
     let connectionHouseId=null,distanceToCity=Infinity;
-    if(finitePoint(house))for(const home of homes)if(home.connected){
-      const distance=surfaceDistance(world,house,home);
-      if(distance<distanceToCity){distanceToCity=distance;connectionHouseId=home.id;}
-    }
-    const connected=distanceToCity<=SETTLEMENT.connectionRange;
+    for(const home of neighbours){const distance=surfaceDistance(world,house,home);if(distance<distanceToCity){distanceToCity=distance;connectionHouseId=home.id;}}
+    const cityHouseCount=neighbours.length+1,connected=cityHouseCount>=3;
+    const cityId=connected?cityIdFor(neighbours[0].id):null;
+    house.cityId=cityId;house.connected=connected;
     const base={house,cost:SETTLEMENT.houseCost,affordable:logs>=SETTLEMENT.houseCost,
-      connected,connectionHouseId:connected?connectionHouseId:null,distanceToCity,path:null,paths:[]};
+      connected,cityId,cityHouseCount,cityLevel:settlementCityLevel(cityHouseCount),connectionHouseId,distanceToCity,path:null,paths:[],links:[]};
     const invalid=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(!finitePoint(house)||!Number.isFinite(house.rotation))return invalid('invalid-position','Choose a place for your house');
     if(!ready)return invalid('loading','Preparing this patch of ground');
     if(player&&(!finitePoint(player)||enforceReach&&surfaceDistance(world,player,house)>SETTLEMENT.buildReach))return invalid('out-of-reach','Move closer to build here');
     const siteError=validateSite(house,{player,placements,ready,isReadyAt});
     if(siteError)return invalid(...siteError);
-    // One lane to each nearby component connects the town without adding a
-    // triangle of redundant lanes every time a new neighbour is built.
-    const components=homeComponents(),nearby=new Map();
+    // Logical neighbour links survive before city formation. They reserve no
+    // visible road; on the third home every dormant route is planned again
+    // against the complete current layout, including the new foundation.
+    const components=homeComponents(),nearby=new Map(),obstacles=[...homes,...buildings,house,...placements];
+    const route=(from,to)=>planSettlementPath(world,from,to,{placements:obstacles,surfaceAt,removedTreeIds:removed});
     for(const home of homes){
       const distance=surfaceDistance(world,house,home);if(distance>SETTLEMENT.connectionRange)continue;
-      const group=components.get(home.id);if(!nearby.has(group))nearby.set(group,[]);
-      nearby.get(group).push({home,distance});
+      const group=components.get(home.id);if(!nearby.has(group))nearby.set(group,[]);nearby.get(group).push({home,distance});
     }
-    const groups=[...nearby.values()].sort((a,b)=>Number(b[0].home.connected)-Number(a[0].home.connected));
-    for(const group of groups){
-      group.sort((a,b)=>a.distance-b.distance);
-      let planned=null;
-      for(const {home} of group){
-        planned=planSettlementPath(world,house,home,{placements:[...homes,...buildings,...placements],surfaceAt,removedTreeIds:removed});
-        if(planned)break;
-      }
+    for(const group of nearby.values()){
+      group.sort((a,b)=>a.distance-b.distance);let planned=null;
+      for(const {home} of group){planned=route(house,home);if(planned)break;}
       if(!planned)return invalid('path-blocked','Leave a clear route to the neighbouring houses');
       if(isReadyAt&&!sampleSettlementPath(planned.points,isReadyAt))return invalid('loading','Preparing the village path');
-      base.paths.push(planned);
+      base.links.push(planned);
+      if(connected)base.paths.push({...planned,cityId});
+    }
+    if(connected){
+      const reached=new Set(neighbours.map(home=>home.id)),visible=new Set(paths.map(path=>path.id)),byId=new Map(homes.map(home=>[home.id,home]));
+      for(const link of links){
+        if(visible.has(link.id)||!reached.has(link.fromHouseId))continue;
+        const planned=route(byId.get(link.fromHouseId),byId.get(link.toHouseId));
+        if(!planned)return invalid('path-blocked','Leave room for the new city paths');
+        if(isReadyAt&&!sampleSettlementPath(planned.points,isReadyAt))return invalid('loading','Preparing the village path');
+        base.paths.push({...planned,cityId});
+      }
     }
     base.path=base.paths[0]??null;
     if(!base.affordable)return {...base,valid:false,siteValid:true,code:'not-enough-logs',reason:`Collect ${SETTLEMENT.houseCost-logs} more ${SETTLEMENT.houseCost-logs===1?'log':'logs'}`};
-    return {...base,valid:true,siteValid:true,code:'ready',reason:connected?'Joins your settlement':'Starts a new outpost'};
+    return {...base,valid:true,siteValid:true,code:'ready',reason:connected?'Joins your city':neighbours.length?'Grows your settlement':'Starts a new outpost'};
   }
 
   function build(pose,context){
     const evaluation=evaluateBuild(pose,context);
     if(!evaluation.valid)return {ok:false,...evaluation};
-    const house={...evaluation.house,id:`home-${nextHouse++}`,connected:evaluation.connected,
-      cityId:evaluation.connected?'settlement':null};
+    const house={...evaluation.house};nextHouse++;
     delete house.width;delete house.depth;
-    homes.push(house);
-    const builtPaths=evaluation.paths.map(path=>({...path,id:`path:${house.id}:${path.toHouseId}`,fromHouseId:house.id}));
-    paths.push(...builtPaths);logs-=SETTLEMENT.houseCost;refreshConnections();revision++;
+    homes.push(house);links.push(...evaluation.links);
+    paths.push(...evaluation.paths);logs-=SETTLEMENT.houseCost;refreshConnections();revision++;
     const developed=develop(context);
-    return {ok:true,house:copy(house),paths:copy(builtPaths),addedBuildings:developed.buildings,addedPaths:developed.paths,developmentSearching:developed.searching,cost:SETTLEMENT.houseCost,connected:house.connected,totalLogs:logs};
+    return {ok:true,house:copy(house),paths:copy(evaluation.paths),addedBuildings:developed.buildings,addedPaths:developed.paths,
+      developmentSearching:developed.searching,cost:SETTLEMENT.houseCost,connected:house.connected,cityId:house.cityId,
+      cityHouseCount:evaluation.cityHouseCount,cityLevel:evaluation.cityLevel,totalLogs:logs};
   }
 
   /** Unlocks remain pending when every safe site is occupied or unloaded. A
    * later tree clearing/streaming update can retry without charging timber. */
   function develop(context={}){
-    const addedBuildings=[],addedPaths=[],cityHomes=homes.filter(home=>home.connected);
-    const pending=pendingSettlementMilestones(homes,buildings),layoutKey=`${cityHomes.map(home=>home.id).join(':')}:${removed.size}`;
+    const addedBuildings=[],addedPaths=[],pending=pendingDevelopments();
     const player=finitePoint(context.player)?context.player:null;
     const playerMoved=search=>Boolean(search.playerAnchor)!==Boolean(player)
       ||player&&surfaceDistance(world,search.playerAnchor,player)>1;
-    let budget=SETTLEMENT_CIVIC_SEARCH.routeBudget;developmentSearching=false;
+    let budget=SETTLEMENT_CIVIC_SEARCH.routeBudget,candidateBudget=SETTLEMENT_CIVIC_SEARCH.candidateBudget;developmentSearching=false;
     if(context.ready!==false)for(const spec of pending){
-      let search=developmentSearch.get(spec.type);
+      const cityHomes=homes.filter(home=>home.cityId===spec.cityId),key=`${spec.cityId}:${spec.type}`,layoutKey=`${cityHomes.map(home=>home.id).join(':')}:${removed.size}`;
+      let search=developmentSearch.get(key);
       if(!search||search.layoutKey!==layoutKey||search.placements!==context.placements||search.isReadyAt!==context.isReadyAt||search.complete&&playerMoved(search)){
         search={layoutKey,placements:context.placements,isReadyAt:context.isReadyAt,
-          playerAnchor:player?{x:player.x,z:player.z}:null,offset:0,complete:false};developmentSearch.set(spec.type,search);
+          playerAnchor:player?{x:player.x,z:player.z}:null,offset:0,complete:false};developmentSearch.set(key,search);
       }
       if(search.complete)continue;
       const sites=settlementCivicSites(world,cityHomes);let chosen=null,connection=null;
       for(let index=search.offset;index<sites.length;index++){
-        const point=sites[index],candidate=houseFootprint({id:`civic-${spec.type}`,kind:'civic',buildingType:spec.type,
-          x:point.x,z:point.z,rotation:settlementHouseRotation(world,point,cityHomes),scale:1,ownerId,connected:true,cityId:'settlement',...spec});
+        if(!budget||!candidateBudget){search.offset=index;developmentSearching=true;break;}
+        candidateBudget--;
+        const point=sites[index],candidate=houseFootprint({id:`civic:${spec.cityId}:${spec.type}`,kind:'civic',buildingType:spec.type,
+          x:point.x,z:point.z,rotation:settlementCenterFacing(world,point,cityHomes),scale:1,ownerId,connected:true,...spec});
         const nearby=cityHomes.map(home=>({home,distance:surfaceDistance(world,candidate,home)}))
           .filter(item=>item.distance<=SETTLEMENT.connectionRange).sort((a,b)=>a.distance-b.distance);
         if(!nearby.length||validateSite(candidate,context)){search.offset=index+1;continue;}
-        if(!budget){search.offset=index;developmentSearching=true;break;}
         budget--;search.offset=index+1;
         const path=planSettlementPath(world,candidate,nearby[0].home,{placements:[...homes,...buildings,...context.placements??[]],
           surfaceAt,removedTreeIds:removed,maxNodes:SETTLEMENT_CIVIC_SEARCH.maxRouteNodes});
         if(path&&(!context.isReadyAt||sampleSettlementPath(path.points,context.isReadyAt))){chosen=candidate;connection=path;break;}
       }
       if(chosen){
-        buildings.push(chosen);paths.push(connection);addedBuildings.push(chosen);addedPaths.push(connection);search.complete=true;
+        connection.cityId=spec.cityId;buildings.push(chosen);paths.push(connection);addedBuildings.push(chosen);addedPaths.push(connection);search.complete=true;
       }else if(search.offset>=sites.length){
         search.complete=true;
         // Keep the cursor while walking, but revisit earlier sites after a
@@ -207,7 +235,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     }
     if(addedBuildings.length)revision++;
     return {buildings:copy(addedBuildings),paths:copy(addedPaths),searching:developmentSearching,
-      pendingMilestones:pendingSettlementMilestones(homes,buildings).map(spec=>spec.type)};
+      pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments())};
   }
 
   function chop(tree,{player}={}){
@@ -220,12 +248,13 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     return {ok:true,treeId,logs:gained,totalLogs:logs};
   }
 
+  refreshConnections();
   return {
     get logs(){return logs;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get ownerId(){return ownerId;},
-    get houses(){return copy(homes);},get buildings(){return copy(buildings);},
-    get pendingMilestones(){return pendingSettlementMilestones(homes,buildings).map(spec=>spec.type);},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
+    get houses(){return copy(homes);},get buildings(){return copy(buildings);},get cities(){return copy(cities);},get clusters(){return copy(clusters);},
+    get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
-    snapshot(){return {logs,revision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),pendingMilestones:pendingSettlementMilestones(homes,buildings).map(spec=>spec.type),paths:copy(paths),removedTreeIds:[...removed]};},
+    snapshot(){return {logs,revision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
     evaluateBuild,build,chop,develop,
   };
 }

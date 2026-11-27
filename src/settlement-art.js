@@ -9,7 +9,7 @@ import {worldSurface} from './world-model.js';
 import {C} from './palette.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
 import {buildSettlementBuilding} from './settlement-building-assets.js';
-import {SETTLEMENT_MILESTONES} from './settlement-progression.js';
+import {SETTLEMENT_BUILDINGS} from './settlement-progression.js';
 
 function civicMapGeometry(type){
   const polygon=points=>new THREE.Shape(points.map(([x,z])=>new THREE.Vector2(x,-z)));
@@ -50,7 +50,7 @@ export function createSettlementArt(parent,mapParent,world){
     const template=new THREE.Group();house(template,{variant,palette});bakeMaterialColors(consolidate(template));templates.push(template);
   }
   const civicTemplates=new Map(),civicMarkers=new Map();
-  for(const {type}of SETTLEMENT_MILESTONES){
+  for(const {type}of SETTLEMENT_BUILDINGS){
     const template=new THREE.Group();buildSettlementBuilding(template,{buildingType:type,palette});bakeMaterialColors(consolidate(template));
     civicTemplates.set(type,template);civicMarkers.set(type,civicMapGeometry(type));
   }
@@ -115,7 +115,7 @@ export function createSettlementArt(parent,mapParent,world){
       rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,matrix);matrix.scale(new THREE.Vector3().setScalar(item.scale??1));
       for(const batch of civicBatches)if(batch.userData.buildingType===item.buildingType)batch.setMatrixAt(batch.count++,matrix);
       mapMatrix.makeRotationY(item.rotation??0);mapMatrix.setPosition(item.x,.68,item.z);
-      for(const batch of civicMapBatches)if(batch.userData.buildingType===item.buildingType)batch.setMatrixAt(batch.count++,mapMatrix);
+      for(const batch of civicMapBatches)if(!item.cityId&&batch.userData.buildingType===item.buildingType)batch.setMatrixAt(batch.count++,mapMatrix);
     }
     for(const batch of [...civicBatches,...civicMapBatches]){batch.instanceMatrix.needsUpdate=true;batch.computeBoundingSphere();batch.computeBoundingBox();}
   }
@@ -131,13 +131,14 @@ export function createSettlementArt(parent,mapParent,world){
       mapBatch=new THREE.InstancedMesh(markerGeometry,markerMaterial,capacity);mapBatch.renderOrder=8;mapRoot.add(mapBatch);
     }
     for(const batch of batches)batch.count=0;
-    houses.forEach((item,index)=>{
+    let mapIndex=0;
+    houses.forEach(item=>{
       rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,matrix);
       for(const batch of batches)if(batch.userData.variant===(item.variant??0)%4)batch.setMatrixAt(batch.count++,matrix);
-      mapMatrix.makeScale(1.6,1,1.6);mapMatrix.setPosition(item.x,.66,item.z);mapBatch.setMatrixAt(index,mapMatrix);
+      mapMatrix.makeScale(1.6,1,1.6);mapMatrix.setPosition(item.x,.66,item.z);if(!item.cityId)mapBatch.setMatrixAt(mapIndex++,mapMatrix);
     });
     for(const batch of batches){batch.instanceMatrix.needsUpdate=true;batch.computeBoundingSphere();batch.computeBoundingBox();}
-    mapBatch.count=houses.length;mapBatch.instanceMatrix.needsUpdate=true;mapBatch.computeBoundingSphere();revision++;
+    mapBatch.count=mapIndex;mapBatch.instanceMatrix.needsUpdate=true;mapBatch.computeBoundingSphere();revision++;
     root.updateMatrixWorld(true);
   }
   return{root,mapRoot,sync,get meshes(){return [...batches,...civicBatches].filter(batch=>batch.count>0&&batch.material.userData.sceneStyle!=='window');},get revision(){return revision;},

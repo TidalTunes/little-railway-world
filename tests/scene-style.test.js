@@ -25,15 +25,34 @@ test('cloned materials can reinstall shader hooks independently',()=>{
   assert.match(shader.fragmentShader,/paneVariation/);original.dispose();copy.dispose();
 });
 
-test('day and night use fixed lights with smooth color transitions and paused simulation time',()=>{
+test('day and night follow the calendar smoothly even when animation time is paused',()=>{
   const scene=new THREE.Scene(),mapScene=new THREE.Scene(),sky=new THREE.HemisphereLight(),sun=new THREE.DirectionalLight(),fill=new THREE.DirectionalLight();
   const renderer={},reducedMotion={matches:false},light=createDaylight({scene,mapScene,sky,sun,fill,renderer,reducedMotion});
-  assert.equal(scene.background,mapScene.background);light.toggle();light.update(.1,7);
-  assert.ok(light.night>0&&light.night<1);assert.equal(styleUniforms.time.value,7);
-  light.update(.1,7);assert.equal(styleUniforms.time.value,7);
-  reducedMotion.matches=true;light.update(.1,7);assert.equal(light.night,1);
+  assert.equal(scene.background,mapScene.background);light.update(.1,7,290);
+  assert.equal(light.night,.5);assert.equal(styleUniforms.time.value,7);
+  light.update(.1,7,300);assert.equal(styleUniforms.time.value,7);assert.equal(light.night,1);
+  reducedMotion.matches=true;light.update(.1,7,590);assert.equal(light.night,.5,'reduced motion does not snap the sky');
+  light.update(.1,7,450);assert.equal(light.night,1);assert.equal(light.phase,'night');
   assert.ok(sky.intensity>.5&&sun.intensity>.5,'night keeps geography readable');
-  light.toggle();light.update(.1,7);assert.equal(light.night,0);
+  light.update(.1,7,600);assert.equal(light.night,0);assert.equal(light.phase,'day');
+  assert.equal(light.toggle,undefined);assert.equal(light.setNight,undefined,'no manual night override remains');
+});
+
+test('daylight colors depend on elapsed calendar time rather than frame rate or integration history',()=>{
+  const make=()=>{
+    const scene=new THREE.Scene(),mapScene=new THREE.Scene(),sky=new THREE.HemisphereLight(),sun=new THREE.DirectionalLight(),fill=new THREE.DirectionalLight(),renderer={};
+    return{scene,sky,sun,fill,renderer,light:createDaylight({scene,mapScene,sky,sun,fill,renderer})};
+  };
+  const stepped=make(),direct=make();
+  for(let elapsed=0;elapsed<=590;elapsed+=.5)stepped.light.update(.5,elapsed,elapsed);
+  direct.light.update(.016,7,590);
+  assert.ok(stepped.scene.background.equals(direct.scene.background));
+  for(const kind of ['sky','sun','fill']){
+    assert.ok(stepped[kind].color.equals(direct[kind].color));
+    assert.equal(stepped[kind].intensity,direct[kind].intensity);
+  }
+  assert.equal(stepped.renderer.toneMappingExposure,direct.renderer.toneMappingExposure);
+  assert.equal(stepped.light.clockTime,direct.light.clockTime);
 });
 
 test('stars are a bounded opaque background batch and never draw over the planet',()=>{

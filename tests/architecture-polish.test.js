@@ -80,8 +80,9 @@ test('town clock update has a fixed draw budget, skips paused uploads and hides 
   const clocks=createClockHands(new THREE.Group(),{}),placements=Array.from({length:500},(_,i)=>({kind:'landmark',variant:0,x:i%20,z:Math.floor(i/20)}));
   clocks.update(10,{placements});assert.equal(clocks.hands.count,CLOCK_LIMITS.faces*2);assert.equal(clocks.root.children.length,1);
   const version=clocks.hands.instanceMatrix.version;clocks.update(10.01,{placements});assert.equal(clocks.hands.instanceMatrix.version,version);
-  clocks.update(20,{placements,reducedMotion:true});const frozen=Array.from(clocks.hands.instanceMatrix.array);
-  clocks.update(40,{placements,reducedMotion:true});assert.deepEqual(Array.from(clocks.hands.instanceMatrix.array),frozen);
+  clocks.update(20,{placements,reducedMotion:true});const stepped=Array.from(clocks.hands.instanceMatrix.array);
+  clocks.update(20.9,{placements,reducedMotion:true});assert.deepEqual(Array.from(clocks.hands.instanceMatrix.array),stepped);
+  clocks.update(40,{placements,reducedMotion:true});assert.notDeepEqual(Array.from(clocks.hands.instanceMatrix.array),stepped,'reduced motion clocks still tell calendar time');
   clocks.update(50,{visible:false});assert.equal(clocks.root.visible,false);clocks.dispose();
 });
 
