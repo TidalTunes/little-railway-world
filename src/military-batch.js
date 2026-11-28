@@ -3,9 +3,9 @@ import {createMilitaryAsset,MILITARY_KINDS,MILITARY_ART} from './military-assets
 import {createMilitaryPalette,militaryColors} from './military-palette.js';
 import {applySceneStyle} from './scene-style.js';
 import {MILITARY_WEAPONS,getMilitaryMuzzle,getMilitaryForward} from './military-kinematics.js';
+import {surfacePoint,rigidSurfacePoseMatrix,chartHeadingForSurface} from './world-surface.js';
 
 const FRAMES=48,CLIPS=3,PAINT=['body','light','dark','roof','accent','trim'];
-const finitePoint=p=>p&&['x','y','z'].every(key=>Number.isFinite(p[key]));
 const matrix=new THREE.Matrix4(),rotation=new THREE.Quaternion(),scale=new THREE.Vector3(),up=new THREE.Vector3(0,1,0);
 
 /** A distant silhouette still has an animated weapon/rotor. It costs a fraction
@@ -167,7 +167,7 @@ function animateMaterial(material,rig,time,duration,{depth=false}={}){
 
 /** Two instanced draws per kind at most. Commands touch instance buffers; ordinary
  * animation advances one uniform. LOD/culling repacks at most six times a second. */
-export function createMilitaryBatch(parent,{capacity=2048}={}){
+export function createMilitaryBatch(parent,{capacity=2048,world}={}){
   if(!Number.isSafeInteger(capacity)||capacity<1||capacity>8192)throw new RangeError('Military capacity must be 1–8192');
   const root=new THREE.Group();root.name='military-assets';parent.add(root);
   const time={value:0},batches=[],byKind=new Map(),units=[],lookup=new Map(),colorCache=new Map();
@@ -190,7 +190,15 @@ export function createMilitaryBatch(parent,{capacity=2048}={}){
   function setUnits(values){
     if(disposed)return; if(!Array.isArray(values)||values.length>capacity)throw new RangeError('Military unit capacity exceeded');
     const ids=new Set();
-    for(const unit of values){if(ids.has(unit.id)||unit.id==null||!MILITARY_KINDS.includes(unit.kind)||!finitePoint(unit)||!['heading','aimYaw','elevation','pitch','roll'].every(key=>Number.isFinite(unit[key]??0))||!Number.isFinite(unit.scale??1)||(unit.scale??1)<=0)throw new TypeError('Invalid military unit');ids.add(unit.id);shades(unit.team);}
+    for(const unit of values){
+      const invalid=[];
+      if(unit?.id==null||ids.has(unit.id))invalid.push('id');if(!MILITARY_KINDS.includes(unit?.kind))invalid.push('kind');
+      for(const key of ['x','y','z'])if(!Number.isFinite(unit?.[key]))invalid.push(key);
+      for(const key of ['heading','aimYaw','elevation','pitch','roll'])if(!Number.isFinite(unit?.[key]??0))invalid.push(key);
+      if(!Number.isFinite(unit?.scale??1)||(unit?.scale??1)<=0)invalid.push('scale');
+      if(invalid.length)throw new TypeError(`Invalid military unit ${String(unit?.id??'<missing>')}: ${invalid.join(', ')}`);
+      ids.add(unit.id);shades(unit.team);
+    }
     const attacks=new Map(units.map(unit=>[unit.id,unit.attackStart]));units.length=0;lookup.clear();
     for(const unit of values){const record={...unit,heading:unit.heading??0,aimYaw:unit.aimYaw??0,elevation:unit.elevation??MILITARY_WEAPONS[unit.kind].restElevation,pitch:unit.pitch??0,roll:unit.roll??0,scale:unit.scale??1,moving:unit.moving?1:0,phase:Number.isFinite(unit.phase)?unit.phase:0,attackStart:attacks.get(unit.id)??-100,batch:null,slot:-1,colors:shades(unit.team)};units.push(record);lookup.set(record.id,record);}dirty=true;
   }
@@ -207,9 +215,10 @@ export function createMilitaryBatch(parent,{capacity=2048}={}){
   }
   function muzzleAt(id,target=new THREE.Vector3()){
     const unit=lookup.get(id);if(!unit)return null;root.updateWorldMatrix(true,false);
+    if(world?.surface){rigidSurfacePoseMatrix(world,unit.x,unit.y,unit.z,chartHeadingForSurface(world,unit.x,unit.z,0),matrix);return target.copy(getMilitaryMuzzle({...unit,x:0,y:0,z:0})).applyMatrix4(matrix).applyMatrix4(root.matrixWorld);}
     return target.copy(getMilitaryMuzzle(unit)).applyMatrix4(root.matrixWorld);
   }
-  function forwardAt(id,target=new THREE.Vector3()){const unit=lookup.get(id);if(!unit)return null;root.updateWorldMatrix(true,false);return target.copy(getMilitaryForward(unit)).transformDirection(root.matrixWorld);}
+  function forwardAt(id,target=new THREE.Vector3()){const unit=lookup.get(id);if(!unit)return null;root.updateWorldMatrix(true,false);target.copy(getMilitaryForward(unit));if(world?.surface){rigidSurfacePoseMatrix(world,unit.x,unit.y,unit.z,chartHeadingForSurface(world,unit.x,unit.z,0),matrix);target.transformDirection(matrix);}return target.transformDirection(root.matrixWorld);}
   function update(elapsed,{camera,viewportHeight=720,forceDetail=false,visibilityTime=elapsed}={}){
     if(disposed||!Number.isFinite(elapsed)||elapsed<0)return;time.value=elapsed;root.updateWorldMatrix(true,false);
     if(!Number.isFinite(visibilityTime))visibilityTime=elapsed;
@@ -223,14 +232,17 @@ export function createMilitaryBatch(parent,{capacity=2048}={}){
       let pixels=Infinity,visible=true;
       if(camera){
         const h=unit.kind==='soldier'?.78:unit.kind==='helicopter'?3:1.7;
-        worldPoint.set(unit.x,unit.y,unit.z).applyMatrix4(root.matrixWorld);const distance=camera.position.distanceTo(worldPoint);
+        surfacePoint(world,unit.x,unit.y,unit.z,worldPoint).applyMatrix4(root.matrixWorld);const distance=camera.position.distanceTo(worldPoint);
         pixels=camera.isOrthographicCamera?h*unit.scale*viewportHeight*camera.zoom/(camera.top-camera.bottom):h*unit.scale*viewportHeight/(2*Math.tan(camera.fov*Math.PI/360)*Math.max(1,distance));
-        sphere.center.set(unit.x,unit.y+h*.5,unit.z);sphere.radius=(unit.kind==='helicopter'?3:unit.kind==='soldier'?.55:2.4)*unit.scale;sphere.applyMatrix4(root.matrixWorld);
+        surfacePoint(world,unit.x,unit.y+h*.5,unit.z,sphere.center);sphere.radius=(unit.kind==='helicopter'?3:unit.kind==='soldier'?.55:2.4)*unit.scale;sphere.applyMatrix4(root.matrixWorld);
         visible=distance<(camera.far??Infinity)&&pixels>1.0&&frustum.intersectsSphere(sphere);
       }
       if(!visible){unit.batch=null;unit.slot=-1;continue;}
       const batch=byKind.get(unit.kind)[!forceDetail&&pixels<38?1:0],i=batch.count++,mesh=batch.mesh;unit.batch=batch;unit.slot=i;
-      rotation.setFromAxisAngle(up,unit.heading);scale.setScalar(unit.scale);matrix.compose(unit,rotation,scale);mesh.setMatrixAt(i,matrix);poseWrites++;
+      scale.setScalar(unit.scale);
+      if(world?.surface)rigidSurfacePoseMatrix(world,unit.x,unit.y,unit.z,chartHeadingForSurface(world,unit.x,unit.z,unit.heading),matrix).scale(scale);
+      else{rotation.setFromAxisAngle(up,unit.heading);matrix.compose(unit,rotation,scale);}
+      mesh.setMatrixAt(i,matrix);poseWrites++;
       mesh.geometry.attributes.militaryState.setXYZ(i,unit.moving,unit.phase,unit.attackStart);
       mesh.geometry.attributes.militaryAim.setXYZW(i,unit.aimYaw,unit.elevation,unit.pitch,unit.roll);
       for(const [role,name]of [['body','militaryBody'],['light','militaryLight'],['dark','militaryDark']]){const color=unit.colors[role];mesh.geometry.attributes[name].setXYZ(i,color.r,color.g,color.b);}

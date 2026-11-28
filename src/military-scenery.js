@@ -3,7 +3,13 @@ import {isHarvestableWood,streamedWoodSourceId} from './harvestable-wood.js';
 /** CPU-only canonical placements for the small combat island. Generate them
  * in the world worker, with the exact same regions/IDs as streamed detail. */
 export function prepareMilitaryScenery(world,generateRegion){
-  if(!world.gameplay?.military?.enabled||world.surface)return [];
+  if(!world.gameplay?.military?.enabled)return [];
+  if(world.surface){
+    // Full Earth is streamed. Reuse the canonical, bounded team catchments
+    // rather than materializing every forest on the planet for collision.
+    const placements=world.gameplay.botScenery??[];
+    world.gameplay.militaryScenery=placements;return placements;
+  }
   const size=192,placements=[];
   for(let x=Math.floor(-world.bounds.width/2/size);x<=Math.floor(world.bounds.width/2/size);x++){
     for(let z=Math.floor(-world.bounds.depth/2/size);z<=Math.floor(world.bounds.depth/2/size);z++){

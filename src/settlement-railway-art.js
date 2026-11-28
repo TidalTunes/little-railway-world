@@ -112,6 +112,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
         vec4 circleClip = projectionMatrix * modelViewMatrix * circlePosition;
         float circleUnit = 2.0 * abs(circleClip.w) / (previewViewport * abs(projectionMatrix[1][1]));
         vec3 transformed = position + normalize(position) * circleSide * max(circleHalfWidth, circlePixels * circleUnit) / max(circleScale, 0.001);
+        ${surfaceFor(world)?`transformed.y += sqrt(max(0.0, ${Number(world.surface.radius**2).toFixed(3)} - circleScale * circleScale)) - ${Number(world.surface.radius).toFixed(3)};`:''}
         vCircleSide = circleSide; vCircleArc = circleArc;`);
       shader.fragmentShader='varying float vCircleSide; varying float vCircleArc;\n'+shader.fragmentShader;
       shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`#include <color_fragment>
@@ -125,9 +126,10 @@ export function createSettlementRailwayArt(parent,mapParent,world){
   function circleBatch(parent,material,capacity,order){
     const batch=new THREE.InstancedMesh(circleGeometry,material,capacity);batch.name=material.name;batch.count=0;batch.visible=false;batch.frustumCulled=false;batch.renderOrder=order;parent.add(batch);return batch;
   }
+  const rangeCapacity=world.gameplay?.match?32:1;
   const circlePools=[root,mapRoot].map(parent=>({
     cityOutline:circleBatch(parent,cityCircleOutline,2,8),cities:circleBatch(parent,cityCircleInk,2,9),
-    rangeOutline:circleBatch(parent,rangeCircleOutline,1,6),range:circleBatch(parent,rangeCircleInk,1,7),
+    rangeOutline:circleBatch(parent,rangeCircleOutline,rangeCapacity,6),range:circleBatch(parent,rangeCircleInk,rangeCapacity,7),
   }));
   const directed=world.gameplay?.economy==='loops';
   const arrowGeometry=new THREE.BufferGeometry();arrowGeometry.setAttribute('position',new THREE.Float32BufferAttribute([0,0,.85,-.58,0,-.55,0,0,-.18,0,0,.85,0,0,-.18,.58,0,-.55],3));arrowGeometry.computeVertexNormals();
@@ -277,8 +279,8 @@ export function createSettlementRailwayArt(parent,mapParent,world){
   }
   function clear(group,{materials=false}={}){
     const geometries=new Set();group.traverse(mesh=>{if(mesh.isMesh||mesh.isLine)geometries.add(mesh.geometry);});
-    for(const geometry of geometries)geometry.dispose();group.clear();
-    if(materials){for(const material of group.userData.ownedMaterials??[])material.dispose();group.userData.ownedMaterials=[];}
+    for(const geometry of geometries)geometry.dispose();
+    if(materials)group.traverse(node=>{for(const material of node.userData.ownedMaterials??[])material.dispose();node.userData.ownedMaterials=[];});group.clear();
   }
   function mapStrip(points,width,height,material,target=mapNetwork){
     if(points.length<2)return;
@@ -299,9 +301,9 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geometry.setAttribute('railwayOffset',new THREE.Float32BufferAttribute(offsets,3));geometry.computeBoundingSphere();
     const mesh=new THREE.Mesh(geometry,material);mesh.name='railway-map-stroke';mesh.renderOrder=10;target.add(mesh);return mesh;
   }
-  function buildPaths(paths){
+  function buildPaths(paths,target=network){
     if(!paths?.length)return;
-    const group=new THREE.Group();network.add(group);
+    const group=new THREE.Group();target.add(group);
     for(const mesh of buildCityStreets(group,{...world,cityStreets:paths})){
       const original=mesh.geometry;mesh.geometry=tessellateSurfaceGeometry(original,.6);original.dispose();const positions=mesh.geometry.attributes.position;
       for(let i=0;i<positions.count;i++){
@@ -311,33 +313,51 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     }
     // Station access roads belong to the detailed world only.
   }
+  const chunks=new Map(),stationChunks=new Map(),lineChunks=new Map();let builtMeshes=[];
+  const chunkKey=(registry,id,prefix)=>{if(!registry.has(id))registry.set(id,`${prefix}:${Math.floor(registry.size/8)}`);return registry.get(id);};
+  function buildNetwork(data,target,mapTarget){
+    buildPaths(data.paths,target);
+    if(data.lines.length){
+      const joined=buildJoinedSettlementTracks(target,world,data.lines);
+      buildRailways(target,{...world,lines:data.lines},{...(surfaceFor(world)?{surfaceRoot:target}:{}),skipTrackBed:!!joined,skipRails:!!joined});
+    }
+    const palettes=new Map();
+    for(const item of data.stations){
+      if(!palettes.has(item.ownerId))palettes.set(item.ownerId,createPlayerPalette(players.get(item.ownerId)));
+      const building=station(target,{palette:palettes.get(item.ownerId)});
+      rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,pose);building.applyMatrix4(pose);
+      const points=[{x:item.x-Math.cos(item.rotation??0)*2.8,z:item.z+Math.sin(item.rotation??0)*2.8},{x:item.x+Math.cos(item.rotation??0)*2.8,z:item.z-Math.sin(item.rotation??0)*2.8}];
+      mapStrip(points,1.1,.77,mapRim,mapTarget);mapStrip(points,.45,.78,mapInk,mapTarget);
+    }
+    if(target.children.length)bakeMaterialColors(consolidate(target));
+    for(const palette of palettes.values())for(const material of Object.values(palette))material.dispose();
+    for(const line of data.lines){const points=pointsFor(line);mapStrip(points,.84,.73,mapRim,mapTarget);mapStrip(points,.42,.74,mapInk,mapTarget);}
+    if(mapTarget.children.length)consolidate(mapTarget);
+    for(const mesh of mapTarget.children){mesh.name='railway-map-stroke';mesh.renderOrder=10;mesh.castShadow=mesh.receiveShadow=false;}
+  }
   function sync(snapshot={}){
     if(disposed||snapshot.revision!==undefined&&snapshot.revision===revision)return false;
-    clear(network,{materials:true});clear(mapNetwork);buildPaths(snapshot.paths);
-    const lines=unique(snapshot.lines).filter(line=>line.length>0),railWorld={...world,lines};
-    if(lines.length){
-      const joined=buildJoinedSettlementTracks(network,world,lines);
-      buildRailways(network,railWorld,{...(surfaceFor(world)?{surfaceRoot:network}:{}),skipTrackBed:!!joined,skipRails:!!joined});
-    }
-    const palettes=new Map(),stations=unique(snapshot.stations);
-    for(const item of stations){
-      if(!palettes.has(item.ownerId))palettes.set(item.ownerId,createPlayerPalette(players.get(item.ownerId)));
-      const palette=palettes.get(item.ownerId),building=station(network,{palette});
-      rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,pose);building.applyMatrix4(pose);
-      const stationPoints=[{x:item.x-Math.cos(item.rotation??0)*2.8,z:item.z+Math.sin(item.rotation??0)*2.8},{x:item.x+Math.cos(item.rotation??0)*2.8,z:item.z-Math.sin(item.rotation??0)*2.8}];
-      mapStrip(stationPoints,1.1,.77,mapRim);mapStrip(stationPoints,.45,.78,mapInk);
-    }
-    if(network.children.length)bakeMaterialColors(consolidate(network));
-    for(const palette of palettes.values())for(const material of Object.values(palette))material.dispose();
-    for(const line of lines){const points=pointsFor(line);mapStrip(points,.84,.73,mapRim);mapStrip(points,.42,.74,mapInk);}
-    if(mapNetwork.children.length)consolidate(mapNetwork);
-    for(const mesh of mapNetwork.children){mesh.name='railway-map-stroke';mesh.renderOrder=10;mesh.castShadow=mesh.receiveShadow=false;}
+    const lines=unique(snapshot.lines).filter(line=>line.length>0),stations=unique(snapshot.stations);
+    if(world.gameplay?.match&&surfaceFor(world)){
+      // Station growth is append-heavy. Keep existing batches immutable and
+      // rebuild at most eight stations per changed chunk, not the whole globe.
+      const groups=new Map(),byCity=new Map(),bySpine=new Map(),get=key=>{if(!groups.has(key))groups.set(key,{stations:[],lines:[],paths:[]});return groups.get(key);};
+      for(const item of stations){const key=chunkKey(stationChunks,item.id,'stations');byCity.set(item.cityId,key);if(item.lineId)bySpine.set(item.lineId,key);get(key).stations.push(item);}
+      for(const item of lines)get(bySpine.get(item.id)??chunkKey(lineChunks,item.id,'routes')).lines.push(item);
+      for(const item of snapshot.paths??[])get(byCity.get(item.cityId)??chunkKey(lineChunks,item.id,'paths')).paths.push(item);
+      for(const [key,chunk]of chunks)if(!groups.has(key)){clear(chunk.detail,{materials:true});clear(chunk.map);chunk.detail.removeFromParent();chunk.map.removeFromParent();chunks.delete(key);}
+      for(const [key,data]of groups){const signature=JSON.stringify(data);let chunk=chunks.get(key);if(chunk?.signature===signature)continue;
+        if(!chunk){chunk={detail:new THREE.Group(),map:new THREE.Group()};chunk.detail.name=chunk.map.name=`railway-chunk:${key}`;network.add(chunk.detail);mapNetwork.add(chunk.map);chunks.set(key,chunk);}
+        clear(chunk.detail,{materials:true});clear(chunk.map);buildNetwork(data,chunk.detail,chunk.map);chunk.signature=signature;
+      }
+    }else{clear(network,{materials:true});clear(mapNetwork);buildNetwork({lines,stations,paths:snapshot.paths??[]},network,mapNetwork);}
     updateArrows(builtArrows,lines);updateStationPorts(stations,lines);
-    stats.lines=lines.length;stats.stations=stations.length;stats.detailBatches=network.children.length;stats.mapBatches=mapNetwork.children.length;stats.rebuilds++;
+    builtMeshes=[];let mapBatches=0;network.traverse(mesh=>{if(mesh.isMesh)builtMeshes.push(mesh);});mapNetwork.traverse(mesh=>{if(mesh.isMesh)mapBatches++;});
+    stats.lines=lines.length;stats.stations=stations.length;stats.detailBatches=builtMeshes.length;stats.mapBatches=mapBatches;stats.rebuilds++;
     revision=snapshot.revision??(revision??0)+1;network.updateMatrixWorld(true);return true;
   }
   const cityRadius=city=>Math.max(3.4,Number.isFinite(city.radius)?city.radius:3.4)+1.2;
-  function refreshCircles(source,target,result,range,rangeSource=source){
+  function refreshCircles(source,target,result,range,rangeSources=source?[source]:[]){
     const selected=source?[source]:[];if(target&&target.id!==source?.id)selected.push(target);
     for(let layer=0;layer<circlePools.length;layer++){
       const pool=circlePools[layer];pool.cities.count=pool.cityOutline.count=selected.length;
@@ -346,10 +366,11 @@ export function createSettlementRailwayArt(parent,mapParent,world){
         rigidSurfacePoseMatrix(world,city.x,layer?.82:(city.y??0)+.13,city.z,0,pose);pose.scale(scale.set(radius,1,radius));
         pool.cities.setMatrixAt(i,pose);pool.cityOutline.setMatrixAt(i,pose);pool.cities.setColorAt(i,color);
       }
-      pool.range.count=pool.rangeOutline.count=rangeSource&&range>0?1:0;
-      if(pool.range.count){
-        rigidSurfacePoseMatrix(world,rangeSource.x,layer?.82:(rangeSource.y??0)+.12,rangeSource.z,0,pose);pose.scale(scale.set(range,1,range));
-        pool.range.setMatrixAt(0,pose);pool.rangeOutline.setMatrixAt(0,pose);
+      pool.range.count=pool.rangeOutline.count=range>0?Math.min(rangeCapacity,rangeSources.length):0;
+      for(let index=0;index<pool.range.count;index++){
+        const rangeSource=rangeSources[index];
+        rigidSurfacePoseMatrix(world,rangeSource.x,layer?.82:(rangeSource.y??0)+.12,rangeSource.z,0,pose);const radius=world.surface?.radius,horizontal=radius?radius*Math.sin(range/radius):range;pose.scale(scale.set(horizontal,1,horizontal));
+        pool.range.setMatrixAt(index,pose);pool.rangeOutline.setMatrixAt(index,pose);
       }
       for(const batch of Object.values(pool)){
         batch.instanceMatrix.needsUpdate=true;if(batch.instanceColor)batch.instanceColor.needsUpdate=true;batch.boundingBox=batch.boundingSphere=null;
@@ -357,7 +378,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     }
   }
   function showCircles(){for(const pool of circlePools)for(const batch of Object.values(pool))batch.visible=previewVisible&&batch.count>0;}
-  function preview(result,{cities=[],sourceCityId=null,targetCityId=null,rangeCityId=sourceCityId,maxConnectionDistance,visible=false,editable=false,handles=result?.handles??[],activeHandle=-1}={}){
+  function preview(result,{cities=[],sourceCityId=null,targetCityId=null,rangeCityId=sourceCityId,rangeCityIds=null,maxConnectionDistance,visible=false,editable=false,handles=result?.handles??[],activeHandle=-1}={}){
     if(disposed)return;
     // Endpoints are model constraints (station or junction positions), not raw
     // pointer positions. Never let an optional drag overlay move their rings.
@@ -379,10 +400,10 @@ export function createSettlementRailwayArt(parent,mapParent,world){
       for(const batch of layers)if(batch.instanceColor)batch.instanceColor.needsUpdate=true;
     }
     previewVisible=visible;ghost.visible=mapGhost.visible=visible&&!!result&&!outOfRange;
-    const source=cities.find(city=>city.id===sourceCityId),target=cities.find(city=>city.id===targetCityId),rangeSource=cities.find(city=>city.id===rangeCityId),rangeValue=result?.range?.maxConnectionDistance??maxConnectionDistance;
+    const source=cities.find(city=>city.id===sourceCityId),target=cities.find(city=>city.id===targetCityId),rangeSources=cities.filter(city=>(rangeCityIds??[rangeCityId]).includes(city.id)),rangeValue=result?.range?.maxConnectionDistance??maxConnectionDistance;
     const range=Number.isFinite(rangeValue)&&rangeValue>0?rangeValue:0;
-    const key=`${source?.id}:${source?.x}:${source?.y}:${source?.z}:${source?.radius}:${target?.id}:${target?.x}:${target?.y}:${target?.z}:${target?.radius}:${blocked}:${range}:${rangeSource?.id}:${rangeSource?.x}:${rangeSource?.y}:${rangeSource?.z}`;
-    if(key!==previewKey){refreshCircles(source,target,result,range,rangeSource);previewKey=key;}showCircles();showStationPorts();
+    const key=`${source?.id}:${source?.x}:${source?.y}:${source?.z}:${source?.radius}:${target?.id}:${target?.x}:${target?.y}:${target?.z}:${target?.radius}:${blocked}:${range}:${rangeSources.map(c=>`${c.id}:${c.x}:${c.y}:${c.z}`).join("|")}`;
+    if(key!==previewKey){refreshCircles(source,target,result,range,rangeSources);previewKey=key;}showCircles();showStationPorts();
     // The preview flow publishes an immutable result for every changed key.
     // Waiting for validation or holding a stationary handle needs no uploads.
     if(result===previewResult)return;previewResult=result;stats.previewUpdates++;
@@ -416,7 +437,7 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     updateRoutes();updateRoutes(invalidLines,'invalid');updateStations(outOfRange?[]:result?.stations);
     updateGuide(guideSamples,guideCount);updateArrows(draftArrows,outOfRange?[]:result?.lines);
   }
-  return{root,mapRoot,sync,preview,stats,get revision(){return revision;},get meshes(){return network.children.filter(mesh=>mesh.isMesh&&mesh.material.userData.sceneStyle!=='window');},
+  return{root,mapRoot,sync,preview,stats,get revision(){return revision;},get meshes(){return builtMeshes.filter(mesh=>mesh.material.userData.sceneStyle!=='window');},
     update({mapBlend=0,camera,viewportHeight=800,zoom=1,walkingWeight=0}={}){
       if(disposed)return;root.visible=mapBlend<.999;mapRoot.visible=mapBlend>.001;
       visibility.value=mapNetworkVisibility(zoom);previewViewport.value=Math.max(1,viewportHeight);

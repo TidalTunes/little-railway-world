@@ -54,8 +54,9 @@ function overlaps(world,house,item){
  * once and its collision reservation is immediately released. */
 export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z)=>worldSurface(world,x,z),shared}={}){
   if(!config?.starterHouse||!finitePoint(config.starterHouse))throw new TypeError('Settlement requires a finite starter house');
-  const ownerId=config.ownerId??config.starterHouse.ownerId??'teal';
-  const starter={...copy(config.starterHouse),kind:'house',ownerId,cityId:null,connected:false};
+  const ownerId=config.ownerId??config.starterHouse.ownerId??'teal',matchMode=!!world.gameplay?.match&&!!shared?.constructionContext;
+  const ownerName=world.gameplay?.match?.players?.find(player=>player.id===ownerId)?.name??ownerId;
+  const starter={...copy(config.starterHouse),kind:'house',rotationSpace:'surface',ownerId,cityId:null,connected:false};
   const homes=[starter],buildings=[],paths=[],links=[],removed=shared?.removedTreeIds??new Set();
   const foreignBuildings=()=>shared?.getBuildings?.()??[];
   const foreignPaths=()=>shared?.getPaths?.()??[];
@@ -117,9 +118,9 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const previous=new Map(homes.map(home=>[home.id,home.cityId]));
     cities=[];clusters=[];
     for(const [anchor,cluster] of groups){
-      const cityId=cluster.length>=3?cityIdFor(anchor):null;
+      const cityId=matchMode?(cluster.find(home=>home.cityId)?.cityId??null):cluster.length>=3?cityIdFor(anchor):null;
       for(const home of cluster){home.connected=Boolean(cityId);home.cityId=cityId;}
-      const center=settlementCenter(world,cluster),record={id:cityIdFor(anchor),...center,ownerId,level:settlementCityLevel(cluster.length),houseCount:cluster.length,houseIds:cluster.map(home=>home.id)};
+      const center=settlementCenter(world,cluster),record={id:cityId??cityIdFor(anchor),...center,ownerId,...(matchMode?{name:ownerName,...(cluster.some(home=>home.steward)?{steward:true,unassigned:true}:{})}:{}),level:cityId?settlementCityLevel(cluster.length):0,houseCount:cluster.length,houseIds:cluster.map(home=>home.id)};
       clusters.push(record);
       if(!cityId)continue;
       const oldIds=new Set(cluster.map(home=>previous.get(home.id)).filter(Boolean));
@@ -175,14 +176,15 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   }
 
   function evaluateBuild(pose,{player,heading=0,placements=[],ready=true,enforceReach=true,isReadyAt}={}){
-    const neighbours=orientationHomes(pose);
-    const house=houseFootprint({id:`${config.idPrefix??''}home-${nextHouse}`,kind:'house',x:pose?.x,z:pose?.z,
+    const sharedContext=matchMode?shared.constructionContext(ownerId,pose):null;
+    const neighbours=sharedContext?.homes??orientationHomes(pose),candidateHomes=sharedContext?.homes??homes,candidateLinks=sharedContext?.links??links,candidatePaths=sharedContext?.paths??paths;
+    const house=houseFootprint({id:`${config.idPrefix??''}home-${nextHouse}`,kind:'house',rotationSpace:'surface',x:pose?.x,z:pose?.z,
       rotation:finitePoint(pose)?settlementHouseRotation(world,pose,neighbours,{heading,seed:world.seed,placement:nextHouse}):0,
       scale:1,ownerId,variant:nextHouse%4});
     let connectionHouseId=null,distanceToCity=Infinity;
     for(const home of neighbours){const distance=surfaceDistance(world,house,home);if(distance<distanceToCity){distanceToCity=distance;connectionHouseId=home.id;}}
-    const cityHouseCount=neighbours.length+1,connected=cityHouseCount>=3;
-    const cityId=connected?cityIdFor(neighbours[0].id):null;
+    const cityHouseCount=neighbours.length+1,connected=!!sharedContext?.cityId||cityHouseCount>=3&&(sharedContext?.canFound??true);
+    const cityId=connected?(sharedContext?.cityId??cityIdFor(neighbours[0]?.id??house.id)):null;
     house.cityId=cityId;house.connected=connected;
     const costs=constructionCost(),resources=resourcesAt(pose),shortage=resourceFailure(costs,resources);
     const base={house,cost:costs.resources??costs.timber,costs,resources,affordable:!shortage,
@@ -190,16 +192,17 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const invalid=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(!finitePoint(house)||!Number.isFinite(house.rotation))return invalid('invalid-position','Choose a place for your house');
     if(!ready)return invalid('loading','Preparing this patch of ground');
-    if(loopEconomy&&!neighbours.length)return invalid('outside-city','Build near your existing homes');
+    if(matchMode&&shared.playerRole?.(ownerId)==='tps'&&!sharedContext?.cityId)return invalid('outside-allied-city','Build within an allied city');
+    if(loopEconomy&&!matchMode&&!neighbours.length)return invalid('outside-city','Build near your existing homes');
     if(player&&(!finitePoint(player)||enforceReach&&surfaceDistance(world,player,house)>SETTLEMENT.buildReach))return invalid('out-of-reach','Move closer to build here');
     const siteError=validateSite(house,{player,placements,ready,isReadyAt});
     if(siteError)return invalid(...siteError);
     // Logical neighbour links survive before city formation. They reserve no
     // visible road; on the third home every dormant route is planned again
     // against the complete current layout, including the new foundation.
-    const components=homeComponents(),nearby=new Map(),obstacles=[...homes,...buildings,...villageBuildings,...foreignBuildings(),house,...availableScenery(placements)];
+    const components=homeComponents(candidateHomes,candidateLinks),nearby=new Map(),obstacles=[...homes,...buildings,...villageBuildings,...foreignBuildings(),house,...availableScenery(placements)];
     const route=(from,to)=>planSettlementPath(world,from,to,{placements:obstacles,surfaceAt,removedTreeIds:removed});
-    for(const home of homes){
+    for(const home of candidateHomes){
       const distance=surfaceDistance(world,house,home);if(distance>SETTLEMENT.connectionRange)continue;
       const group=components.get(home.id);if(!nearby.has(group))nearby.set(group,[]);nearby.get(group).push({home,distance});
     }
@@ -212,8 +215,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
       if(connected)base.paths.push({...planned,cityId});
     }
     if(connected){
-      const reached=new Set(neighbours.map(home=>home.id)),visible=new Set(paths.map(path=>path.id)),byId=new Map(homes.map(home=>[home.id,home]));
-      for(const link of links){
+      const reached=new Set(neighbours.map(home=>home.id)),visible=new Set(candidatePaths.map(path=>path.id)),byId=new Map(candidateHomes.map(home=>[home.id,home]));
+      for(const link of candidateLinks){
         if(visible.has(link.id)||!reached.has(link.fromHouseId))continue;
         const planned=route(byId.get(link.fromHouseId),byId.get(link.toHouseId));
         if(!planned)return invalid('path-blocked','Leave room for the new city paths');
@@ -239,11 +242,13 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const house={...evaluation.house};nextHouse++;
     delete house.width;delete house.depth;
     homes.push(house);links.push(...evaluation.links);
-    paths.push(...evaluation.paths);refreshConnections();revision++;spatialRevision++;
-    const developed=develop(context);
+    paths.push(...evaluation.paths);revision++;spatialRevision++;
+    const resolution=matchMode?shared.resolveConstruction({ownerId,houseId:house.id,context}):null;
+    if(!matchMode)refreshConnections();
+    const developed=resolution?.development??develop(context);
     return {ok:true,house:copy(house),paths:copy(evaluation.paths),addedBuildings:developed.buildings,addedPaths:developed.paths,
       developmentSearching:developed.searching,cost:evaluation.cost,costs:evaluation.costs,connected:house.connected,cityId:house.cityId,
-      cityHouseCount:evaluation.cityHouseCount,cityLevel:evaluation.cityLevel,totalLogs:logs};
+      cityHouseCount:resolution?.city?.houseCount??evaluation.cityHouseCount,cityLevel:resolution?.city?.level??evaluation.cityLevel,totalLogs:logs,...(resolution?.events?{events:copy(resolution.events)}:{})};
   }
 
   /** Unlocks remain pending when every safe site is occupied or unloaded. A
@@ -266,7 +271,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
       for(let index=search.offset;index<sites.length;index++){
         if(!budget||!candidateBudget){search.offset=index;developmentSearching=true;break;}
         candidateBudget--;
-        const point=sites[index],candidate=houseFootprint({id:`civic:${spec.cityId}:${spec.type}`,kind:'civic',buildingType:spec.type,
+        const point=sites[index],candidate=houseFootprint({id:`civic:${spec.cityId}:${spec.type}`,kind:'civic',rotationSpace:'surface',buildingType:spec.type,
           x:point.x,z:point.z,rotation:settlementCenterFacing(world,point,cityHomes),scale:1,ownerId,connected:true,...spec});
         const nearby=cityHomes.map(home=>({home,distance:surfaceDistance(world,candidate,home)}))
           .filter(item=>item.distance<=SETTLEMENT.connectionRange).sort((a,b)=>a.distance-b.distance);
@@ -277,7 +282,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
         if(path&&(!context.isReadyAt||sampleSettlementPath(path.points,context.isReadyAt))){chosen=candidate;connection=path;break;}
       }
       if(chosen){
-        connection.cityId=spec.cityId;buildings.push(chosen);paths.push(connection);addedBuildings.push(chosen);addedPaths.push(connection);search.complete=true;
+        connection.cityId=spec.cityId;if(matchMode)connection.ownerId=ownerId;buildings.push(chosen);paths.push(connection);addedBuildings.push(chosen);addedPaths.push(connection);search.complete=true;
       }else if(search.offset>=sites.length){
         search.complete=true;
         // Keep the cursor while walking, but revisit earlier sites after a
@@ -370,6 +375,10 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     if(amount){gold+=amount;revision++;}return {ok:true,amount,totalGold:gold};
   }
 
+  shared?.registerAuthority?.(ownerId,{
+    state:()=>({homes,buildings,paths,links,cities}),
+    changed(){developmentSearch.clear();refreshConnections();revision++;spatialRevision++;},develop,
+  });
   refreshConnections();
   return {
     get logs(){return logs;},get food(){return food;},get gold(){return gold;},get population(){return homes.length;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get spatialRevision(){return spatialRevision;},get ownerId(){return ownerId;},

@@ -96,3 +96,19 @@ test('selection only includes living visible owned units; right-click picking on
   assert.equal(pickMilitaryUnit(units,{x:12,y:20},project,{ownerId:'teal'}).id,'a');assert.equal(pickMilitaryUnit(units,{x:10,y:20},project,{ownerId:'teal',enemy:true}).id,'b');
   assert.deepEqual(militaryUnitsInBox(units,{x:0,y:0},{x:40,y:40},project,'teal'),['a']);
 });
+
+test('team-aware enemy picking excludes allied owners while own-unit selection stays private',()=>{
+  const units=[{id:'own',ownerId:'teal',hp:6,x:0,z:0},{id:'ally',ownerId:'mint',hp:6,x:2,z:0},{id:'enemy',ownerId:'coral',hp:6,x:5,z:0}];
+  const teams={teal:'green',mint:'green',coral:'red'},allied=(a,b)=>teams[a]===teams[b],project=u=>({x:u.x,y:u.z,visible:true});
+  assert.equal(pickMilitaryUnit(units,{x:2,y:0},project,{ownerId:'teal',enemy:true,allied}).id,'enemy');
+  assert.equal(pickMilitaryUnit(units,{x:2,y:0},project,{ownerId:'teal',allied}).id,'own');
+  assert.deepEqual(militaryUnitsInBox(units,{x:-10,y:-10},{x:10,y:10},project,'teal'),['own']);
+});
+
+test('right-clicking an allied unit becomes a ground move, while hostile units remain attackable',t=>{
+  const f=fixture(t);f.state.selectedIds.add('first');f.state.units.push({id:'ally',ownerId:'mint',hp:6,x:400,z:350});
+  f.state.allied=(a,b)=>a===b||['teal','mint'].includes(a)&&['teal','mint'].includes(b);
+  f.pointer('pointerdown',400,350,{button:2,buttons:2});f.pointer('pointerup',400,350,{button:2});assert.deepEqual(f.commands[0],{type:'move',x:40,z:35});
+  f.pointer('pointerdown',265,210,{button:2,buttons:2});f.pointer('pointerup',265,210,{button:2});assert.deepEqual(f.commands[1],{type:'attack',targetId:'enemy'});
+  assert.equal(f.controls._pointers.length,0);
+});

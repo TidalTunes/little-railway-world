@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import {rigidSurfacePoseMatrix} from './world-surface.js';
+import {rigidSurfacePoseMatrix,chartHeadingForSurface} from './world-surface.js';
 
 export const CONSTRUCTION_SECONDS=2;
 export const MAX_CONSTRUCTION_SITES=16;
@@ -67,8 +67,9 @@ export function createSettlementConstruction(root,mapRoot,world){
     let count=0;
     for(const record of active.values()){
       const {item,seed}=record;
-      rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,frame);
-      mapFrame.makeRotationY(item.rotation??0);mapFrame.setPosition(item.x,.72,item.z);
+      const heading=chartHeadingForSurface(world,item.x,item.z,item.rotation??0);
+      rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,heading,frame);
+      rigidSurfacePoseMatrix(world,item.x,.72,item.z,heading,mapFrame);
       const width=(item.width??2.2)*(item.scale??1)/2,depth=(item.depth??2.2)*(item.scale??1)/2;
       for(let i=0;i<PUFFS;i++){
         const n=seed+i*17.31,delay=noise(n)*.34,lifetime=1.18+noise(n+4)*.4,t=(record.age-delay)/lifetime;

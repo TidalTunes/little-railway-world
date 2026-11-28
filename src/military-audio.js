@@ -1,4 +1,5 @@
 import {Vector3} from 'three';
+import {surfaceDistance,surfacePoint} from './world-surface.js';
 
 export const MILITARY_AUDIO_RULES=Object.freeze({sampleRate:24000,variants:3,maxVoices:16,maxStartsPerFrame:6,maxEventsPerFrame:128,masterGain:.34,rotorInterval:.5,maxRotors:2});
 export const MILITARY_SOUND_DURATIONS=Object.freeze({rifle:.20,cannon:.82,howitzer:1.10,rocket:.43,ricochet:.16,impact:.34,blast:1.18,rotor:.46});
@@ -55,12 +56,12 @@ export function synthesizeMilitarySound(kind,{sampleRate=MILITARY_AUDIO_RULES.sa
 const worldPoint=new Vector3(),viewPoint=new Vector3(),screenPoint=new Vector3();
 /** Focus-relative distance keeps the strategy camera from sounding hundreds
  * of metres above the board. Ground view retains nearby off-screen warnings. */
-export function militaryAudioPlacement(position,{camera,root,focus,walkingWeight=0,mapBlend=0,visibleOnly=false}={}){
+export function militaryAudioPlacement(position,{camera,root,focus,world,walkingWeight=0,mapBlend=0,visibleOnly=false}={}){
   if(!finitePoint(position)||!camera||!finitePoint(focus))return null;
   const walking=walkingWeight>.5,range=walking?62:mapBlend>.5?180:110;
-  const distance=Math.hypot(position.x-focus.x,position.z-focus.z,((position.y??0)-(focus.y??0))*.35);
+  const distance=Math.hypot(surfaceDistance(world,position,focus),((position.y??0)-(focus.y??0))*.35);
   if(distance>=range)return null;
-  worldPoint.set(position.x,position.y??0,position.z);if(root?.matrixWorld)worldPoint.applyMatrix4(root.matrixWorld);
+  surfacePoint(world,position.x,position.y??0,position.z,worldPoint);if(root?.matrixWorld)worldPoint.applyMatrix4(root.matrixWorld);
   viewPoint.copy(worldPoint).applyMatrix4(camera.matrixWorldInverse);screenPoint.copy(worldPoint).project(camera);
   const visible=screenPoint.z>=-1&&screenPoint.z<=1&&Math.abs(screenPoint.x)<1.12&&Math.abs(screenPoint.y)<1.12;
   if(!visible&&(visibleOnly||!walking||distance>28))return null;
@@ -74,7 +75,7 @@ const CSS=`.military-audio-toggle{position:absolute;z-index:13;right:max(18px,en
 /** One bounded event-driven sound mixer. Context creation/resume occurs only
  * after a user gesture. Hidden, muted and paused frames discard new events;
  * they never create a backlog to play when the listener returns. */
-export function createMilitaryAudio({canvas,parent=canvas?.parentElement,controlsParent,contextFactory,muted=rememberedMuted}={}){
+export function createMilitaryAudio({canvas,parent=canvas?.parentElement,controlsParent,contextFactory,world,muted=rememberedMuted}={}){
   const document=canvas?.ownerDocument??globalThis.document,window=document?.defaultView??globalThis;
   const AudioContextType=window.AudioContext??window.webkitAudioContext;
   const supported=!!contextFactory||typeof AudioContextType==='function';
@@ -164,7 +165,7 @@ export function createMilitaryAudio({canvas,parent=canvas?.parentElement,control
       if(!wanted()||context?.state!=='running'){totals.dropped+=events.length;return;}
       for(const voice of voices)if(voice.until<context.currentTime)finish(voice);
       root?.updateWorldMatrix?.(true,false);camera?.updateMatrixWorld?.(true);
-      const options={camera,root,focus,walkingWeight,mapBlend};candidates.length=0;
+      const options={camera,root,focus,walkingWeight,mapBlend,world};candidates.length=0;
       for(let index=0;index<Math.min(events.length,MILITARY_AUDIO_RULES.maxEventsPerFrame);index++){
         const event=events[index],sound=eventSound(event);if(sound?.kind&&finitePoint(sound.position))candidates.push({...sound,key:`${event.type}:${event.unitId??index}:${event.time??clock}`});
       }
@@ -173,7 +174,7 @@ export function createMilitaryAudio({canvas,parent=canvas?.parentElement,control
       for(const sound of candidates){if(starts>=MILITARY_AUDIO_RULES.maxStartsPerFrame){totals.dropped++;continue;}if(play(sound.kind,sound.position,sound.key,options))starts++;}
       if(clock>=nextRotor&&walkingWeight>.15&&mapBlend<.5&&starts<MILITARY_AUDIO_RULES.maxStartsPerFrame){
         nextRotor=clock+MILITARY_AUDIO_RULES.rotorInterval;let nearest=null,other=null,nearestD=28,otherD=28;
-        for(const unit of units){if(unit.kind!=='helicopter'||unit.hp<=0||!finitePoint(unit)||!finitePoint(focus))continue;const distance=Math.hypot(unit.x-focus.x,unit.z-focus.z);if(distance<nearestD){other=nearest;otherD=nearestD;nearest=unit;nearestD=distance;}else if(distance<otherD){other=unit;otherD=distance;}}
+        for(const unit of units){if(unit.kind!=='helicopter'||unit.hp<=0||!finitePoint(unit)||!finitePoint(focus))continue;const distance=surfaceDistance(world,unit,focus);if(distance<nearestD){other=nearest;otherD=nearestD;nearest=unit;nearestD=distance;}else if(distance<otherD){other=unit;otherD=distance;}}
         for(const unit of [nearest,other])if(unit&&starts<MILITARY_AUDIO_RULES.maxStartsPerFrame&&play('rotor',unit,unit.id,{...options,visibleOnly:true}))starts++;
       }
     },

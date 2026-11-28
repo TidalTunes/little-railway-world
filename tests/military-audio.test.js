@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Group,PerspectiveCamera,OrthographicCamera} from 'three';
+import {Group,PerspectiveCamera,OrthographicCamera,Vector3} from 'three';
 import {createMilitaryAudio,synthesizeMilitarySound,militaryAudioPlacement,MILITARY_AUDIO_RULES,MILITARY_SOUND_DURATIONS} from '../src/military-audio.js';
 
 class Target{
@@ -126,4 +126,14 @@ test('sound prewarming compiles one clip per idle turn and cancels for pause, mu
   f.audio.setMuted(true);assert.equal(f.idle.size,0);f.audio.setMuted(false);await Promise.resolve();await Promise.resolve();
   for(let i=0;i<24;i++)f.flushIdle();assert.equal(f.audio.stats.buffers,24);assert.equal(f.idle.size,0);assert.ok(f.audio.stats.bufferBytes<1500000);
   f.audio.dispose();assert.equal(f.idle.size,0);assert.equal(f.audio.stats.buffers,0);
+});
+
+test('globe audio uses physical distance and projected sphere positions across the longitude seam',async()=>{
+  const {surfacePoint,surfaceFrame,surfaceOffset}=await import('../src/world-surface.js');
+  const world={surface:{type:'sphere',radius:1600,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:0}}};
+  const focus={x:Math.PI*1600-2,y:0,z:-1200},position={...surfaceOffset(world,focus.x,focus.z,10,0),y:0};
+  const origin=surfacePoint(world,focus.x,0,focus.z),frame=surfaceFrame(world,focus.x,focus.z),camera=new PerspectiveCamera(60,1,.1,200);
+  camera.up.set(0,1,0).transformDirection(frame);camera.position.copy(new Vector3(0,12,20).applyMatrix4(frame)).add(origin);camera.lookAt(origin);camera.updateMatrixWorld(true);
+  const placement=militaryAudioPlacement(position,{world,camera,focus,walkingWeight:1});
+  assert.ok(placement);assert.ok(Math.abs(placement.distance-10)<1e-6);assert.ok(placement.gain>0);assert.ok(placement.visible);
 });

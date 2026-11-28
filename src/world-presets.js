@@ -1,9 +1,9 @@
 import {createStressWorld} from './stress-world.js';
 
-export const DEFAULT_LAYOUT='settlement';
+export const DEFAULT_LAYOUT='match';
 
-/** Keep saved presets explicit and large geography imports off the island's
- * launch path. The old ?cities= shortcut still opens the classic generator. */
+/** Saved art presets remain explicit alongside the default globe match.
+ * The old ?cities= shortcut still opens the classic generator. */
 export function launchLayout(parameters){
   return parameters.get('layout')??(parameters.has('cities')?'classic':DEFAULT_LAYOUT);
 }
@@ -12,6 +12,10 @@ export async function createLaunchWorld(parameters,baseUrl){
   const layout=launchLayout(parameters);
   const options={...(parameters.has('seed')?{seed:parameters.get('seed')}:{}),
     ...(parameters.has('trains')?{trainCount:Number(parameters.get('trains'))}:{})};
+  if(layout==='match'){
+    const {createMatchWorld}=await import('./match-world.js');
+    return createMatchWorld(options);
+  }
   if(layout==='settlement'||layout==='settlement-compact'){
     const {createSettlementWorld}=await import('./settlement-world.js');
     return createSettlementWorld({...options,...(layout==='settlement-compact'?{map:'compact'}:{})});

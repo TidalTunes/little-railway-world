@@ -4,7 +4,7 @@ import {Group,BoxGeometry,Mesh,MeshBasicMaterial,Vector3} from 'three';
 import {createWalkingPlayer,WALKING} from '../src/walking-player.js';
 import {walkingPlacementShapes,walkingTrainShapes,walkingContact,walkingSlabHeight,walkingRailSegments,walkingRailHeight,walkingRayDistance} from '../src/walking-collision.js';
 import {polylineTree} from '../src/spatial-index.js';
-import {surfaceChartCoordinates} from '../src/world-surface.js';
+import {surfaceChartCoordinates,surfaceOffset,surfaceFrame,surfacePoint,chartHeadingForSurface} from '../src/world-surface.js';
 
 const flat=(extra={})=>({outline:[[-60,-60],[60,-60],[60,60],[-60,60]],mountains:[],cities:[],stations:[],placements:[],lines:[],river:{points:[],width:0,y:-1.2},rivers:[],...extra});
 const run=(player,seconds,input={})=>{for(let i=0;i<seconds*120;i++)player.update(1/120,input);};
@@ -140,4 +140,17 @@ test('the walking camera retracts before entering a tree crown beside the trunk'
   assert.ok(player.camera.position.z>-1.16,'camera remains in front of the crown');
   assert.ok(Math.abs(player.position.x)<1e-8&&Math.abs(player.position.z)<1e-8,'the narrow trunk leaves the original spawn walkable');
   player.dispose();
+});
+
+test('physical settlement yaw matches collision and camera bounds without changing chart-authored assets',()=>{
+  const radius=1600,world=flat({surface:{type:'sphere',radius,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius,centralLongitude:0,centralLatitude:0}}});
+  const anchor=surfaceChartCoordinates(world,80,67),yaw=.72,item={kind:'civic',buildingType:'market',...anchor,y:0,rotation:yaw,rotationSpace:'surface',width:5,depth:1,height:2};
+  const bodies=walkingPlacementShapes(world,item),chartBodies=walkingPlacementShapes(world,{...item,rotationSpace:undefined,rotation:chartHeadingForSurface(world,item.x,item.z,yaw)});
+  assert.equal(bodies[0].angle,yaw);
+  const local=(x,z)=>surfaceOffset(world,item.x,item.z,Math.cos(yaw)*x+Math.sin(yaw)*z,-Math.sin(yaw)*x+Math.cos(yaw)*z);
+  assert.ok(contact(world,bodies,local(2,0)));assert.equal(contact(world,bodies,local(0,1)),null);
+  for(let i=0;i<16;i++)assert.ok(Math.abs(bodies[0].inverse.elements[i]-chartBodies[0].inverse.elements[i])<1e-9,'explicit physical yaw and equivalent authored heading share one collider');
+  const frame=surfaceFrame(world,item.x,item.z).setPosition(surfacePoint(world,item.x,0,item.z));
+  const origin=new Vector3(Math.sin(yaw)*-3,1,Math.cos(yaw)*-3).applyMatrix4(frame),direction=new Vector3(Math.sin(yaw),0,Math.cos(yaw)).transformDirection(frame);
+  assert.ok(Math.abs(walkingRayDistance(bodies,origin,direction,6)-2.5)<1e-6,'camera rays stop at the same physical wall as walking contacts');
 });

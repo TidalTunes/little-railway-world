@@ -15,14 +15,14 @@ export function cityMarkerStock(city){
   return Number.isFinite(value)?{resource,amount:Math.max(0,Math.floor(value))}:null;
 }
 export function cityMarkerFoodStock(city){const stock=cityMarkerStock(city);return stock?.resource==='food'?stock.amount:null;}
-const cellKey=city=>{const stock=cityMarkerStock(city);return `${THREE.MathUtils.clamp(Math.floor(city.level),1,5)}:${cityMarkerPopulation(city)}:${stock?.resource??''}:${stock?.amount??''}`;};
+const cellKey=city=>{const stock=cityMarkerStock(city);return `${THREE.MathUtils.clamp(Math.floor(city.level),1,5)}:${cityMarkerPopulation(city)}:${stock?.resource??''}:${stock?.amount??''}:${city.name??''}`;};
 
 /** One cached, content-sized nameplate serves both strategy layers. Narrow
  * populations lose the empty right-hand padding without shrinking the type.
  * New house counts repaint only during sync, never during camera movement. */
-function statisticsAtlas(owner){
+function statisticsAtlas(owner,tileHeight=TILE_HEIGHT){
   const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d'),colors=playerColors(owner);
-  canvas.width=ATLAS_COLUMNS*TILE_WIDTH;canvas.height=TILE_HEIGHT;
+  canvas.width=ATLAS_COLUMNS*TILE_WIDTH;canvas.height=tileHeight;
   const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;
   texture.generateMipmaps=false;texture.minFilter=THREE.LinearFilter;
   const grid={value:new THREE.Vector2(ATLAS_COLUMNS,1)};let key='',cells=0,updates=0;
@@ -31,8 +31,8 @@ function statisticsAtlas(owner){
     const population=cell.population>=1000?populationFormat.format(cell.population):String(cell.population);
     ctx.font='650 30px system-ui, sans-serif';
     const width=94+Math.ceil(ctx.measureText(population).width);
-    const x=index%ATLAS_COLUMNS*TILE_WIDTH+(TILE_WIDTH-width)/2,y=Math.floor(index/ATLAS_COLUMNS)*TILE_HEIGHT;
-    ctx.save();ctx.translate(x,y+TILE_HEIGHT-CARD_HEIGHT);
+    const x=index%ATLAS_COLUMNS*TILE_WIDTH+(TILE_WIDTH-width)/2,y=Math.floor(index/ATLAS_COLUMNS)*tileHeight;
+    ctx.save();ctx.translate(x,y+tileHeight-CARD_HEIGHT);
     polygon([[9,11],[width-9,11],[width-2,20],[width-2,60],[width-9,69],[9,69],[2,60],[2,20]],'#c3a461');
     polygon([[10,14],[width-10,14],[width-5,21],[width-5,59],[width-10,66],[10,66],[5,59],[5,21]],'#183c3e');
     polygon([[29,15],[49,24],[49,49],[29,63],[10,49],[10,24]],colors.body.getStyle());
@@ -44,6 +44,10 @@ function statisticsAtlas(owner){
     polygon([[60,39],[72,39],[77,53],[55,53]],'#b8ccc2');
     ctx.textAlign='left';ctx.fillStyle='#f0f0dc';ctx.font='650 30px system-ui, sans-serif';ctx.fillText(population,84,41);
     ctx.restore();
+    if(cell.name){
+      ctx.save();ctx.translate(index%ATLAS_COLUMNS*TILE_WIDTH+TILE_WIDTH/2,y+65);
+      ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='700 22px system-ui, sans-serif';ctx.lineJoin='round';ctx.lineWidth=5;ctx.strokeStyle='#173b3e';ctx.strokeText(cell.name,0,0,TILE_WIDTH-12);ctx.fillStyle='#fff1d8';ctx.fillText(cell.name,0,0,TILE_WIDTH-12);ctx.restore();
+    }
     if(cell.stock!==null){
       const stock=cell.stock.amount>=1000?populationFormat.format(cell.stock.amount):String(cell.stock.amount);
       ctx.font='700 32px system-ui, sans-serif';
@@ -76,17 +80,17 @@ function statisticsAtlas(owner){
     }
   }
 
-  return {texture,grid,
+  return {texture,grid,tileHeight,
     sync(cities){
       const entries=[],lookup=new Map();
       for(const city of cities){const level=THREE.MathUtils.clamp(Math.floor(city.level),1,5),population=cityMarkerPopulation(city),stock=cityMarkerStock(city),id=cellKey(city);
-        if(!lookup.has(id)){lookup.set(id,entries.length);entries.push({level,population,stock});}}
-      const nextKey=entries.map(entry=>`${entry.level}:${entry.population}:${entry.stock?.resource??''}:${entry.stock?.amount??''}`).join('|');
+        if(!lookup.has(id)){lookup.set(id,entries.length);entries.push({level,population,stock,name:city.name??''});}}
+      const nextKey=entries.map(entry=>`${entry.level}:${entry.population}:${entry.stock?.resource??''}:${entry.stock?.amount??''}:${entry.name}`).join('|');
       if(nextKey!==key){
         key=nextKey;cells=entries.length;const rows=Math.max(1,2**Math.ceil(Math.log2(Math.max(1,Math.ceil(cells/ATLAS_COLUMNS)))));
         // A larger atlas releases the old GPU allocation before reuploading.
-        if(canvas.height!==rows*TILE_HEIGHT)texture.dispose();
-        canvas.width=ATLAS_COLUMNS*TILE_WIDTH;canvas.height=rows*TILE_HEIGHT;grid.value.set(ATLAS_COLUMNS,rows);
+        if(canvas.height!==rows*tileHeight)texture.dispose();
+        canvas.width=ATLAS_COLUMNS*TILE_WIDTH;canvas.height=rows*tileHeight;grid.value.set(ATLAS_COLUMNS,rows);
         entries.forEach(paint);texture.needsUpdate=true;updates++;
       }
       return cities.map(city=>lookup.get(cellKey(city)));
@@ -95,7 +99,7 @@ function statisticsAtlas(owner){
 }
 
 export function createCityLevelMarkers(scene,mapScene,world,{ownerId=world.gameplay.ownerId}={}){
-  const owner=world.players.find(player=>player.id===ownerId),atlas=statisticsAtlas(owner),texture=atlas.texture;
+  const owner=world.players.find(player=>player.id===ownerId),atlas=statisticsAtlas(owner,world.gameplay?.match?160:TILE_HEIGHT),texture=atlas.texture;
   function markerMaterial(){
     const material=new THREE.MeshBasicMaterial({map:texture,transparent:true,depthTest:false,depthWrite:false,toneMapped:false});
     material.onBeforeCompile=shader=>{
@@ -114,8 +118,8 @@ export function createCityLevelMarkers(scene,mapScene,world,{ownerId=world.gamep
   function allocate(count){
     if(count<=capacity)return;
     overview?.removeFromParent();map?.removeFromParent();overview?.dispose();map?.dispose();geometry?.dispose();
-    capacity=Math.max(8,2**Math.ceil(Math.log2(count)));geometry=new THREE.PlaneGeometry(TILE_WIDTH/CARD_HEIGHT,TILE_HEIGHT/CARD_HEIGHT);
-    geometry.translate(0,(TILE_HEIGHT-CARD_HEIGHT)/(2*CARD_HEIGHT),0);
+    capacity=Math.max(8,2**Math.ceil(Math.log2(count)));geometry=new THREE.PlaneGeometry(TILE_WIDTH/CARD_HEIGHT,atlas.tileHeight/CARD_HEIGHT);
+    geometry.translate(0,(atlas.tileHeight-CARD_HEIGHT)/(2*CARD_HEIGHT),0);
     for(const name of ['cityLevel','cityPopulation','cityMarkerIndex'])geometry.setAttribute(name,new THREE.InstancedBufferAttribute(new Float32Array(capacity),1));
     overview=new THREE.InstancedMesh(geometry,material,capacity);map=new THREE.InstancedMesh(geometry,material,capacity);
     overview.name='city-levels';map.name='city-levels-map';
@@ -142,6 +146,9 @@ export function createCityLevelMarkers(scene,mapScene,world,{ownerId=world.gamep
         projected.copy(position).project(camera);
         if(projected.z< -1||projected.z>1||Math.abs(projected.x)>1.08||Math.abs(projected.y)>1.08)continue;
         const pixel=pixelSize(camera,position,viewportHeight);
+        // Individual nameplates have no readable location at planetary scale.
+        // Reveal them once the physical town is large enough to distinguish.
+        if(world.gameplay?.match&&pixel>Math.max(3.4,city.radius??4)/8)continue;
         // One shared pose avoids ghost labels during layer crossfade. The full
         // map places the nameplate on the city; detailed towns retain headroom.
         position.addScaledVector(cameraUp,pixel*24*(1-THREE.MathUtils.smoothstep(mapBlend,0,1)));scale.setScalar(pixel*MARKER_HEIGHT);

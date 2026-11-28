@@ -83,7 +83,14 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
   // Constant shader light count, no shadow maps and no light per projectile.
   // Keep lamps out of the mesh group shared with the flat map's effect aliases.
   const lights=Array.from({length:maxLights},()=>{const light=new THREE.PointLight(0xffbe64,0,12,2);light.name='military-flash-light';light.castShadow=false;parent.add(light);return light;});
-  let time=0,serial=0,disposed=false,dirty=false,fired=0,impacts=0,contacts=0,rejected=0,lastImpact=null;
+  let time=0,serial=0,disposed=false,dirty=false,fired=0,impacts=0,contacts=0,rejected=0,lastImpact=null,emissionTransform=null;
+  const lightPosition=new THREE.Vector3();
+  function transformed(input,operation){
+    const transform=input?.transform;
+    if(transform&&(!transform.isMatrix4||!transform.elements.every(Number.isFinite)))return reject('invalid-transform');
+    const previous=emissionTransform;emissionTransform=transform??null;try{return operation();}finally{emissionTransform=previous;}
+  }
+  function stamp(slot){slot.transformed=!!emissionTransform;if(emissionTransform){slot.transform??=new THREE.Matrix4();slot.transform.copy(emissionTransform);}}
   const position=new THREE.Vector3(),direction=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),matrix=new THREE.Matrix4();
   const forward=new THREE.Vector3(0,0,1),up=new THREE.Vector3(0,1,0),color=new THREE.Color(),inputColor=new THREE.Color();
   function batch(name,geometry,size,basic=false){
@@ -127,7 +134,7 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     }else{slot=target.slots[target.head];unlink(target,slot);target.recycled++;}
     slot.previous=target.tail;slot.next=-1;
     if(target.tail<0)target.head=slot.index;else target.slots[target.tail].next=slot.index;
-    target.tail=slot.index;slot.active=true;slot.serial=++serial;dirty=true;return slot;
+    target.tail=slot.index;slot.active=true;slot.serial=++serial;stamp(slot);dirty=true;return slot;
   }
   function reject(code){rejected++;return {ok:false,code};}
   function readColor(value,fallback){
@@ -269,7 +276,7 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     }
   }
   function write(target,slot,opacity,tint){
-    const index=target.count++;matrix.compose(position,rotation,scale);target.mesh.setMatrixAt(index,matrix);
+    const index=target.count++;matrix.compose(position,rotation,scale);if(slot.transformed)matrix.premultiply(slot.transform);target.mesh.setMatrixAt(index,matrix);
     if(tint)color.copy(tint);else color.setRGB(slot.r,slot.g,slot.b);target.mesh.setColorAt(index,color);target.opacity.setX(index,opacity);
   }
   function draw(){
@@ -303,16 +310,17 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
   function updateLights({focus={x:0,z:0},mapBlend=0,reducedMotion=false}={}){
     if(!lights.length)return;
     const candidates=[];
-    const choose=(x,y,z,strength,radius)=>{
-      const distance=Math.hypot(x-focus.x,z-focus.z);if(distance>90)return;
+    const choose=(x,y,z,strength,radius,slot)=>{
+      lightPosition.set(x,y,z);if(slot.transformed)lightPosition.applyMatrix4(slot.transform);x=lightPosition.x;y=lightPosition.y;z=lightPosition.z;
+      const distance=Math.hypot(x-focus.x,y-(focus.y??y),z-focus.z);if(distance>90)return;
       const score=strength/(4+distance*.2),candidate={x,y,z,strength,radius,score};
       let i=0;while(i<candidates.length&&candidates[i].score>=score)i++;if(i<lights.length){candidates.splice(i,0,candidate);if(candidates.length>lights.length)candidates.pop();}
     };
     if(mapBlend<.99&&!reducedMotion){
-      for(const shot of projectiles.slots)if(shot.active){pose(shot,time);choose(position.x,position.y,position.z,shot.kind==='tracer'?2:7,shot.kind==='tracer'?4:7);}
+      for(const shot of projectiles.slots)if(shot.active){pose(shot,time);choose(position.x,position.y,position.z,shot.kind==='tracer'?2:7,shot.kind==='tracer'?4:7,shot);}
       for(const slot of particles.slots)if(slot.active&&(slot.mode==='flash'||slot.mode==='fire')){
         const age=time-slot.born,fade=(1-clamp(age/slot.life,0,1))**2;
-        choose(slot.x+slot.vx*age,slot.y+slot.vy*age,slot.z+slot.vz*age,slot.size*55*fade,Math.min(15,5+slot.size*7));
+        choose(slot.x+slot.vx*age,slot.y+slot.vy*age,slot.z+slot.vz*age,slot.size*55*fade,Math.min(15,5+slot.size*7),slot);
       }
     }
     for(let i=0;i<lights.length;i++){
@@ -334,7 +342,7 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
           if(eventAt<=end&&(eventAt<at||eventAt===at&&shot.serial<(next?.serial??Infinity))){next=shot;at=eventAt;isTrail=trailAt<impactAt;}
         }
         if(!next)break;
-        time=at;expire();if(isTrail)trail(next);else impact(next);
+        time=at;expire();transformed({transform:next.transformed?next.transform:null},()=>{if(isTrail)trail(next);else impact(next);});
       }
       time=end;expire();
       for(const target of allPools)if(count(target)){dirty=true;break;}
@@ -349,7 +357,7 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     for(const light of lights)light.intensity=0;
   }
   function count(target){return target.active;}
-  return {root,fire,contact,burst,update,clear,
+  return {root,fire:input=>transformed(input,()=>fire(input)),contact:input=>transformed(input,()=>contact(input)),burst:input=>transformed(input,()=>burst(input)),update,clear,
     get stats(){
       const active={projectiles:count(projectiles),particles:count(particles),marks:count(marks)};let drawCalls=0;
       for(const target of batches)if(target.mesh.visible&&target.mesh.count)drawCalls++;

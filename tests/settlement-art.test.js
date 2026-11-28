@@ -8,6 +8,7 @@ import {M} from '../src/palette.js';
 import {createWalkingPlayer} from '../src/walking-player.js';
 import {buildSettlementBuilding} from '../src/settlement-building-assets.js';
 import {SETTLEMENT_BUILDINGS as SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
+import {surfaceChartCoordinates,surfacePoint,surfaceFrame,surfaceOffset,surfaceCoordinates} from '../src/world-surface.js';
 
 function world(){return {seed:'art-test',players:[{id:'teal',color:{l:.62,c:.12,h:170}}],
   gameplay:{ownerId:'teal'},outline:[[-100,-100],[100,-100],[100,100],[-100,100]],mountains:[],cities:[],stations:[],placements:[],lines:[],
@@ -220,5 +221,32 @@ test('the far map retains only isolated home symbols rather than logos for city 
     art.sync(homes().map((home,index)=>({...home,cityId:index<3?'city:one':null})));
     const markers=art.mapRoot.children.filter(mesh=>mesh.isInstancedMesh&&!mesh.userData.buildingType);
     assert.equal(markers.length,1);assert.equal(markers[0].count,1);
+  }finally{art.dispose();}
+});
+
+test('globe settlement houses, previews, paths and construction share physical tangent coordinates',()=>{
+  const radius=1600,model={...world(),outline:[[-6000,-2600],[6000,-2600],[6000,2600],[-6000,2600]],surface:{type:'sphere',radius,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius,centralLongitude:0,centralLatitude:0}}};
+  const anchor=surfaceChartCoordinates(model,83,66),item={...homes()[0],...anchor,id:'globe-home',y:0,rotation:.72,rotationSpace:'surface',cityId:null};
+  const frame=surfaceFrame(model,item.x,item.z).setPosition(surfacePoint(model,item.x,0,item.z)),expected=frame.clone().multiply(new Matrix4().makeRotationY(item.rotation));
+  const art=createSettlementArt(new Group(),new Group(),model),path={id:'globe-lane',width:.6,points:[{...surfaceOffset(model,item.x,item.z,-5,3),y:0},{...surfaceOffset(model,item.x,item.z,5,3),y:0}]};
+  try{
+    art.sync([item],[path]);const mesh=art.meshes.find(mesh=>mesh.userData.variant===item.variant),matrix=new Matrix4();mesh.getMatrixAt(0,matrix);
+    const origin=surfacePoint(model,item.x,0,item.z),forward=new Vector3(0,0,1).transformDirection(matrix),expectedForward=new Vector3(0,0,1).transformDirection(expected);
+    assert.ok(new Vector3().setFromMatrixPosition(matrix).distanceTo(origin)<1e-4);
+    assert.ok(forward.distanceTo(expectedForward)<1e-6,'physical yaw is not compressed by high-latitude chart scaling');
+    assert.ok(new Vector3().setFromMatrixScale(matrix).distanceTo(new Vector3(1,1,1))<1e-6);
+    art.preview({house:item,valid:true,path},{visible:true});const ghost=previewMesh(art.root);ghost.updateMatrixWorld(true);
+    assert.ok(new Vector3(0,0,1).transformDirection(ghost.matrix).distanceTo(expectedForward)<1e-6);
+    assert.ok(new Vector3().setFromMatrixPosition(ghost.matrix).distanceTo(origin)<1e-6);
+    const lane=art.root.getObjectByName('settlement-paths').children[0],positions=lane.geometry.attributes.position,point=new Vector3();
+    assert.ok(positions.count>0);
+    for(let i=0;i<positions.count;i++)assert.ok(Math.abs(surfaceCoordinates(model,point.fromBufferAttribute(positions,i)).elevation-.026)<.0003,'roads sit on Earth instead of the generation chart');
+    const preview=art.root.getObjectByName('settlement-path-preview').geometry.attributes.position;
+    assert.ok(new Vector3().fromBufferAttribute(preview,0).distanceTo(surfacePoint(model,path.points[0].x,.045,path.points[0].z))<.0002);
+    const second={...item,id:'new-globe-home',...surfaceOffset(model,item.x,item.z,8,0)};art.sync([item,second],[path],[],{animate:true});art.update({dt:.5,mapBlend:.5});
+    for(const root of [art.root,art.mapRoot]){
+      const dust=root.getObjectByName('construction-dust');assert.ok(dust.count>0);dust.getMatrixAt(0,matrix);
+      assert.ok(new Vector3().setFromMatrixPosition(matrix).distanceTo(surfacePoint(model,second.x,root===art.root?0:.72,second.z))<4,'dust remains in the construction site tangent frame');
+    }
   }finally{art.dispose();}
 });

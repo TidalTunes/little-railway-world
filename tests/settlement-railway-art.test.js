@@ -459,3 +459,21 @@ test('station access paths stay in detailed scenery without appearing as map rai
   art.sync({...snapshot,revision:2,paths:[]});
   assert.ok(withPaths>network.children.reduce((total,mesh)=>total+(mesh.geometry?.attributes.position.count??0),0),'detailed access path geometry is retained');
 });
+
+
+test('Earth match station growth retains unchanged geometry chunks and capture refreshes only the affected batch',t=>{
+  const globe={...world,gameplay:{match:{},economy:'loops'},surface:{type:'sphere',radius:1600,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:0}}};
+  const parent=new THREE.Group(),mapParent=new THREE.Group(),art=createSettlementRailwayArt(parent,mapParent,globe);t.after(()=>art.dispose());
+  const items=Array.from({length:17},(_,i)=>({...stations[0],id:`station-${i}`,cityId:`city-${i}`,lineId:`spine-${i}`,x:i*18}));
+  const tracks=items.map((item,i)=>({...line,id:item.lineId,points:line.points.map(point=>({...point,x:i*18+2.5}))}));
+  art.sync({revision:1,stations:items.slice(0,16),lines:tracks.slice(0,16)});
+  const network=art.root.getObjectByName('built-railway-network'),mapNetwork=art.mapRoot.getObjectByName('built-map-railway-network');
+  assert.equal(network.children.length,2);const prior=network.children.map(chunk=>chunk.children[0].geometry),priorMap=mapNetwork.children.map(chunk=>chunk.children[0].geometry);let disposed=0;
+  prior.forEach(geometry=>geometry.addEventListener('dispose',()=>disposed++));
+  art.sync({revision:2,stations:items,lines:tracks});assert.equal(network.children.length,3);assert.equal(disposed,0);
+  for(let i=0;i<2;i++){assert.equal(network.children[i].children[0].geometry,prior[i]);assert.equal(mapNetwork.children[i].children[0].geometry,priorMap[i]);}
+  art.sync({revision:3,stations:items.map((item,i)=>i?item:{...item,ownerId:'coral'}),lines:tracks});
+  assert.equal(disposed,1,'capture releases only the owner-colored batch that changed');assert.equal(network.children[1].children[0].geometry,prior[1]);
+  assert.ok(art.meshes.length>0);assert.equal(art.stats.stations,17);assert.equal(art.stats.lines,17);
+  art.dispose();assert.equal(disposed,2);assert.equal(parent.children.length,0);assert.equal(mapParent.children.length,0);
+});

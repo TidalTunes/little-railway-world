@@ -1,8 +1,8 @@
 /** Screen-space RTS picking stays independent of terrain/render detail. */
-export function pickMilitaryUnit(units,point,project,{ownerId,enemy=false}={}){
+export function pickMilitaryUnit(units,point,project,{ownerId,enemy=false,allied=(a,b)=>a===b}={}){
   let best=null,nearest=Infinity;
   for(const unit of units){
-    if(unit.hp<=0||ownerId&&(enemy?unit.ownerId===ownerId:unit.ownerId!==ownerId))continue;
+    if(unit.hp<=0||ownerId&&(enemy?allied(unit.ownerId,ownerId):unit.ownerId!==ownerId))continue;
     const p=project(unit);if(!p||p.visible===false)continue;
     const distance=Math.hypot(p.x-point.x,p.y-point.y);
     if(distance<Math.max(10,p.radius??12)&&distance<nearest){best=unit;nearest=distance;}
@@ -36,7 +36,7 @@ export function createMilitaryInput(canvas,{getState,project,groundAt,onSelect,o
     const state=getState();if(event.target!==canvas||!enabled(state)||event.pointerType==='touch')return;
     if(event.button===2&&state.selectedIds.size){
       reset();consume(event);onClaimPointer();canvas.focus({preventScroll:true});
-      const hit=pickMilitaryUnit(state.units,point(event),project,{ownerId:state.ownerId,enemy:true}),destination=groundAt(point(event));
+      const hit=pickMilitaryUnit(state.units,point(event),project,{ownerId:state.ownerId,enemy:true,allied:state.allied}),destination=groundAt(point(event));
       if(hit)onCommand({type:'attack',targetId:hit.id});else if(destination)onCommand({type:'move',...destination});return;
     }
     if(event.button!==0)return;

@@ -34,6 +34,15 @@ test('cosmetic work makes real outward and return trips without removing trees o
   assert.ok(gathers>=3);assert.ok(work.stats.completedTrips>=3);assert.equal(work.stats.production,0);assert.equal(session.shared.removedTreeIds.size,0);assert.equal(work.stats.regrowing,0);work.dispose();
 });
 
+test('capturing a home transfers its existing cosmetic worker to the new owner',()=>{
+  const {world,session,houses,city}=fixture(),work=createResourceWork(world,{session,surfaceAt:ground});
+  const worker=work.workers.get(`worker:${houses[0].id}`),oldPosition={x:worker.x,z:worker.z};
+  session.player.cities=[];session.bots=[{game:{ownerId:'coral',houses,cities:[{...city,ownerId:'coral'}]}}];
+  for(const home of houses)home.ownerId='coral';session.shared.touchTrees();work.sync();
+  assert.equal(work.workers.get(worker.id),worker,'capture preserves the NPC instead of respawning it');
+  assert.equal(worker.ownerId,'coral');assert.deepEqual({x:worker.x,z:worker.z},oldPosition);work.dispose();
+});
+
 test('each completed gathering trip has one cosmetic event at its actual node and no home-credit event',()=>{
   const{world,session}=fixture(),work=createResourceWork(world,{session,surfaceAt:ground}),events=run(work,80);
   const gathered=events.filter(event=>event.type==='gathered');assert.ok(gathered.length>3);assert.equal(new Set(gathered.map(event=>event.id)).size,gathered.length);
@@ -223,4 +232,14 @@ test('manually cut cactus regrows at its own source and blocked rail clearings s
   session.shared.isSceneryRemoved=id=>id===cactus.id;
   assert.ok(!run(work,2).some(event=>event.type==='tree-regrow'&&event.treeId===cactus.id));
   assert.equal(work.stats.regrowing,0,'a new railway cancels pending regrowth rather than retrying forever');work.dispose();
+});
+
+
+test('a pending blocked worker search is cancelled at dusk instead of dispatching an indoor worker later',()=>{
+  const {world,session}=fixture(),work=createResourceWork(world,{session,surfaceAt:(x,z)=>({type:z>3&&z<5?'water':'ground',height:0})});
+  for(const worker of work.workers.values())worker.wait=0;
+  work.update(.05,{dayPhase:'day'});assert.ok(work.stats.routeSearches>0);
+  assert.ok([...work.workers.values()].every(worker=>worker.activity==='waiting'));
+  run(work,15,{dayPhase:'night'});assert.ok([...work.workers.values()].every(worker=>worker.indoors));
+  assert.equal(work.drainEvents().length,0);work.dispose();
 });

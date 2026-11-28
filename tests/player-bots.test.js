@@ -104,3 +104,27 @@ test('the real island completes three independent offscreen level-five cities wi
   assert.equal(session.player.settleIncome(1).amount,0,'foreign cities never contribute to the player account');
   assert.equal(new Set(session.buildings.map(building=>building.id)).size,session.buildings.length,'all ownership namespaces are unique');
 });
+
+test('polar travellers move and harvest in physical surface units rather than stretched chart units',async()=>{
+  const{surfaceOffset,surfaceDistance}=await import('../src/world-surface.js');
+  const world={seed:'polar-worker',surface:{type:'sphere',radius:180,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius:180,centralLongitude:0,centralLatitude:0}}};
+  const anchor={x:100,z:-180*Math.PI/180*75},tree={id:'polar-tree',kind:'tree',...surfaceOffset(world,anchor.x,anchor.z,5,5),scale:1};
+  const config={...configuration(),starterHouse:{...configuration().starterHouse,...anchor},spawn:{...surfaceOffset(world,anchor.x,anchor.z,0,2.5),heading:0}};world.gameplay=config;
+  const game=createSettlementGame(world,{config,surfaceAt:flat}),hits=[],bot=createPlayerBot(world,game,{config,surfaceAt:flat,getPlacements:()=>[tree],onChop:(result,target,position)=>hits.push({result,target,position})});
+  for(let i=0;i<1500&&!hits.length;i++){const before=bot.position;bot.update(1/60);assert.ok(surfaceDistance(world,before,bot.position)<=PLAYER_BOT.speed/60+1e-6);}
+  assert.equal(hits.length,1);assert.ok(surfaceDistance(world,tree,hits[0].position)<=1.1);assert.ok(bot.stats.distance>2);assert.ok(game.isTreeRemoved(tree));
+  game.addLogs(100);for(let i=0;i<1800&&game.houses.length<2;i++)bot.update(1/60);assert.ok(game.houses.length>=2,'the same worker places a physically sized home at high latitude');
+});
+
+test('a TPS role change cancels an in-flight physical task before it can harvest or build',()=>{
+  let role='hybrid';const{bot,game}=fixture({scenery:[{id:'tree',kind:'tree',x:0,z:8,scale:1}],getRole:()=>role,coarseUpdates:true});
+  for(let i=0;i<100&&bot.state!=='walking';i++)bot.update(.1);assert.equal(bot.state,'walking');const before=bot.position;
+  role='tps';bot.update(1);assert.equal(bot.state,'tps');assert.deepEqual(bot.position,before);assert.equal(game.logs,0);assert.equal(game.houses.length,1);
+  role='hybrid';for(let i=0;i<200&&!game.isTreeRemoved('tree');i++)bot.update(.1);assert.ok(game.isTreeRemoved('tree'));
+});
+
+test('coarse simulation retains elapsed time while yielding one bounded planning slice per scheduled visit',()=>{
+  const{bot}=fixture({scenery:[{id:'tree',kind:'tree',x:0,z:8,scale:1}],coarseUpdates:true,surfaceAt:(x,z)=>({height:0,type:Math.abs(x)<1&&z>4.6&&z<5.4?'water':'ground'})});
+  for(let i=0;i<30;i++){const before=bot.stats.routeNodes;bot.update(.6);assert.ok(bot.stats.routeNodes-before<=PLAYER_BOT.routeNodeBudget);}
+  assert.ok(Math.abs(bot.snapshot().elapsed-18)<1e-8);assert.ok(bot.stats.routeSearches>0);
+});

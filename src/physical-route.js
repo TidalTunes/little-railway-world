@@ -112,7 +112,7 @@ export function createSurfaceAlignment(start,end,options){
 }
 
 
-function localPhysicalAlignment(world,start,end,options){
+export function localPhysicalAlignment(world,start,end,options){
   const nodes=[start,...(options.waypoints??[]),end],anchor={x:(start.x+end.x)/2,z:(start.z+end.z)/2};
   const frame=surfaceFrame(world,anchor.x,anchor.z,new Matrix4()),e=column(frame,0),south=column(frame,2);
   const chartX=surfaceTangent(world,anchor.x,0,anchor.z,1,0,0,new Vector3()),chartZ=surfaceTangent(world,anchor.x,0,anchor.z,0,0,1,new Vector3());

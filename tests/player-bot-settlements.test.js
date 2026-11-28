@@ -2,18 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {createSettlementSession} from '../src/settlement-session.js';
-import {createPlayerBotSettlements} from '../src/player-bot-settlements.js';
+import {createPlayerBotSettlements,BOT_SCHEDULING} from '../src/player-bot-settlements.js';
 import {createMutableTrees} from '../src/mutable-trees.js';
 
 const home=(id,ownerId,x)=>({id,ownerId,kind:'house',x,y:0,z:0,rotation:0,scale:1,variant:0});
-function fixture(t,{tree,loaded=false,count=2,scenery=[],getInfrastructure}={}){
+function fixture(t,{tree,loaded=false,count=2,scenery=[],getInfrastructure,match=false}={}){
   const previous=globalThis.document;
   globalThis.document={createElement:()=>({getContext:()=>({beginPath(){},arc(){},fill(){},moveTo(){},lineTo(){},closePath(){},save(){},restore(){},translate(){},fillText(){},strokeText(){},measureText(value){return{width:String(value).length*18};}})})};
+  const owners=count>2?Array.from({length:count},(_,index)=>`rival-${index}`):['coral','blue'].slice(0,count);
   const world={seed:'rendered-bots',players:[{id:'teal',color:{l:.62,c:.12,h:170}},{id:'coral',color:{l:.63,c:.14,h:22}},{id:'blue',color:{l:.63,c:.14,h:250}}],
     outline:[[-80,-80],[80,-80],[80,80],[-80,80]],mountains:[],cities:[],stations:[],placements:[],lines:[],
     river:{points:[],width:0,y:-1.2},rivers:[],gameplay:{ownerId:'teal',starterHouse:home('home-1','teal',-40),
-      botScenery:[...scenery,...tree?[tree]:[]],playerBots:['coral','blue'].slice(0,count).map((ownerId,index)=>({id:`bot:${ownerId}`,ownerId,
+      botScenery:[...scenery,...tree?[tree]:[]],playerBots:owners.map((ownerId,index)=>({id:`bot:${ownerId}`,ownerId,
         starterHouse:home(`bot:${ownerId}:home-1`,ownerId,index*24),spawn:{x:index*24,z:2.5,heading:0}}))}};
+  if(match){world.gameplay.economy='loops';world.gameplay.match={localPlayerId:'teal',players:['teal',...owners].map(id=>({id,name:id,teamId:'allies',role:'hybrid'}))};world.players=world.gameplay.match.players;world.outline=[[-80,-80],[count*24+80,-80],[count*24+80,80],[-80,80]];}
   const scene=new THREE.Group(),map=new THREE.Group(),treeRoot=new THREE.Group(),trees=createMutableTrees(world);
   if(loaded&&tree)trees.addChunk('loaded',treeRoot,[tree]);
   const calls=[],detail={fellTree(id,options){calls.push(['fall',id]);return trees.fellTree(id,options);},removeTree(id){calls.push(['remove',id]);return trees.removeTree(id);}};
@@ -84,4 +86,38 @@ test('bots release cleared offscreen farm obstacles from their permanent navigat
   for(let frame=0;frame<900&&!session.shared.removedTreeIds.has(tree.id);frame++)bots.simulate(1/60);
   assert.ok(session.shared.removedTreeIds.has(tree.id),'offscreen navigation refreshes immediately after clearing');
   assert.ok(world.gameplay.botScenery.some(item=>item.id===farm.id),'the authored source remains intact for deterministic streaming');
+});
+
+test('a 143-rival match keeps simulation visits bounded, retains elapsed time and creates no duplicate avatars',t=>{
+  const{bots,scene,map,camera}=fixture(t,{count:143,match:true});for(const entry of bots.entries)entry.bot.setPolicy({paused:true});
+  const positions=bots.positions;let elapsed=0;
+  for(let frame=0;frame<80;frame++){
+    bots.simulate(1/60);elapsed+=1/60;assert.ok(bots.stats.lastUpdates<=BOT_SCHEDULING.perFrame);
+    for(const entry of bots.entries)assert.ok(Math.abs(entry.bot.snapshot().elapsed+entry.pendingDt-elapsed)<1e-8,'scheduled and deferred time sum to wall time for every bot');
+  }
+  assert.ok(bots.entries.every(entry=>entry.bot.snapshot().elapsed>1));assert.equal(bots.positions,positions);
+  assert.ok(bots.entries.every(entry=>entry.actor===null&&entry.residents===null));const revisions=bots.entries.map(entry=>entry.art.revision);
+  bots.update(.1,{camera});assert.deepEqual(bots.entries.map(entry=>entry.art.revision),revisions);
+  bots.dispose();assert.equal(scene.children.length,0);assert.equal(map.children.length,0);
+});
+
+test('equal-count captured city swaps update art positions and level markers without unnecessary rebuilds',t=>{
+  const{bots,session,camera}=fixture(t,{match:true});for(const entry of bots.entries)grow(entry);bots.simulate(0);
+  const [first,second]=bots.entries,firstCity=first.game.cities[0].id,secondCity=second.game.cities[0].id,oldFirst=first.art.revision,oldSecond=second.art.revision;
+  assert.ok(session.captureCity(firstCity,second.game.ownerId,{steward:true}).ok);assert.ok(session.captureCity(secondCity,first.game.ownerId).ok);bots.simulate(0);
+  assert.equal(first.houseCount,3);assert.equal(second.houseCount,3);assert.ok(first.art.revision>oldFirst);assert.ok(second.art.revision>oldSecond);
+  assert.equal(first.snapshot.cities[0].id,secondCity);assert.equal(second.snapshot.cities[0].id,firstCity);
+  const revisions=bots.entries.map(entry=>entry.art.revision);bots.update(.1,{camera});assert.deepEqual(bots.entries.map(entry=>entry.art.revision),revisions);
+});
+
+test('distant mutations preserve a bot local obstacle snapshot while nearby harvests invalidate it',t=>{
+  const near={id:'near-source',kind:'tree',x:0,z:7,scale:1},far={id:'far-source',kind:'tree',x:168,z:7,scale:1};
+  const{bots,session}=fixture(t,{count:8,match:true,scenery:[near,far]});for(const entry of bots.entries)entry.bot.setPolicy({paused:true});
+  const local=bots.entries[0].game,descriptor=Object.getOwnPropertyDescriptor(local,'houses');let reads=0;
+  Object.defineProperty(local,'houses',{...descriptor,get(){reads++;return descriptor.get.call(this);}});
+  bots.simulate(.2);reads=0;
+  assert.ok(session.bots.at(-1).game.chop(far).ok);bots.simulate(.2);
+  assert.equal(reads,0,'an unrelated tree mutation must not rebuild local obstacles or restart site search');
+  assert.ok(session.bots.at(-1).game.chop(near).ok);bots.simulate(.2);
+  assert.ok(reads>0,'a nearby removed tree immediately rebuilds local collision state');
 });

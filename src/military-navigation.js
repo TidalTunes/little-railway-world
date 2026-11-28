@@ -1,8 +1,8 @@
 import {walkingPlacementShapes,walkingContact} from './walking-collision.js';
-import {SpatialGrid,pointBox} from './spatial-index.js';
+import {surfaceDistance,surfaceOffset,surfaceDisplacement} from './world-surface.js';
+import {createMilitarySpatial} from './military-spatial.js';
 
 const finitePoint=p=>Number.isFinite(p?.x)&&Number.isFinite(p?.z);
-const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 class Heap{
   constructor(){this.values=[];}
   push(value){const a=this.values;a.push(value);let i=a.length-1;while(i){const p=(i-1)>>1;if(a[p].score<=value.score)break;a[i]=a[p];i=p;}a[i]=value;}
@@ -13,50 +13,53 @@ class Heap{
 /** Ground movement shares the traveller's simple asset bodies, never render
  * triangles. Searches are local, bounded, and only occur when an order changes. */
 export function createMilitaryNavigation(world,{surfaceAt,getPlacements=()=>[]}={}){
-  let placements=null,index=new SpatialGrid(12),revision=0;
+  const distance=(a,b)=>surfaceDistance(world,a,b),offset=(p,dx,dz)=>surfaceOffset(world,p.x,p.z,dx,dz);
+  let placements=null,index=createMilitarySpatial(world),revision=0;
+  function valid(point){if(!finitePoint(point))return false;const p=world.surface?.projection;return p?.type!=='equirectangular'||Math.abs(p.centralLatitude*Math.PI/180-point.z/p.radius)<=Math.PI/2+1e-9;}
   const contact={},terrainCache=new Map(),failedPaths=new Map(),stats={searches:0,visited:0,colliderRebuilds:0,terrainSamples:0,cacheHits:0,partialPaths:0};
   function refresh(){
-    const values=getPlacements()??[];if(values===placements)return;placements=values;index=new SpatialGrid(12);revision++;failedPaths.clear();stats.colliderRebuilds++;
+    const values=getPlacements()??[];if(values===placements)return;placements=values;index=createMilitarySpatial(world);revision++;failedPaths.clear();stats.colliderRebuilds++;
     for(const item of values)for(const body of walkingPlacementShapes(world,item)){
       if(body.cameraOnly||body.support)continue;
       const radius=(body.radius??Math.hypot(body.width,body.depth)/2)+Math.hypot(body.x,body.z);
       if(!Number.isFinite(radius))continue;
-      index.insert(body,pointBox(item.x,item.z,radius));
+      index.insert(body,item,radius);
     }
   }
   // Terrain is immutable during a session. A shared one-unit lattice keeps
   // repeated long orders from resampling coast/biome polygons thousands of
   // times. Bilinear heights preserve smooth movement; a cell touching water
   // stays blocked, conservatively keeping ground units away from shore edges.
-  function sample(ix,iz){const key=`${ix}:${iz}`;let value=terrainCache.get(key);if(!value){value=surfaceAt(ix,iz);stats.terrainSamples++;if(terrainCache.size>=65536)terrainCache.delete(terrainCache.keys().next().value);terrainCache.set(key,value);}return value;}
+  function sample(ix,iz){const projection=world.surface?.projection;if(projection?.type==='equirectangular'){const half=Math.PI*projection.radius;ix=((ix+half)%(half*2)+half*2)%(half*2)-half;const center=projection.centralLatitude*Math.PI/180*projection.radius;iz=Math.max(center-half/2,Math.min(center+half/2,iz));}const key=`${ix}:${iz}`;let value=terrainCache.get(key);if(!value){value=surfaceAt(ix,iz);stats.terrainSamples++;if(terrainCache.size>=65536)terrainCache.delete(terrainCache.keys().next().value);terrainCache.set(key,value);}return value;}
   function terrain(x,z){const ix=Math.floor(x),iz=Math.floor(z),tx=x-ix,tz=z-iz,a=sample(ix,iz),b=sample(ix+1,iz),c=sample(ix,iz+1),d=sample(ix+1,iz+1),corners=[a,b,c,d];
     const dry=corners.every(p=>p&&['ground','mountain'].includes(p.type)),outside=corners.some(p=>!p||p.type==='outside');
     return{type:outside?'outside':dry?'ground':'water',height:(a?.height??0)*(1-tx)*(1-tz)+(b?.height??0)*tx*(1-tz)+(c?.height??0)*(1-tx)*tz+(d?.height??0)*tx*tz};}
 
   function clear(point,radius,air=false){
-    if(!finitePoint(point))return false;const ground=terrain(point.x,point.z);
+    if(!valid(point))return false;const ground=terrain(point.x,point.z);
     if(!ground||!Number.isFinite(ground.height)||ground.type==='outside')return false;
     if(air)return true;
     if(!['ground','mountain'].includes(ground.type))return false;
     // The footprint must fit on dry land, not just its centre.
     for(const [dx,dz]of [[radius,0],[-radius,0],[0,radius],[0,-radius]]){
-      const edge=terrain(point.x+dx,point.z+dz);
+      const p=offset(point,dx,dz),edge=terrain(p.x,p.z);
       if(!edge||!['ground','mountain'].includes(edge.type)||Math.abs(edge.height-ground.height)>radius*.7+.09)return false;
     }
-    return !walkingContact(world,index.query(pointBox(point.x,point.z,radius)),point,ground.height+.01,radius,.65,contact);
+    return !walkingContact(world,index.query(point,radius),point,ground.height+.01,radius,.65,contact);
   }
   function segment(a,b,radius,air=false){
-    const length=distance(a,b),steps=Math.max(1,Math.ceil(length/.65));let height=terrain(a.x,a.z)?.height;
+    const length=distance(a,b),steps=Math.max(1,Math.ceil(length/.65)),delta=surfaceDisplacement(world,a,b);let height=terrain(a.x,a.z)?.height;
     for(let i=1;i<=steps;i++){
-      const t=i/steps,p={x:a.x+(b.x-a.x)*t,z:a.z+(b.z-a.z)*t};if(!clear(p,radius,air))return false;
+      const t=i/steps,p=offset(a,delta.x*t,delta.z*t);if(!clear(p,radius,air))return false;
       const next=terrain(p.x,p.z).height;if(!air&&Math.abs(next-height)>length/steps*.7+.03)return false;height=next;
     }
     return true;
   }
   function nearest(point,radius,air=false,maxRadius=6){
+    if(!valid(point))return null;
     if(clear(point,radius,air))return{x:point.x,z:point.z};
     for(let ring=.8;ring<=maxRadius;ring+=.8)for(let n=0;n<16;n++){
-      const angle=n*Math.PI/8+ring,p={x:point.x+Math.cos(angle)*ring,z:point.z+Math.sin(angle)*ring};if(clear(p,radius,air))return p;
+      const angle=n*Math.PI/8+ring,p=offset(point,Math.cos(angle)*ring,Math.sin(angle)*ring);if(clear(p,radius,air))return p;
     }
     return null;
   }
@@ -65,16 +68,16 @@ export function createMilitaryNavigation(world,{surfaceAt,getPlacements=()=>[]}=
     if(failedPaths.has(failureKey)){stats.cacheHits++;return null;}
     const fail=()=>{if(failedPaths.size>=512)failedPaths.delete(failedPaths.keys().next().value);failedPaths.set(failureKey,true);return null;};
     const end=nearest(to,radius,air);if(!end)return fail();
-    if(segment(from,end,radius,air))return[end];
-    const step=coarse?4.5:Math.max(1.1,radius*2,Math.min(3,distance(from,end)/85)),pad=coarse?110:Math.max(12,Math.min(60,distance(from,end)*.5)),minX=Math.min(from.x,end.x)-pad,maxX=Math.max(from.x,end.x)+pad,minZ=Math.min(from.z,end.z)-pad,maxZ=Math.max(from.z,end.z)+pad;
+    if(air&&world.surface||segment(from,end,radius,air))return[end];
+    const step=coarse?4.5:Math.max(1.1,radius*2,Math.min(3,distance(from,end)/85)),pad=coarse?110:Math.max(12,Math.min(60,distance(from,end)*.5)),delta=surfaceDisplacement(world,from,end),minX=Math.min(0,delta.x)-pad,maxX=Math.max(0,delta.x)+pad,minZ=Math.min(0,delta.z)-pad,maxZ=Math.max(0,delta.z)+pad;
     const queue=new Heap(),nodes=new Map(),cache=new Map(),key=(x,z)=>`${x}:${z}`;
     const initial={x:from.x,z:from.z,ix:0,iz:0,cost:0,score:distance(from,end),parent:null};queue.push(initial);nodes.set('0:0',initial);let found=null,closest=initial,visited=0;
     while(queue.length&&visited++<maxNodes){
       const current=queue.pop();if(current.closed)continue;current.closed=true;if(distance(current,end)<distance(closest,end))closest=current;
       if(distance(current,end)<step*1.5&&segment(current,end,radius,air)){found=current;break;}
       for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++){
-        if(!dx&&!dz)continue;const ix=current.ix+dx,iz=current.iz+dz,id=key(ix,iz),x=from.x+ix*step,z=from.z+iz*step;
-        if(x<minX||x>maxX||z<minZ||z>maxZ)continue;const old=nodes.get(id);if(old?.closed)continue;
+        if(!dx&&!dz)continue;const ix=current.ix+dx,iz=current.iz+dz,id=key(ix,iz),{x,z}=offset(from,ix*step,iz*step);
+        if(ix*step<minX||ix*step>maxX||iz*step<minZ||iz*step>maxZ)continue;const old=nodes.get(id);if(old?.closed)continue;
         if(!cache.has(id))cache.set(id,clear({x,z},radius,air));if(!cache.get(id))continue;
         const cost=current.cost+Math.hypot(dx,dz)*step;if(old&&old.cost<=cost)continue;
         if(!segment(current,{x,z},radius,air))continue;

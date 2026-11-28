@@ -1,12 +1,14 @@
 import {Matrix4,Vector3,Ray,Box3} from 'three';
-import {rigidSurfacePoseMatrix,surfaceDisplacement,surfaceHeading,surfaceChartRadius} from './world-surface.js';
+import {rigidSurfacePoseMatrix,surfaceDisplacement,surfaceHeading,surfaceChartRadius,chartHeadingForSurface} from './world-surface.js';
 import {surfaceQueryBoxes} from './surface-query.js';
 
 const delta={},local={},a={},b={},localRay=new Ray(),hit=new Vector3();
 const finite=value=>Number.isFinite(value);
 
 function shape(world,item,{x=0,z=0,width,depth,radius,height=2,bottom=0,support=false,dynamic=false,cameraOnly=false}){
-  const scale=item.scale??1,rotation=item.rotation??0,angle=surfaceHeading(world,item.x,item.z,rotation);
+  const scale=item.scale??1,savedRotation=item.rotation??0;
+  const rotation=item.rotationSpace==='surface'?chartHeadingForSurface(world,item.x,item.z,savedRotation):savedRotation;
+  const angle=item.rotationSpace==='surface'?savedRotation:surfaceHeading(world,item.x,item.z,rotation);
   const result={item,x:x*scale,z:z*scale,width:width*scale,depth:depth*scale,radius:radius===undefined?undefined:radius*scale,
     bottom:(item.y??0)+bottom*scale,top:(item.y??0)+height*scale,angle,ca:Math.cos(angle),sa:Math.sin(angle),support,dynamic,cameraOnly};
   result.inverse=rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,rotation,new Matrix4()).invert();

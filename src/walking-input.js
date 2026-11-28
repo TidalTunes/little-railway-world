@@ -1,15 +1,15 @@
 /** Cursor look and keyboard input for the fourth camera layer. Capturing action
  * events prevents Space/jump and WASD/walk from also driving strategy controls. */
-export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>false,canLook=()=>true,onLockChange=()=>{}}){
+export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>false,canLook=()=>true,onLockChange=()=>{},combat=()=>false}){
   const keys=new Set(),listeners=[];
-  let pointer=null,hover=null,lookX=0,lookY=0,pendingJump=false,pendingSwing=false;
+  let pointer=null,hover=null,lookX=0,lookY=0,pendingJump=false,pendingSwing=false,pendingFire=false;
   let active=!!isActive(),looking=!!canLook(),disposed=false,lockWanted=false,lockPending=false,requestSerial=0;
   const document=canvas.ownerDocument,window=document.defaultView??globalThis.window;
   function listen(target,type,fn,options){target.addEventListener(type,fn,options);listeners.push(()=>target.removeEventListener(type,fn,options));}
   function resetLook(){hover=null;lookX=lookY=0;if(pointer)pointer.lookReady=false;}
   const locked=()=>document.pointerLockElement===canvas;
   function releaseLook(){
-    lockWanted=false;lockPending=false;requestSerial++;resetLook();keys.clear();pendingJump=pendingSwing=false;if(pointer)pointer.click=false;
+    lockWanted=false;lockPending=false;requestSerial++;resetLook();keys.clear();pendingJump=pendingSwing=pendingFire=false;if(pointer)pointer.click=false;
     if(locked())document.exitPointerLock?.();
   }
   // This must be called from a click or keyboard gesture. Browsers that deny
@@ -24,7 +24,7 @@ export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>fa
   }
   function clear(){
     releaseLook();const captured=pointer?.id;
-    keys.clear();pointer=null;resetLook();pendingJump=pendingSwing=false;
+    keys.clear();pointer=null;resetLook();pendingJump=pendingSwing=pendingFire=false;
     if(captured!==undefined&&canvas.hasPointerCapture?.(captured))canvas.releasePointerCapture(captured);
   }
   function syncMode(){
@@ -71,7 +71,7 @@ export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>fa
     lockPending=false;resetLook();
     if(locked()){
       if(disposed||!lockWanted||!isActive()||!canLook()){releaseLook();return;}
-    }else{lockWanted=false;keys.clear();pointer=null;pendingJump=pendingSwing=false;}
+    }else{lockWanted=false;keys.clear();pointer=null;pendingJump=pendingSwing=pendingFire=false;}
     onLockChange(locked());
   });
   listen(document,'pointerlockerror',()=>{lockPending=false;lockWanted=false;resetLook();});
@@ -95,7 +95,8 @@ export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>fa
     if(!syncMode())return;
     consume(event);canvas.focus?.({preventScroll:true});
     if(pointer||!finitePoint(event))return;
-    pointer={id:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,
+    if(combat()&&(event.button??0)===0&&event.isPrimary!==false)pendingFire=true;
+    pointer={id:event.pointerId,button:event.button??0,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,
       touch:touchPointer(event),lookReady:looking,click:(event.button??0)===0&&event.isPrimary!==false};
     // Mouse hover must be allowed to leave the canvas for HUD controls. Only
     // touch/pen need capture to finish their drag gesture outside the surface.
@@ -125,7 +126,7 @@ export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>fa
     if(pointer?.id!==event.pointerId)return;
     if(event.type==='pointerup'){
       trackDrag(event);
-      if(isActive()&&pointer.click&&(event.button??0)===0)pendingSwing=true;
+      if(isActive()&&pointer.click&&(event.button??0)===0&&!combat())pendingSwing=true;
     }
     if(event.type!=='pointerup')resetLook();
     pointer=null;
@@ -146,8 +147,9 @@ export function createWalkingInput(canvas,{isActive,onToggle,onExit,onKey=()=>fa
     const elapsed=Number.isFinite(dt)?Math.max(0,Math.min(dt,.1)):0,edge=edgeLook(elapsed);
     const value={forward:Number(keys.has('w'))-Number(keys.has('s')),right:Number(keys.has('d'))-Number(keys.has('a')),
       jump:pendingJump||keys.has(' '),sprint:keys.has('shift'),swing:pendingSwing,
+      ...(combat()?{fire:pendingFire||!!pointer&&pointer.button===0}:{}),
       lookX:lookX+edge.x+(Number(keys.has('arrowleft'))-Number(keys.has('arrowright')))*elapsed*1.6,
       lookY:lookY+edge.y+(Number(keys.has('arrowdown'))-Number(keys.has('arrowup')))*elapsed*1.1};
-    lookX=lookY=0;pendingJump=pendingSwing=false;return value;
+    lookX=lookY=0;pendingJump=pendingSwing=pendingFire=false;return value;
   },dispose(){if(disposed)return;disposed=true;clear();for(const remove of listeners)remove();}};
 }

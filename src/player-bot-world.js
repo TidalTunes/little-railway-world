@@ -4,6 +4,7 @@ import {cityRandom} from './development.js';
 import {riverBankDistance} from './hydrology.js';
 import {mountainFootprintDistance} from './mountain-shape.js';
 import {sampleLandscape} from './landscape-field.js';
+import {surfaceDistance,surfaceChartRadius} from './world-surface.js';
 
 export const PLAYER_BOT_WORLD=Object.freeze({owners:['coral','gold','blue'],spacing:38,sceneryRadius:44,chunkSize:192});
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
@@ -11,6 +12,7 @@ const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 /** Pick independent woodland homesteads. Only each home and its doorstep are
  * reserved: expanding players still have to fell the actual surrounding trees. */
 export function createPlayerBotStarts(world,{count=3}={}){
+  if(world.gameplay?.match)return structuredClone(world.gameplay.playerBots??[]).slice(0,Math.max(0,Math.floor(count)));
   if(!world.gameplay||world.surface||!Number.isFinite(count)||count<1)return [];
   if(world.gameplay.economy==='loops')return createLoopBotStarts(world,count);
   const owners=PLAYER_BOT_WORLD.owners.filter(id=>id!==world.gameplay.ownerId&&world.players.some(player=>player.id===id));
@@ -119,11 +121,11 @@ export function preparePlayerBotScenery(world,generateRegion){
   const bots=[...world.gameplay?.playerBots??[]];
   if(world.gameplay?.economy==='loops')bots.push({starterHouse:world.gameplay.starterHouse});
   if(!bots.length)return [];
-  const size=PLAYER_BOT_WORLD.chunkSize,radius=PLAYER_BOT_WORLD.sceneryRadius,requests=new Map();
+  const size=PLAYER_BOT_WORLD.chunkSize,radius=world.gameplay?.match?36:PLAYER_BOT_WORLD.sceneryRadius,requests=new Map();
   for(const bot of bots){
-    const home=bot.starterHouse;
-    for(let x=Math.floor((home.x-radius)/size);x<=Math.floor((home.x+radius)/size);x++){
-      for(let z=Math.floor((home.z-radius)/size);z<=Math.floor((home.z+radius)/size);z++){
+    const home=bot.starterHouse,extent=surfaceChartRadius(world,home.x,home.z,radius);
+    for(let x=Math.floor((home.x-extent)/size);x<=Math.floor((home.x+extent)/size);x++){
+      for(let z=Math.floor((home.z-extent)/size);z<=Math.floor((home.z+extent)/size);z++){
         requests.set(`${x}:${z}`,{x:x*size,z:z*size,size});
       }
     }
@@ -131,7 +133,7 @@ export function preparePlayerBotScenery(world,generateRegion){
   const placements=[];
   for(const request of requests.values()){
     for(const item of generateRegion(world,request).placements){
-      if(!bots.some(bot=>distance(bot.starterHouse,item)<=radius+(item.radius??0)))continue;
+      if(!bots.some(bot=>surfaceDistance(world,bot.starterHouse,item)<=radius+(item.radius??0)))continue;
       placements.push(isHarvestableWood(item)&&!item.id?{...item,id:streamedWoodSourceId(item)}:item);
     }
   }

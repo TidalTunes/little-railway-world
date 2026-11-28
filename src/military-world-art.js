@@ -5,6 +5,7 @@ import {MILITARY_KINDS,MILITARY_ART} from './military-assets.js';
 import {militaryColors} from './military-palette.js';
 import {MILITARY_WEAPONS,getMilitaryLocalDirection} from './military-kinematics.js';
 import {worldSurface} from './world-model.js';
+import {surfacePoint,surfaceNormal,surfaceFrame,surfaceDisplacement,surfaceOffset,rigidSurfacePoseMatrix,chartHeadingForSurface} from './world-surface.js';
 
 const UP=new THREE.Vector3(0,1,0),IDENTITY=new THREE.Quaternion();
 const WHITE=new THREE.Color('#f5f1d7'),INK=new THREE.Color('#102d35'),SHIELD=new THREE.Color('#a6e6dc');
@@ -45,7 +46,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
   if(!parent?.isObject3D||!mapParent?.isObject3D)throw new TypeError('Military art requires two scene parents');
   if(!Number.isSafeInteger(capacity)||capacity<1||capacity>8192)throw new RangeError('Military capacity must be 1–8192');
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='military-world';mapRoot.name='military-map';parent.add(root);mapParent.add(mapRoot);
-  const batch=createMilitaryBatch(root,{capacity});
+  const batch=createMilitaryBatch(root,{capacity,world});
   const effects=createMilitaryEffects(root,{maxProjectiles:Math.min(capacity,256),maxParticles:Math.min(capacity*6,1536),maxMarks:Math.min(capacity,256),maxLights:4});
   const ownedGeometry=new Set(),ownedMaterial=new Set(),ownedMeshes=[];
   const geometry=g=>(ownedGeometry.add(g),g),material=m=>(ownedMaterial.add(m),m);
@@ -75,17 +76,17 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
   // belongs to the detailed effects and is uploaded once per frame.
   const mapEffects=new THREE.Group();mapEffects.name='military-map-effects';mapRoot.add(mapEffects);
   const effectAliases=effects.root.children.map(source=>{
-    const glow=source.name==='military-glows',m=material(basic(`${source.name}-map`,{opacity:glow?.25:1}));
+    const glow=source.name==='military-glows',m=material(basic(`${source.name}-map`,{opacity:glow?.25:1,depthTest:!!world.surface}));
     m.blending=source.material.blending;
     m.onBeforeCompile=shader=>{
       shader.vertexShader='attribute float effectOpacity; varying float vEffectOpacity; varying vec2 vMapGlow;\n'+shader.vertexShader;
       shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nvEffectOpacity=effectOpacity;vMapGlow=position.xz;');
-      shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>',`vec4 mvPosition=instanceMatrix*vec4(transformed,1.0);
+      if(!world.surface)shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>',`vec4 mvPosition=instanceMatrix*vec4(transformed,1.0);
         mvPosition.y=.95;mvPosition=modelViewMatrix*mvPosition;gl_Position=projectionMatrix*mvPosition;`);
       shader.fragmentShader='varying float vEffectOpacity; varying vec2 vMapGlow;\n'+shader.fragmentShader;
       shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`#include <color_fragment>\ndiffuseColor.a*=vEffectOpacity;${glow?'diffuseColor.a*=pow(max(0.0,1.0-dot(vMapGlow,vMapGlow)),2.0);':''}`);
     };
-    m.customProgramCacheKey=()=> `military-map-effects-v2:${glow}`;
+    m.customProgramCacheKey=()=> `military-map-effects-v3:${glow}:${!!world.surface}`;
     const mesh=new THREE.InstancedMesh(source.geometry,m,source.instanceMatrix.count);mesh.name=`${source.name}-map`;
     mesh.instanceMatrix=source.instanceMatrix;mesh.instanceColor=source.instanceColor;mesh.frustumCulled=false;mesh.renderOrder=25;mesh.count=0;mesh.visible=false;mapEffects.add(mesh);
     ownedMeshes.push(mesh);return{source,mesh};
@@ -95,6 +96,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
   const poses=new Map(),renderUnits=[],teamColors=new Map(),owners=new Map((world.players??[]).map(player=>[player.id,player]));
   const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),size=new THREE.Vector3(),quaternion=new THREE.Quaternion();
   const rootInverse=new THREE.Matrix4(),mapInverse=new THREE.Matrix4();
+  const surfaceMatrix=new THREE.Matrix4(),effectMatrix=new THREE.Matrix4(),effectInverse=new THREE.Matrix4(),surfaceUp=new THREE.Vector3(),surfaceFocus=new THREE.Vector3(),displacement={},offsetPosition={};
   const projected=new THREE.Vector3(),view=new THREE.Vector3(),cameraUp=new THREE.Vector3(),cameraRight=new THREE.Vector3(),color=new THREE.Color();
   let revision=null,lastUnits=null,clock=0,disposed=false,drawn=0,healthCount=0,shieldCount=0,selectedCount=0,contactAt=0;
   const colorFor=unit=>{const key=unit.ownerId??unit.team??'teal';if(!teamColors.has(key))teamColors.set(key,militaryColors(owners.get(unit.ownerId)??unit.team??'teal'));return teamColors.get(key);};
@@ -111,12 +113,16 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     }
     const alpha=1-Math.exp(-22*dt);
     for(const pose of renderUnits){
-      const unit=pose.source,dx=unit.x-pose.x,dy=unit.y-pose.y,dz=unit.z-pose.z,turn=angleDelta(unit.heading??0,pose.heading??0);
+      const unit=pose.source;surfaceDisplacement(world,pose,unit,displacement);
+      const dx=displacement.x,dy=unit.y-pose.y,dz=displacement.z,turn=angleDelta(unit.heading??0,pose.heading??0);
       const aim=angleDelta(unit.aimYaw??0,pose.aimYaw),elevation=(unit.elevation??MILITARY_WEAPONS[unit.kind].restElevation)-pose.elevation,pitch=(unit.pitch??0)-pose.pitch,roll=(unit.roll??0)-pose.roll;
       const moved=dx*dx+dy*dy+dz*dz>1e-10||Math.abs(turn)>1e-5||Math.abs(aim)>1e-5||Math.abs(elevation)>1e-5||Math.abs(pitch)>1e-5||Math.abs(roll)>1e-5||pose.moving!==unit.moving;
       if(moved&&(dt>0||dx*dx+dy*dy+dz*dz>16)){
         const snap=dx*dx+dy*dy+dz*dz>16,blend=snap?1:alpha;
-        pose.x+=dx*blend;pose.y+=dy*blend;pose.z+=dz*blend;pose.heading=(pose.heading??0)+turn*blend;pose.moving=unit.moving;
+        // Surface conversion uses `elevation` for chart altitude internally.
+        // Never use the rig pose as its output: that would erase barrel pitch.
+        surfaceOffset(world,pose.x,pose.z,dx*blend,dz*blend,offsetPosition);pose.x=offsetPosition.x;pose.z=offsetPosition.z;
+        pose.y+=dy*blend;pose.heading=(pose.heading??0)+turn*blend;pose.moving=unit.moving;
         pose.aimYaw+=aim*blend;pose.elevation+=elevation*blend;pose.pitch+=pitch*blend;pose.roll+=roll*blend;
         // Settle exactly rather than indefinitely uploading imperceptible tails.
         if(Math.abs(unit.x-pose.x)<1e-5)pose.x=unit.x;if(Math.abs(unit.y-pose.y)<1e-5)pose.y=unit.y;if(Math.abs(unit.z-pose.z)<1e-5)pose.z=unit.z;
@@ -138,12 +144,12 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
       const owner=colorFor(zone).body;
       for(const[inner,outer,opacity]of[[zone.innerRadius,zone.outerRadius,.035],[zone.innerRadius-.06,zone.innerRadius+.06,.35],[zone.outerRadius-.1,zone.outerRadius+.1,.7]]){
         const g=new THREE.RingGeometry(Math.max(.01,inner),outer,128).rotateX(-Math.PI/2),m=basic('military-spawn-boundary',{opacity});m.color.copy(owner).lerp(WHITE,.25);zoneGeometries.push(g);zoneMaterials.push(m);
-        for(let i=0;i<2;i++){const mesh=new THREE.Mesh(g,m);mesh.position.set(zone.x,i?1.15:(zone.y??0)+.045,zone.z);mesh.renderOrder=8;zoneRoots[i].add(mesh);}
+        for(let i=0;i<2;i++){const mesh=new THREE.Mesh(g,m);mesh.matrixAutoUpdate=false;rigidSurfacePoseMatrix(world,zone.x,i?1.15:(zone.y??0)+.045,zone.z,chartHeadingForSurface(world,zone.x,zone.z,0),mesh.matrix);mesh.renderOrder=8;zoneRoots[i].add(mesh);}
       }
     }
   }
   function pixelSize(camera,p,height){view.copy(p).applyMatrix4(camera.matrixWorldInverse);const e=camera.projectionMatrix.elements,w=e[3]*view.x+e[7]*view.y+e[11]*view.z+e[15];return 2*Math.abs(w)/(Math.max(1,height)*Math.abs(e[5]));}
-  function write(mesh,p,q,s,tint){const index=mesh.count++;matrix.compose(p,q,s);mesh.setMatrixAt(index,matrix);mesh.setColorAt(index,tint);}
+  function write(mesh,p,q,s,tint){const index=mesh.count++;matrix.compose(p,q,s);if(world.surface){surfaceFrame(world,p.x,p.z,surfaceMatrix);surfaceMatrix.setPosition(surfacePoint(world,p.x,p.y,p.z,projected));matrix.setPosition(0,0,0).premultiply(surfaceMatrix);}mesh.setMatrixAt(index,matrix);mesh.setColorAt(index,tint);}
   function writeBillboard(mesh,p,q,s,tint,inverse){const index=mesh.count++;matrix.compose(p,q,s).premultiply(inverse);mesh.setMatrixAt(index,matrix);mesh.setColorAt(index,tint);}
   function clearOverlays(){for(const layer of[detailOverlay,mapOverlay])for(const mesh of Object.values(layer))mesh.count=0;for(const pair of mapMarkers.values()){pair.rim.count=pair.fill.count=0;}}
   function overlayUnit(layer,unit,pixel,camera,map,selected,walkingWeight){
@@ -156,7 +162,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     // only acquire the small shield emblem while protected by their home.
     const health=unit.kind!=='soldier',barWidth=health?(map?29:32):0,barHeight=4;
     if(!health&&!unit.shielded)return;
-    const y=map?.8:unit.y+HEIGHT[unit.kind];position.set(unit.x,y,unit.z).applyMatrix4(layerRoot.matrixWorld);
+    const y=map?.8:unit.y+HEIGHT[unit.kind];surfacePoint(world,unit.x,y,unit.z,position).applyMatrix4(layerRoot.matrixWorld);
     position.addScaledVector(cameraUp,pixel*(map?12:8));
     if(health){
       size.set(pixel*(barWidth+2),pixel*(barHeight+2),1);writeBillboard(layer.healthBack,position,camera.quaternion,size,INK,inverse);
@@ -187,25 +193,37 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     for(const event of events){
       if(event.type==='shot'&&finitePoint(event.from)&&finitePoint(event.to)){
         batch.attack(event.unitId);
-        effects.fire({kind:event.projectile??MILITARY_ART[event.kind]?.projectile??'tracer',from:event.from,to:event.to,duration:event.duration,arcHeight:event.arcHeight,
-          groundY:world.outline?worldSurface(world,event.to.x,event.to.z).height:0,surface:event.surface??'grass'});
-      }else if(event.type==='destroyed'&&finitePoint(event.position))effects.burst({kind:event.kind,position:event.position,color:colorFor(event).body,surface:event.surface??'grass'});
+        const local=world.surface&&event.surfaceOrigin&&finitePoint(event.localFrom)&&finitePoint(event.localTo),origin=event.surfaceOrigin;
+        if(local)rigidSurfacePoseMatrix(world,origin.x,origin.y??0,origin.z,chartHeadingForSurface(world,origin.x,origin.z,0),effectMatrix);
+        let groundY=world.outline?worldSurface(world,event.to.x,event.to.z).height:0;
+        // The target ground has its own curvature. Measuring it in the launch
+        // frame keeps impact dust/scorch marks on Earth at long firing ranges.
+        if(local)groundY=surfacePoint(world,event.to.x,groundY,event.to.z,position).applyMatrix4(effectInverse.copy(effectMatrix).invert()).y;
+        effects.fire({kind:event.projectile??MILITARY_ART[event.kind]?.projectile??'tracer',from:local?event.localFrom:event.from,to:local?event.localTo:event.to,duration:event.duration,arcHeight:event.arcHeight,
+          ...(local?{transform:effectMatrix}:{}),groundY,surface:event.surface??'grass'});
+      }else if(event.type==='destroyed'&&finitePoint(event.position)){
+        const p=event.position;if(world.surface)rigidSurfacePoseMatrix(world,p.x,p.y,p.z,chartHeadingForSurface(world,p.x,p.z,0),effectMatrix);
+        effects.burst({kind:event.kind,position:world.surface?{x:0,y:0,z:0}:p,...(world.surface?{transform:effectMatrix}:{}),color:colorFor(event).body,surface:event.surface??'grass'});
+      }
     }
     if(camera&&clock>=contactAt){
       contactAt=clock+.18;let budget=12;
-      for(const unit of units){if(!unit.moving||budget<=0)continue;const distance=Math.hypot(camera.position.x-unit.x,camera.position.y-unit.y,camera.position.z-unit.z);if(distance>70)continue;
+      for(const unit of units){if(!unit.moving||budget<=0)continue;surfacePoint(world,unit.x,unit.y,unit.z,position).applyMatrix4(root.matrixWorld);const distance=camera.position.distanceTo(position);if(distance>70)continue;
         if(unit.kind==='helicopter'&&distance>28)continue;budget--;
-        effects.contact({kind:unit.kind==='helicopter'?'rotor':unit.kind==='soldier'?'footstep':'track',position:{x:unit.x,y:unit.groundY??unit.y-(unit.kind==='helicopter'?5:0),z:unit.z},heading:unit.heading,strength:unit.kind==='helicopter'?.25:unit.kind==='soldier'?.5:.8});
+        const y=unit.groundY??unit.y-(unit.kind==='helicopter'?5:0);if(world.surface)rigidSurfacePoseMatrix(world,unit.x,y,unit.z,chartHeadingForSurface(world,unit.x,unit.z,0),effectMatrix);
+        effects.contact({kind:unit.kind==='helicopter'?'rotor':unit.kind==='soldier'?'footstep':'track',position:world.surface?{x:0,y:0,z:0}:{x:unit.x,y,z:unit.z},...(world.surface?{transform:effectMatrix}:{}),heading:unit.heading,strength:unit.kind==='helicopter'?.25:unit.kind==='soldier'?.5:.8});
       }
     }
-    effects.update(elapsed,{focus:focus??camera?.position,night,mapBlend,reducedMotion,camera});for(const{source,mesh}of effectAliases){mesh.count=source.count;mesh.visible=source.visible;}
+    const listener=focus&&world.surface?surfacePoint(world,focus.x,focus.y??0,focus.z,surfaceFocus):focus??camera?.position;
+    effects.update(elapsed,{focus:listener,night,mapBlend,reducedMotion,camera});for(const{source,mesh}of effectAliases){mesh.count=source.count;mesh.visible=source.visible;}
     clearOverlays();drawn=healthCount=shieldCount=selectedCount=0;
     zoneRoots[0].visible=walkingWeight<.8;zoneRoots[1].visible=true;
     if(camera&&visible){
       camera.updateMatrixWorld(true);cameraUp.set(0,1,0).applyQuaternion(camera.quaternion);cameraRight.set(1,0,0).applyQuaternion(camera.quaternion);
       const selected=selectedIds instanceof Set?selectedIds:new Set(selectedIds);
       for(let i=0;i<Math.min(units.length,capacity);i++){const unit=units[i];
-        position.set(unit.x,mapBlend>.5?.8:unit.y+.5,unit.z).applyMatrix4(mapBlend>.5?mapRoot.matrixWorld:root.matrixWorld);projected.copy(position).project(camera);
+        const layerRoot=mapBlend>.5?mapRoot:root;surfacePoint(world,unit.x,mapBlend>.5?.8:unit.y+.5,unit.z,position).applyMatrix4(layerRoot.matrixWorld);projected.copy(position).project(camera);
+        if(world.surface){surfaceNormal(world,unit.x,unit.z,surfaceUp).transformDirection(layerRoot.matrixWorld);if(surfaceUp.dot(view.copy(camera.position).sub(position))<=0)continue;}
         if(projected.z< -1||projected.z>1||Math.abs(projected.x)>1.12||Math.abs(projected.y)>1.12)continue;
         const pixel=pixelSize(camera,position,viewportHeight);drawn++;
         if(mapBlend<.999&&(walkingWeight<.5||camera.position.distanceToSquared(position)<55*55))overlayUnit(detailOverlay,unit,pixel,camera,false,selected.has(unit.id),walkingWeight);
@@ -219,7 +237,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     for(const layer of[detailOverlay,mapOverlay])for(const mesh of Object.values(layer))flush(mesh);
     for(const pair of mapMarkers.values()){flush(pair.rim);flush(pair.fill);}
   }
-  return{root,mapRoot,update,
+  return{root,mapRoot,update,poseFor:id=>poses.get(id)??null,
     prepare(){const visibility=[];for(const group of[root,mapRoot])group.traverse(node=>{visibility.push([node,node.visible]);node.visible=true;});return()=>{for(const[node,visible]of visibility)node.visible=visible;};},
     get stats(){return{capacity,units:batch.stats.units,visible:drawn,healthBars:Math.max(detailOverlay.healthBack.count,mapOverlay.healthBack.count),protected:Math.max(detailOverlay.protection.count,mapOverlay.protection.count),selected:Math.max(detailOverlay.selection.count,mapOverlay.selection.count),spawnZones:zoneCount,art:batch.stats,effects:effects.stats,disposed};},
     dispose(){if(disposed)return;disposed=true;batch.dispose();effects.dispose();for(const mesh of ownedMeshes)mesh.dispose();for(const g of ownedGeometry)g.dispose();for(const m of ownedMaterial)m.dispose();zoneGeometries.forEach(g=>g.dispose());zoneMaterials.forEach(m=>m.dispose());root.removeFromParent();mapRoot.removeFromParent();poses.clear();renderUnits.length=0;teamColors.clear();}};

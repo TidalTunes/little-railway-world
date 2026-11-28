@@ -33,7 +33,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   const meshCenter=new THREE.Vector3(),meshSphere=new THREE.Sphere();
   let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0,runBlend=0,poseSpeed=0,swingTime=swingDuration,swingDown=false;
   let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],bodies=[],trainBodies=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0,previousFloorHeight=0,renderFloorHeight=0;
-  let cameraElevation=0,cameraArm=WALKING.cameraDistance;
+  let cameraElevation=0,cameraArm=WALKING.cameraDistance,followKind=null,followId=null;
   const stats={steps:0,swings:0,blocked:0,raycasts:0,obstacles:0,meshes:0,meshSelections:0};
 
   function refreshScene(force=false){
@@ -178,8 +178,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     // Feet follow continuous supports; only the viewing focus eases
     // those small height changes; camera position and aim share that same focus.
     cameraElevation=snap||dt<=0?renderPosition.y:THREE.MathUtils.lerp(cameraElevation,renderPosition.y,1-Math.exp(-14*dt));
-    target.copy(surfacePoint(world,renderPosition.x,cameraElevation+WALKING.cameraHeight,renderPosition.z,groundTarget));
-    const distance=WALKING.cameraDistance,horizontal=Math.cos(pitch)*distance;
+    const vehicle=followKind&&followKind!=='soldier';
+    target.copy(surfacePoint(world,renderPosition.x,cameraElevation+(vehicle?1:WALKING.cameraHeight),renderPosition.z,groundTarget));
+    const distance=followKind==='helicopter'?8:vehicle?6:WALKING.cameraDistance,horizontal=Math.cos(pitch)*distance;
     desired.copy(target).addScaledVector(rightVector,-Math.sin(orbit)*horizontal).addScaledVector(forwardVector,-Math.cos(orbit)*horizontal).addScaledVector(up,Math.sin(pitch)*distance);
     direction.subVectors(desired,target);const length=direction.length();direction.divideScalar(length);
     const hit=cast(target,direction,length+.14);
@@ -296,7 +297,23 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   }
 
   return{root,camera,position,renderPosition,cameraTarget:target,velocity,stats,prepareSpawn,update,
-    get swinging(){return swingTime<swingDuration;},get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get facingHeading(){return bodyTurn;},get pitch(){return pitch;},
+    /** Combat owns movement; this adapter supplies the same rigid globe camera
+     * and construction aiming pose when a different body is possessed. */
+    followUnit(unit,dt=0,input={}){
+      if(!unit)return false;
+      const changed=unit.id!==followId;
+      followId=unit.id;followKind=unit.kind;active=initialized=true;
+      if(changed){orbit=unit.heading??0;pitch=unit.kind==='helicopter'?.38:.2;cameraArm=WALKING.cameraDistance;}
+      orbit=wrap(orbit+(Number.isFinite(input.lookX)?input.lookX:0));
+      pitch=clamp(pitch+(Number.isFinite(input.lookY)?input.lookY:0),-.38,Math.PI*65/180);
+      Object.assign(position,{x:unit.x,y:unit.y,z:unit.z});Object.assign(renderPosition,position);Object.assign(previousPosition,position);
+      heading=bodyTurn=unit.heading??orbit;floorHeight=renderFloorHeight=unit.ground??unit.y;grounded=!unit.airborne;
+      refreshScene(changed);updateCamera(dt,changed);root.visible=false;
+      swingTime=Math.min(swingDuration,swingTime+dt);
+      if(input.swing&&swingTime>=swingDuration&&unit.kind==='soldier'){swingTime=0;stats.swings++;}
+      return true;
+    },
+    get kind(){return followKind??'soldier';},get swinging(){return swingTime<swingDuration;},get active(){return active;},get initialized(){return initialized;},get grounded(){return grounded;},get heading(){return orbit;},get facingHeading(){return bodyTurn;},get pitch(){return pitch;},
     enter(focus,initialHeading=0,{respawn=false}={}){
       if(disposed)return false;
       if(initialized&&!respawn){active=true;root.visible=true;refreshScene(true);setPose(0,0);updateCamera(0,true);return true;}

@@ -3,7 +3,7 @@ import {house} from './assets.js';
 import {consolidate} from './geometry.js';
 import {bakeMaterialColors} from './color-batches.js';
 import {createPlayerPalette,playerColors} from './player-palette.js';
-import {rigidSurfacePoseMatrix} from './world-surface.js';
+import {rigidSurfacePoseMatrix,chartHeadingForSurface,surfacePoint,surfaceDistance} from './world-surface.js';
 import {buildCityStreets,STREET_HEIGHT} from './city-streets.js';
 import {worldSurface} from './world-model.js';
 import {tessellateSurfaceGeometry} from './surface-tessellation.js';
@@ -45,6 +45,14 @@ function civicMapGeometry(type){
  * Settled instances stay static; only new construction animates its own slots.
  * Previews reuse one mesh. */
 export function createSettlementArt(parent,mapParent,world,{ownerId=world.gameplay.ownerId}={}){
+  const point=new THREE.Vector3(),scale=new THREE.Vector3(),ringTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
+  // Settlement rules store physical tangent yaw. Authored scenery elsewhere
+  // stores chart headings, so convert only at this rendering boundary.
+  const pose=(item,y,target)=>rigidSurfacePoseMatrix(world,item.x,y,item.z,chartHeadingForSurface(world,item.x,item.z,item.rotation??0),target);
+  function previewPose(mesh,item,y){
+    if(!world.surface){mesh.position.set(item.x,y,item.z);mesh.rotation.y=item.rotation??0;return;}
+    mesh.matrixAutoUpdate=false;pose(item,y,mesh.matrix);mesh.matrixWorldNeedsUpdate=true;
+  }
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='player-settlement';mapRoot.name='settlement-map';parent.add(root);mapParent.add(mapRoot);
   const construction=createSettlementConstruction(root,mapRoot,world);
   const owner=world.players.find(p=>p.id===ownerId),palette=createPlayerPalette(owner),templates=[];
@@ -85,7 +93,10 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
     for(const mesh of meshes){
       const coarse=mesh.geometry;mesh.geometry=tessellateSurfaceGeometry(coarse,.6);coarse.dispose();
       const positions=mesh.geometry.attributes.position;
-      for(let i=0;i<positions.count;i++)positions.setY(i,worldSurface(world,positions.getX(i),positions.getZ(i)).height+STREET_HEIGHT);
+      for(let i=0;i<positions.count;i++){
+        const x=positions.getX(i),z=positions.getZ(i),height=worldSurface(world,x,z).height+STREET_HEIGHT;
+        surfacePoint(world,x,height,z,point);positions.setXYZ(i,point.x,point.y,point.z);
+      }
       positions.needsUpdate=true;mesh.geometry.computeVertexNormals();mesh.geometry.computeBoundingSphere();
       mesh.castShadow=false;mesh.receiveShadow=true;
 
@@ -112,9 +123,9 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
     }
     for(const batch of [...civicBatches,...civicMapBatches])batch.count=0;
     for(const item of buildings){
-      rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,matrix);matrix.scale(new THREE.Vector3().setScalar(item.scale??1));
+      pose(item,item.y??0,matrix);matrix.scale(scale.setScalar(item.scale??1));
       for(const batch of civicBatches)if(batch.userData.buildingType===item.buildingType){construction.bind(item,batch,batch.count,matrix);batch.setMatrixAt(batch.count++,matrix);}
-      mapMatrix.makeRotationY(item.rotation??0);mapMatrix.setPosition(item.x,.68,item.z);
+      pose(item,.68,mapMatrix);
       for(const batch of civicMapBatches)if(!item.cityId&&batch.userData.buildingType===item.buildingType){construction.bind(item,batch,batch.count,mapMatrix,{map:true});batch.setMatrixAt(batch.count++,mapMatrix);}
     }
     for(const batch of [...civicBatches,...civicMapBatches]){batch.instanceMatrix.needsUpdate=true;batch.computeBoundingSphere();batch.computeBoundingBox();}
@@ -134,9 +145,9 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
     for(const batch of batches)batch.count=0;
     let mapIndex=0;
     houses.forEach(item=>{
-      rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,matrix);
+      pose(item,item.y??0,matrix);
       for(const batch of batches)if(batch.userData.variant===(item.variant??0)%4){construction.bind(item,batch,batch.count,matrix);batch.setMatrixAt(batch.count++,matrix);}
-      mapMatrix.makeScale(1.6,1,1.6);mapMatrix.setPosition(item.x,.66,item.z);if(!item.cityId){construction.bind(item,mapBatch,mapIndex,mapMatrix,{map:true});mapBatch.setMatrixAt(mapIndex++,mapMatrix);}
+      pose({...item,rotation:0},.66,mapMatrix);mapMatrix.scale(scale.set(1.6,1,1.6));if(!item.cityId){construction.bind(item,mapBatch,mapIndex,mapMatrix,{map:true});mapBatch.setMatrixAt(mapIndex++,mapMatrix);}
     });
     for(const batch of batches){batch.instanceMatrix.needsUpdate=true;batch.computeBoundingSphere();batch.computeBoundingBox();}
     mapBatch.count=mapIndex;mapBatch.instanceMatrix.needsUpdate=true;mapBatch.computeBoundingSphere();revision++;
@@ -145,11 +156,15 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
   return{root,mapRoot,sync,construction,get meshes(){return [...batches,...civicBatches].filter(batch=>batch.count>0&&batch.material.userData.sceneStyle!=='window');},get revision(){return revision;},
     preview(result,{visible=false,targetTree=null,harvestProgress=1}={}){
       ghost.visible=mapGhost.visible=visible&&!!result?.house;link.visible=mapLink.visible=false;treeRing.visible=!visible&&!!targetTree;
-      if(treeRing.visible){treeRing.position.set(targetTree.x,(targetTree.y??0)+.025,targetTree.z);treeRing.scale.setScalar(Math.max(1,(targetTree.scale??1)*1.15));treeRing.material.opacity=.25+.55*THREE.MathUtils.clamp(harvestProgress,0,1);}
+      if(treeRing.visible){
+        const size=Math.max(1,(targetTree.scale??1)*1.15);
+        if(world.surface){treeRing.matrixAutoUpdate=false;pose({...targetTree,rotation:0},(targetTree.y??0)+.025,treeRing.matrix).multiply(ringTilt).scale(scale.setScalar(size));treeRing.matrixWorldNeedsUpdate=true;}
+        else{treeRing.position.set(targetTree.x,(targetTree.y??0)+.025,targetTree.z);treeRing.scale.setScalar(size);}
+        treeRing.material.opacity=.25+.55*THREE.MathUtils.clamp(harvestProgress,0,1);
+      }
       if(!ghost.visible)return;
       const item=result.house;
-      ghost.position.set(item.x,item.y??0,item.z);ghost.rotation.y=item.rotation??0;
-      mapGhost.position.set(item.x,.68,item.z);mapGhost.rotation.y=ghost.rotation.y;
+      previewPose(ghost,item,item.y??0);previewPose(mapGhost,item,.68);
       ghostMaterial.color.copy(result.valid?good:bad);edgeMaterial.color.copy(ghostMaterial.color);link.material.color.copy(ghostMaterial.color);
       const routes=result.paths??(result.path?[result.path]:[]);
       const count=routes.reduce((total,path)=>total+Math.max(0,path.points.length-1)*2,0);
@@ -163,9 +178,10 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
         for(const {points} of routes){
           let distance=0;
           for(let i=1;i<points.length;i++){
-            const start=points[i-1],end=points[i],length=Math.hypot(end.x-start.x,end.z-start.z);
-            for(const [point,along] of [[start,distance],[end,distance+length]]){
-              positions.setXYZ(index,point.x,(point.y??0)+.045,point.z);mapPositions.setXYZ(index,point.x,.69,point.z);
+            const start=points[i-1],end=points[i],length=surfaceDistance(world,start,end);
+            for(const [vertex,along] of [[start,distance],[end,distance+length]]){
+              surfacePoint(world,vertex.x,(vertex.y??0)+.045,vertex.z,point);positions.setXYZ(index,point.x,point.y,point.z);
+              surfacePoint(world,vertex.x,.69,vertex.z,point);mapPositions.setXYZ(index,point.x,point.y,point.z);
               distances.setX(index,along);mapDistances.setX(index,along);index++;
             }
             distance+=length;

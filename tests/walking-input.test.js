@@ -25,14 +25,14 @@ class Surface{
     return event;
   }
 }
-function fixture(t,{initialActive=false,onKey}={}){
+function fixture(t,{initialActive=false,onKey,combat=()=>false}={}){
   const document=new Surface(),window=new Surface(),canvas=new Surface();
   document.defaultView=window;canvas.ownerDocument=document;
   const captured=new Set(),released=[];let focusCount=0,active=initialActive,looking=true,toggles=0,exits=0,bubbleKeys=[];
   canvas.setPointerCapture=id=>captured.add(id);canvas.hasPointerCapture=id=>captured.has(id);
   canvas.releasePointerCapture=id=>{captured.delete(id);released.push(id);};canvas.focus=()=>focusCount++;
   canvas.addEventListener('keydown',event=>bubbleKeys.push(event.key));
-  const input=createWalkingInput(canvas,{onKey,canLook:()=>looking,isActive:()=>active,onToggle:()=>{active=!active;toggles++;},onExit:()=>{active=false;exits++;}});
+  const input=createWalkingInput(canvas,{onKey,combat,canLook:()=>looking,isActive:()=>active,onToggle:()=>{active=!active;toggles++;},onExit:()=>{active=false;exits++;}});
   t.after(()=>input.dispose());
   return {input,canvas,window,document,captured,released,key:(key,properties={})=>canvas.dispatch('keydown',{key,...properties}),
     set active(value){active=value;},set looking(value){looking=value;},get active(){return active;},get toggles(){return toggles;},get exits(){return exits;},get bubbleKeys(){return bubbleKeys;},get focusCount(){return focusCount;}};
@@ -327,4 +327,13 @@ test('relative mouse movement cancels a drag click even when client coordinates 
   f.document.dispatch('mousemove',{movementX:8,movementY:0});f.window.dispatch('pointerup',{clientX:500,clientY:300});assert.equal(f.input.sample().swing,false);
   f.canvas.dispatch('pointerdown',{clientX:500,clientY:300});f.window.dispatch('pointerup',{clientX:500,clientY:300});assert.equal(f.input.sample().swing,true);
   assert.equal(f.input.sample().swing,false,'a locked click still delivers one action');
+});
+
+ test('combat clicks are latched between frames and never trigger the mining action',t=>{
+  const f=fixture(t,{initialActive:true,combat:()=>true});
+  f.canvas.dispatch('pointerdown',{button:0});f.window.dispatch('pointerup',{button:0});
+  assert.equal(f.input.sample().fire,true);assert.equal(f.input.sample().fire,false);assert.equal(f.input.sample().swing,false);
+  f.canvas.dispatch('pointerdown',{button:0});assert.equal(f.input.sample().fire,true);assert.equal(f.input.sample().fire,true);
+  f.window.dispatch('blur');assert.equal(f.input.sample().fire,false);
+  f.key('e');assert.equal(f.input.sample().swing,true);
 });

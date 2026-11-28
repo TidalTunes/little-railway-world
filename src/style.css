@@ -18,3 +18,9 @@ canvas:focus-visible { outline: 2px solid oklch(0.52 0.16 355); outline-offset: 
 #world { cursor: url('./cursors/overview.svg') 4 3, default !important; }
 #world[data-cursor="hidden"] { cursor: none !important; }
 #world[data-cursor="build"] { cursor: url('./cursors/build.svg') 16 16, crosshair !important; }
+.world-loader { position:absolute; inset:0; display:grid; place-content:center; justify-items:center; pointer-events:none; color:#284c49; background:var(--world-background); font:600 13px system-ui,sans-serif; letter-spacing:.035em; }
+.world-loader>span { width:48px; height:48px; border:1px solid #284c4930; border-top:2px solid #b39756; border-radius:50%; animation:world-loading 2s linear infinite; }
+.world-loader>p { margin-top:18px; }
+main:has(#world[data-loading="false"]) .world-loader { display:none; }
+@keyframes world-loading { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .world-loader>span { animation:none; } }

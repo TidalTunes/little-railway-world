@@ -109,3 +109,46 @@ test('aim and banking interpolate, while firing faces the canonical trajectory a
   const glow=art.mapRoot.getObjectByName('military-glows-map');assert.equal(glow.material.blending,THREE.AdditiveBlending);assert.ok(glow.material.opacity<=.25);
   const shader={vertexShader:THREE.ShaderLib.basic.vertexShader,fragmentShader:THREE.ShaderLib.basic.fragmentShader,uniforms:{}};glow.material.onBeforeCompile(shader);assert.match(shader.fragmentShader,/dot\(vMapGlow,vMapGlow\)/,'map flashes fade toward the edges');
 });
+
+test('globe military rigs, map markers and local-frame projectiles agree at high latitude',async t=>{
+  const {surfacePoint,surfaceFrame,surfaceOffset,rigidSurfacePoseMatrix,chartHeadingForSurface}=await import('../src/world-surface.js');
+  const globe={...world,surface:{type:'sphere',radius:1600,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:0}}};
+  const parent=new THREE.Group(),mapParent=new THREE.Group(),art=createMilitaryWorldArt(parent,mapParent,globe,{capacity:8});t.after(()=>art.dispose());
+  const unitA=unit('t','tank',{x:1600*Math.PI/2,z:-1600*Math.PI/3,heading:.7,aimYaw:.3,elevation:.2}),units=[unitA],simulation={units,membershipRevision:1,spawnZones:[]};
+  const origin=surfacePoint(globe,unitA.x,0,unitA.z),frame=surfaceFrame(globe,unitA.x,unitA.z),camera=new THREE.PerspectiveCamera(50,1,.1,100);
+  camera.up.set(0,1,0).transformDirection(frame);camera.position.copy(new THREE.Vector3(0,16,22).applyMatrix4(frame)).add(origin);camera.lookAt(origin);camera.updateMatrixWorld(true);
+  art.update(0,{simulation,camera,mapBlend:.5});
+  const tank=art.root.getObjectByName('tank-near'),marker=art.mapRoot.getObjectByName('military-map-tank'),matrix=new THREE.Matrix4();tank.getMatrixAt(0,matrix);
+  assert.ok(matrixPosition(tank).distanceTo(origin)<1e-4);assert.equal(marker.count,1);
+  const scale=new THREE.Vector3().setFromMatrixScale(matrix);assert.ok(scale.distanceTo(new THREE.Vector3(1,1,1))<1e-6,'latitude cannot stretch unit dimensions');
+  assert.ok(matrixPosition(marker).distanceTo(surfacePoint(globe,unitA.x,.8,unitA.z))<1e-4);
+  const localFrom=getMilitaryMuzzle({...unitA,x:0,y:0,z:0}),localTo={x:8,y:0,z:12},to=surfaceOffset(globe,unitA.x,unitA.z,8,12);to.y=0;
+  const effectFrame=rigidSurfacePoseMatrix(globe,unitA.x,unitA.y,unitA.z,chartHeadingForSurface(globe,unitA.x,unitA.z,0));
+  art.update(0,{simulation,camera,events:[{type:'shot',unitId:'t',kind:'tank',projectile:'shell',from:{...unitA},to,surfaceOrigin:{x:unitA.x,y:unitA.y,z:unitA.z},localFrom,localTo,duration:1,arcHeight:0}],focus:unitA});
+  const shell=art.root.getObjectByName('military-shells');assert.ok(matrixPosition(shell).distanceTo(new THREE.Vector3().copy(localFrom).applyMatrix4(effectFrame))<1e-4);
+  assert.ok(art.poseFor('t'));assert.equal(art.poseFor('unknown'),null);
+  const opposite=unit('hidden','tank',{x:unitA.x-Math.PI*1600,z:-unitA.z});units.push(opposite);simulation.membershipRevision++;
+  art.update(0,{simulation,camera,mapBlend:1});assert.equal(marker.count,1,'the far side of Earth cannot leak city-scale overlays through the globe');
+});
+
+test('moving 144 globe avatars preserves weapon elevation when a new vehicle joins the batch',async t=>{
+  const {surfaceChartCoordinates,surfaceOffset}=await import('../src/world-surface.js');
+  const globe={...world,surface:{type:'sphere',radius:1600,complete:true,origin:{longitude:0,latitude:0},projection:{type:'equirectangular',radius:1600,centralLongitude:0,centralLatitude:0}}};
+  const anchor=surfaceChartCoordinates(globe,83,66),art=createMilitaryWorldArt(new THREE.Group(),new THREE.Group(),globe,{capacity:256});t.after(()=>art.dispose());
+  const units=Array.from({length:144},(_,i)=>unit(`avatar-${i}`,'soldier',{...surfaceOffset(globe,anchor.x,anchor.z,(i%12)*4,Math.floor(i/12)*4),heading:.7,aimYaw:.2,elevation:.18}));
+  const simulation={units,membershipRevision:1,spawnZones:[]};art.update(0,{simulation});
+  const firstPose=art.poseFor(units[0].id);
+  for(let frame=0;frame<12;frame++){
+    for(const u of units){const p=surfaceOffset(globe,u.x,u.z,.04,.025);u.x=p.x;u.z=p.z;u.heading+=.005;u.elevation+=.002;u.moving=true;}
+    art.update(1/60,{simulation});
+    for(const u of units)for(const key of ['x','y','z','heading','aimYaw','elevation','pitch','roll'])assert.ok(Number.isFinite(art.poseFor(u.id)[key]),`${u.id}.${key} stays finite after surface interpolation`);
+  }
+  const before=firstPose.elevation;assert.ok(before>.18&&before<units[0].elevation,'barrel elevation is smoothed independently of geographic altitude');
+  units.push(unit('recruited-tank','tank',{...surfaceOffset(globe,anchor.x,anchor.z,-6,2),elevation:.14}));simulation.membershipRevision++;
+  assert.doesNotThrow(()=>art.update(1/60,{simulation}));assert.equal(art.stats.units,145);assert.equal(art.poseFor(units[0].id),firstPose);
+  assert.ok(firstPose.elevation>=before);assert.equal(art.poseFor('recruited-tank').elevation,.14);
+  for(const mesh of art.root.getObjectByName('military-assets').children){
+    assert.ok(Array.from(mesh.instanceMatrix.array.subarray(0,mesh.count*16)).every(Number.isFinite));
+    assert.ok(Array.from(mesh.geometry.attributes.militaryAim.array.subarray(0,mesh.count*4)).every(Number.isFinite));
+  }
+});

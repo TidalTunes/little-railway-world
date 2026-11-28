@@ -3,22 +3,23 @@ import assert from 'node:assert/strict';
 import {launchLayout,createLaunchWorld} from '../src/world-presets.js';
 import {createIslandWorld} from '../src/island-world.js';
 import {createSettlementWorld} from '../src/settlement-world.js';
+import {createMatchWorld} from '../src/match-world.js';
 import {createEarthWorld} from '../src/earth-world.js';
 import {createStressWorld} from '../src/stress-world.js';
 
 const parameters=query=>new URLSearchParams(query);
 const baseUrl='https://example.test/little-railway-world/';
 
-test('normal and seeded launches open the empty settlement island',async()=>{
+test('normal and seeded launches open a playable Earth match',async()=>{
   for(const query of ['', 'seed=game-design']){
     const params=parameters(query),input=await createLaunchWorld(params,baseUrl);
-    assert.equal(launchLayout(params),'settlement');
-    assert.deepEqual(input,createSettlementWorld(query?{seed:'game-design'}:{}));
-    assert.ok(!input.surface||input.surface.type!=='sphere');
+    assert.equal(launchLayout(params),'match');
+    assert.deepEqual(input,createMatchWorld(query?{seed:'game-design'}:{}));
+    assert.equal(input.surface.type,'sphere');
     assert.equal(input.camera.startInDetail,true);
     assert.equal(input.cities.length,0);assert.equal(input.traffic.trainCount,0);
     assert.equal(input.gameplay.starterHouse.kind,'house');
-    assert.deepEqual(input.bounds,{width:504,depth:396});
+    assert.equal(input.gameplay.match.players.length,144);assert.equal(input.gameplay.match.teams.length,12);
   }
 });
 

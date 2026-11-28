@@ -31,7 +31,7 @@ export function normalizePlayers(input=DEFAULT_PLAYERS) {
     if(!p||typeof p!=='object')fail('players require objects');
     const id=String(p.id??`player-${i+1}`);
     if(!id.trim())fail('player IDs must not be empty');
-    return {id,name:String(p.name??`Railway ${i+1}`),color:normalizePlayerColor(p.color??DEFAULT_PLAYERS[i%4].color)};
+    return {id,name:String(p.name??`Railway ${i+1}`),...(p.teamId!=null?{teamId:String(p.teamId)}:{}),color:normalizePlayerColor(p.color??DEFAULT_PLAYERS[i%4].color)};
   });
   if(new Set(players.map(p=>p.id)).size!==players.length)fail('player IDs must be unique');
   return players;

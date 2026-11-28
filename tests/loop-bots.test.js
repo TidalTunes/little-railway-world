@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createEconomicBots} from '../src/economic-bots.js';
-import {loopBotRouteOptions} from '../src/loop-bots.js';
+import {createLoopBots,loopBotRouteOptions} from '../src/loop-bots.js';
 
-function fixture({resources=40,gold=50,houses=6,cost=4,planRoute,loops=[{id:'loop',cost:20,length:50,cityIds:['own','farm'],departureGold:1}]}={}){
+function fixture({resources=40,gold=50,houses=6,cost=4,planRoute,match=false,getRole,loops=[{id:'loop',cost:20,length:50,cityIds:['own','farm'],departureGold:1}]}={}){
   const city={id:'own',ownerId:'blue',x:0,z:0,level:Math.floor(houses/3),houseCount:houses},farm={id:'farm',ownerId:'gray',x:65,z:0,level:2,houseCount:6};
   const game={ownerId:'blue',gold,logs:resources,cities:houses>=3?[city]:[],houses:Array(houses).fill({}),resourcesAt(){return {resources:this.logs,gold:this.gold};},spendResources(amount){if(this.resourcesAt().resources<amount)return {ok:false};this.logs-=amount;return {ok:true};}};
   const policies=[],bot={game,config:{id:'blue-bot'},setPolicy:policy=>policies.push(policy)};
@@ -21,7 +21,7 @@ function fixture({resources=40,gold=50,houses=6,cost=4,planRoute,loops=[{id:'loo
       const loop=loops.find(route=>route.id===loopId);assert.ok(loop);assert.ok(game.gold>=loop.departureGold,'the bot must fund a real departure before buying');
       if(!game.spendResources(loop.cost).ok)return {ok:false};game.gold-=loop.departureGold;trains.push({id:'train',ownerId,loopId});return {ok:true};},
   };
-  const coordinator=createEconomicBots({gameplay:{economy:'loops'}},{session:{},bots:[bot],railways,economy,planRoute,onRailBuild:result=>callbacks.push(result)});
+  const coordinator=createEconomicBots({gameplay:{economy:'loops',...(match?{match:{}}:{})}},{session:{playerRole:getRole},bots:[bot],railways,economy,planRoute,onRailBuild:result=>callbacks.push(result)});
   return {coordinator,game,city,policies,railways,economy,calls,connections,trains,callbacks};
 }
 
@@ -142,4 +142,52 @@ test('the authoritative economy Gold balance takes precedence over a stale game 
   assert.equal(f.calls.includes('train'),false);assert.equal(f.coordinator.snapshot()[0].state,'saving-fare');
   f.economy.resourcesAt=()=>({resources:f.game.logs,gold:1});f.coordinator.update(3);
   assert.equal(f.trains.length,1);assert.equal(f.game.logs,20);f.coordinator.dispose();
+});
+
+test('TPS role changes discard an in-flight rail plan and prevent subsequent route or train purchases',async()=>{
+  let role='hybrid',resolve;const f=fixture({match:true,getRole:()=>role,planRoute:()=>new Promise(done=>resolve=done)});
+  f.coordinator.update(1);assert.equal(f.coordinator.planning,true);role='tps';f.coordinator.update(.1);assert.equal(f.coordinator.planning,false);
+  resolve({result:{siteValid:true,valid:true,cost:4}});await Promise.resolve();f.coordinator.update(3);
+  assert.equal(f.connections.length,0);assert.equal(f.trains.length,0);assert.equal(f.game.logs,40);assert.equal(f.coordinator.snapshot()[0].state,'tps');assert.ok(!f.calls.includes('adopt'));
+});
+
+test('large matches never validate multiple impossible route candidates in the same decision',()=>{
+  const f=fixture({match:true});f.railways.snapshot=()=>({connections:[],cities:[f.city,...Array.from({length:143},(_,index)=>({id:`farm-${index}`,ownerId:'gray',x:20+index*.1,z:10,level:2}))]});
+  f.railways.preview=()=>({siteValid:false,code:'station-blocked'});
+  for(let i=0;i<20;i++){const before=f.coordinator.stats.previews;f.coordinator.update(3);assert.ok(f.coordinator.stats.previews-before<=1);}
+  assert.equal(f.connections.length,0);assert.ok(f.coordinator.stats.previews>1,'the budget is fair to later candidates rather than retrying one forever');
+});
+
+
+function rosterFixture({count=144,match=true,planRoute}={}){
+  const farm={id:'food-village',x:30,z:0,level:2},previews=[],built=[];
+  const bots=Array.from({length:count},(_,i)=>({config:{id:`rival-${i}`},game:{ownerId:`owner-${i}`,houses:Array(6).fill({}),cities:[{id:`city-${i}`,ownerId:`owner-${i}`,x:0,z:0,level:2}],logs:100},setPolicy(){}}));
+  const railways={revision:0,maxConnectionDistance:140,snapshot:()=>({cities:[farm],connections:[]}),preview(from,to,{ownerId}){previews.push(ownerId);return planRoute?{siteValid:true,cost:2}:{siteValid:false,code:'route-blocked'};},geometryKey:()=> 'same',adoptPreview:()=>true,build(from,to,options){built.push(options.ownerId);return{ok:true};}};
+  const economy={trains:[],resourcesAt:()=>({resources:100,gold:50}),city:id=>({id,resource:id===farm.id?'food':'resources',loops:[]})};
+  const coordinator=createLoopBots({gameplay:{economy:'loops',...(match?{match:{}}:{})}},{session:{},bots,railways,economy,planRoute});
+  return{coordinator,previews,built};
+}
+
+test('a 144-player match shares a bounded planning cadence and fairly visits every rival',()=>{
+  const f=rosterFixture();let simulated=0;
+  for(let frame=0;frame<600;frame++){simulated+=1/60;f.coordinator.update(1/60);}
+  assert.equal(simulated>9.99,true);assert.ok(f.previews.length>=60&&f.previews.length<=67,'ten simulation seconds allow at most one decision per 150 ms');
+  for(let frame=0;frame<750;frame++)f.coordinator.update(1/60);
+  assert.equal(new Set(f.previews).size,144,'the cursor reaches every rival instead of favoring the earliest city');
+  assert.equal(f.previews.slice(0,144).length,144);assert.equal(new Set(f.previews.slice(0,144)).size,144);
+  f.coordinator.dispose();
+});
+
+test('large-match worker results commit immediately inside the next planning cooldown',async()=>{
+  let resolve;const f=rosterFixture({planRoute:()=>new Promise(done=>resolve=done)});
+  f.coordinator.update(.01);assert.equal(f.coordinator.planning,true);
+  resolve({result:{siteValid:true,valid:true,cost:2}});await Promise.resolve();f.coordinator.update(.001);
+  assert.deepEqual(f.built,['owner-0']);assert.equal(f.coordinator.planning,false);assert.equal(f.previews.length,1);
+  f.coordinator.update(.01);assert.equal(f.previews.length,1,'completion does not start another expensive preview during cooldown');f.coordinator.dispose();
+});
+
+test('small match rosters keep their existing per-frame decision behavior',()=>{
+  const f=rosterFixture({count:24});f.coordinator.update(3);
+  for(let frame=0;frame<5;frame++)f.coordinator.update(.001);
+  assert.equal(f.previews.length,6);f.coordinator.dispose();
 });

@@ -249,3 +249,16 @@ test('clear cancels pending effects and disposal releases every owned GPU resour
   assert.equal(f.effects.fire({kind:'shell',from,to}).code,'disposed');assert.equal(f.effects.contact({kind:'rotor',position:to}).code,'disposed');
   const before=f.effects.stats;f.effects.update(10);f.effects.clear();assert.deepEqual(f.effects.stats,before);
 });
+
+test('surface-local trajectories, debris and lights retain their copied rigid emission frame',t=>{
+  const parent=new Group(),effects=createMilitaryEffects(parent,{maxProjectiles:2,maxParticles:32,maxMarks:4,maxLights:4});t.after(()=>effects.dispose());
+  const transform=new Matrix4().makeRotationZ(Math.PI/2).setPosition(100,-20,10),original=transform.clone();
+  effects.fire({kind:'arc',from:{x:0,y:0,z:0},to:{x:0,y:0,z:10},duration:1,arcHeight:2,groundY:0,transform});
+  transform.identity();effects.update(.5,{focus:{x:100,y:-20,z:15}});
+  const matrix=new Matrix4(),point=new Vector3();effects.root.getObjectByName('military-shells').getMatrixAt(0,matrix);point.setFromMatrixPosition(matrix);
+  assert.ok(point.distanceTo(new Vector3(0,2,5).applyMatrix4(original))<1e-6,'the parabola rises along local radial up, not global Y');
+  assert.ok(effects.stats.activeLights>0);
+  effects.update(.5,{focus:{x:100,y:-20,z:20}});const marks=effects.root.getObjectByName('military-marks');marks.getMatrixAt(0,matrix);
+  assert.ok(new Vector3().setFromMatrixPosition(matrix).distanceTo(new Vector3(0,.018,10).applyMatrix4(original))<1e-5,'impact decals retain the curved-world frame');
+  assert.equal(effects.stats.impacts,1);
+});

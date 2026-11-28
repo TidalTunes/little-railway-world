@@ -29,13 +29,14 @@ import {createSettlementRailwayArt} from './settlement-railway-art.js';
 import {createSettlementRailwayPlanner} from './settlement-railway-planner.js';
 import {createRailwayPreview} from './settlement-railway-preview.js';
 import {pickRailwayCity,pickRailwayHandle,pickRailwayAnchor,railwayCityLabel,railwayDraftDirection} from './settlement-railway-input.js';
-import {surfaceDistance} from './world-surface.js';
+import {surfaceDistance,surfaceDisplacement} from './world-surface.js';
 import {walkingBuildAim} from './walking-build-aim.js';
 import {createMilitaryCollisionSource} from './military-scenery.js';
+import {pickWorldGround} from './world-picking.js';
 
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
-export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,onClaimPointer=()=>{},reducedMotion}){
+export function createSettlementController({canvas,world,parent,mapParent,markerParent=parent,markerMapParent=mapParent,detail,getPlayer,onView,onClaimPointer=()=>{},getPermissions=()=>({build:true,strategy:true}),reducedMotion}){
   const loopMode=world.gameplay.economy==='loops';
   let resourceWork=null;
   const resourcePlacements=()=>resourceWork?.placements??[];
@@ -88,8 +89,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const committedRailLines=new Map();
   let railPlanning=false,railConfirmed=false,railHover=null,railHoverAnchor=null,railWaypoints=null,railAttachments=null,railDrag=null;
   let railControlPair='',railControlCount,railReverse=false,railDirectionChosen=false;
-  let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0;
-  let revision=-1,sessionRevision=-1,detailRevision=-1,resourceRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
+  let walking=true,transitioning=false,ready=false,camera=null,pendingBuild=false,pendingChop=false,pendingHit=null,message='',messageTime=0,buildFireDown=false;
+  let localSpatialRevision=-1,revision=-1,sessionRevision=-1,detailRevision=-1,resourceRevision=-1,developmentDetailRevision=-1,developmentPlayer=null,scenery=[],collisions=[],meshes=[],houseMeshes=[],streets=[],previewKey='',disposed=false;
   const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),-.8),intersection=new THREE.Vector3();
   const listeners=[];
   const focusCanvas=()=>canvas.focus({preventScroll:true});
@@ -102,6 +103,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     if(id!==undefined&&canvas.hasPointerCapture?.(id))canvas.releasePointerCapture(id);
   }
   function selectTool(next){
+    if(next==='house'&&!getPermissions().build||next==='rail'&&!getPermissions().strategy)return;
     if(next==='rail'&&(walking||transitioning)||next==='house'&&(!walking||transitioning))return;
     releaseRailDrag();releaseRailPress();
     tool=next;if(next!=='axe')clearCircuit();pointer=null;pendingBuild=false;pendingChop=false;previewKey='';message='';
@@ -158,6 +160,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   function groundAt(pointerValue){
     if(!camera||!pointerValue)return null;
     ndc.set(pointerValue.x,pointerValue.y);ray.setFromCamera(ndc,camera);
+    if(world.surface){parent.updateWorldMatrix(true,false);ray.ray.applyMatrix4(parent.matrixWorld.clone().invert());return pickWorldGround(world,ray.ray,{flat:true});}
     return ray.ray.direction.y<-.01&&ray.ray.intersectPlane(groundPlane,intersection)?{x:intersection.x,z:intersection.z}:null;
   }
   function sameRailStart(anchor){
@@ -275,7 +278,8 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     const changed=game.revision!==revision;
     if(changed){
       const previousCount=snapshot.houses.length,previousBuildings=snapshot.buildings?.length??0;snapshot=game.snapshot();
-      if(revision<0||snapshot.houses.length!==previousCount||(snapshot.buildings?.length??0)!==previousBuildings){
+      if(localSpatialRevision!==game.spatialRevision||revision<0||snapshot.houses.length!==previousCount||(snapshot.buildings?.length??0)!==previousBuildings){
+        localSpatialRevision=game.spatialRevision;
         art.sync(snapshot.houses,snapshot.paths??[],snapshot.buildings??[],{animate:revision>=0,reducedMotion:reducedMotion?.matches});houseMeshes=art.meshes;
         if(!loopMode)residents.sync(snapshot);levels.sync(snapshot.cities??[]);
       }
@@ -297,7 +301,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     for(const item of scenery){
       const ore=loopMode&&isMineableOre(item);
       if(!ore&&(!isHarvestableWood(item)||game.isTreeRemoved(item))||session.shared.isSceneryRemoved(item))continue;
-      const dx=item.x-player.position.x,dz=item.z-player.position.z,distance=Math.hypot(dx,dz);
+      const delta=surfaceDisplacement(world,player.position,item),dx=delta.x,dz=delta.z,distance=Math.hypot(dx,dz);
       if(distance>(ore?SETTLEMENT.mineReach:SETTLEMENT.chopReach)||distance<1e-6
         ||ore&&Math.abs(player.position.y-(item.y??0))>1.2)continue;
       const facing=(dx*fx+dz*fz)/distance;
@@ -325,7 +329,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     const destination=railTarget??railHover,pair=railSource&&destination?`${railSource}>${destination}`:'';
     if(pair!==railControlPair){
       railControlPair=pair;
-      railControlCount=pair?(railWaypoints?.length??railwayControlCount(cities.find(city=>city.id===railSource),cities.find(city=>city.id===destination))):undefined;
+      railControlCount=pair?(railWaypoints?.length??railwayControlCount(cities.find(city=>city.id===railSource),cities.find(city=>city.id===destination),world)):undefined;
     }
     // Selection order is independent of travel direction. Closing a circuit by
     // selecting the remaining entry first should produce the return track.
@@ -361,6 +365,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       if(start&&end)guide={siteValid:true,valid:false,code:'choose-destination',attachments:{from:start,to:end}};
     }
     railwayArt.preview(guide,{cities,sourceCityId:railSource,targetCityId:destination,
+      rangeCityIds:world.gameplay?.match?railways.rangeCities(game.ownerId).map(city=>city.id):null,
       rangeCityId:loopMode?cities.find(city=>city.ownerId===game.ownerId)?.id:railSource,maxConnectionDistance:railways.maxConnectionDistance,
       visible:true,editable:!!railTarget&&railPreview?.code!=='out-of-range',handles:railPreview?.handles??[],activeHandle:railDrag?.index??-1});
     return {minHomes:loopMode?6:3,canReverse:loopMode&&!!railSource&&!!destination,reversed:railReverse,stage:railPlanning?'planning':railTarget&&railPreview?'preview':railSource?'destination':'source',hasCity,cost:railPreview?.cost??(loopMode?LOOP.trackResourcesPerUnit:economy?8:5),costResource:railPreview?.costResource??(loopMode?'resources':'gold'),hovering:!!railHover,siteValid:!!railPreview?.siteValid,
@@ -403,10 +408,15 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     },
     prepareInput(input){
       if(pendingChop){input.swing=true;pendingChop=false;}
+      const fire=!!input.fire;
+      if(tool==='house'&&fire){if(!buildFireDown)pendingBuild=true;input.fire=false;}
+      buildFireDown=fire;
       if(tool==='house'&&input.swing){pendingBuild=true;input.swing=false;}
+      if(!getPermissions().build)input.swing=false;
       return input;
     },
     onSwing(){
+      if(!getPermissions().build)return;
       const player=getPlayer();synchronize();const tree=findHarvestTarget(player);
       pendingHit=tree?{tree,time:.22}:null;
       if(!tree)notify(loopMode?'Face a nearby tree or ore deposit':'Face a nearby tree');
@@ -545,7 +555,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
           localTools:String(resources.tools),localGrain:String(resources.grain),economyCity:city?.id??'',industry:city?.industry??''});
       }
       villageLevels?.update({camera,mapBlend,walkingWeight,viewportHeight});
-      hud.update({logs:economy?resources.resources??resources.timber:snapshot.logs,economic:loopMode?'loops':!!economy,buildCost:game.constructionCost,resources,productionClock:economyView?.clock,gold:loopMode?resources.gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
+      hud.update({combat:!!world.gameplay?.match,logs:economy?resources.resources??resources.timber:snapshot.logs,economic:loopMode?'loops':!!economy,buildCost:game.constructionCost,resources,productionClock:economyView?.clock,gold:loopMode?resources.gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
         canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree&&!isMineableOre(targetTree),targetOre:isMineableOre(targetTree),message,railway:railwayHud??{minHomes:loopMode?6:3,hasCity:game.cities.some(city=>!loopMode||city.level>=2),cost:loopMode?LOOP.trackResourcesPerUnit:economy?8:5,costResource:loopMode?'resources':'gold'}});
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),gold:String(loopMode?resources.gold:snapshot.gold),...(!loopMode&&{incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects?.visibleCount??0)}),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),construction:String(art.construction.count),constructionDust:String(art.construction.dustCount),residentsIndoors:String(residents.stats.indoors??0),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',

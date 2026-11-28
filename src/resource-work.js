@@ -3,7 +3,7 @@ import {biomeAt} from './biomes.js';
 import {cityResource} from './loop-economy.js';
 export {cityResource} from './loop-economy.js';
 import {worldSurface} from './world-model.js';
-import {settlementDoor,planSettlementPath} from './settlement-paths.js';
+import {settlementDoor,planSettlementPath,planSettlementPathSteps} from './settlement-paths.js';
 import {settlementTreeId} from './settlement-game.js';
 
 export const RESOURCE_WORK=Object.freeze({speed:1.02,workSeconds:3.8,restSeconds:3,amount:1,treeRegrowSeconds:95,searchRadius:38,routeInterval:.12,routeNodes:420,oreNodes:64,indoorOffset:.2,doorstepHeight:.14,strideLength:.62});
@@ -23,7 +23,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   const settings={...RESOURCE_WORK,...tuning},workers=new Map(),nodes=new Map(),events=[],regrowth=new Map(),claims=new Map(),sources=new Map(),routeCache=new Map(),oreSites=new Set();
   let time=0,revision=0,placementRevision=0,visibilityRevision=0,layoutKey='',layoutRevision=-1,sceneryRevision=-1,removedKey='',dark=false,nextRoute=0,planningCursor=0,completedTrips=0,routeSearches=0,desertsSeeded=false;
   let scenery=[],buildings=[],paths=[],cityRecords=[],placements=[],routeObstaclesCache=null,oreVisibilityKey='',membershipRevision=0;
-  let knownBlockers=new Set(),blockersInitialized=false;
+  let knownBlockers=new Set(),blockersInitialized=false,planner=null,plannerWorker=null;
   const removed=session.shared?.removedTreeIds??new Set();
   const emit=event=>events.push({...event,time});
   const markTrees=()=>session.shared?.touchTrees?.();
@@ -100,7 +100,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
       city.resource=cityResource(world,city,{neutral:city.neutral})==='food'?'food':'resources';if(city.resource==='food')city.workKind='food';
       for(const home of city.homes){
         const id=`worker:${home.id}`;alive.add(id);let worker=workers.get(id);
-        if(worker){worker.cityId=city.id;worker.resource=city.resource;worker.workKind=city.workKind;worker.home=home;continue;}
+        if(worker){if(plannerWorker===worker&&(worker.ownerId!==city.ownerId||worker.workKind!==city.workKind)){planner=null;plannerWorker=null;}worker.ownerId=city.ownerId;worker.cityId=city.id;worker.resource=city.resource;worker.workKind=city.workKind;worker.home=home;continue;}
         const door=settlementDoor(world,home,dark?settings.indoorOffset:undefined),seed=hash(`${world.seed}:${id}`);
         worker={id,houseId:home.id,ownerId:city.ownerId,cityId:city.id,resource:city.resource,workKind:city.workKind,home,...door,y:(home.y??0)+(dark?settings.doorstepHeight:0),heading:home.rotation??0,
           speed:settings.speed*(.9+seed*.2),phase:seed*Math.PI*2,idleTime:0,distance:0,moving:false,indoors:dark,
@@ -109,7 +109,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
         workers.set(id,worker);visibilityRevision++;
       }
     }
-    for(const [id,worker]of workers)if(!alive.has(id)){release(worker);workers.delete(id);visibilityRevision++;}
+    for(const [id,worker]of workers)if(!alive.has(id)){if(plannerWorker===worker){planner=null;plannerWorker=null;}release(worker);workers.delete(id);visibilityRevision++;}
     revision++;membershipRevision++;
   }
   function nodesFor(worker){
@@ -133,24 +133,25 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
       .map(item=>item.kind==='tree'?{...item,radius:.14*(item.scale??1)}:item);
     return routeObstaclesCache;
   }
-  function routeTo(worker,node){
+  function* routeTo(worker,node){
     const target=targetFor(node,worker),cacheKey=`${worker.houseId}:${node.id}:${sceneryRevision}`;
     if(routeCache.has(cacheKey))return routeCache.get(cacheKey);
     routeSearches++;
     // A tiny non-solid destination has its doorway at the work point. The
     // ordinary path planner checks the complete route, not a straight shortcut.
     const fake={id:`work-target:${node.id}`,kind:'work-target',...target,depth:-.84,doorOffset:0,rotation:Math.atan2(worker.home.x-target.x,worker.home.z-target.z)};
-    const route=planSettlementPath(world,worker.home,fake,{placements:routeObstacles(),surfaceAt,removedTreeIds:removed,width:.22,maxNodes:settings.routeNodes});
+    const route=yield* planSettlementPathSteps(world,worker.home,fake,{placements:routeObstacles(),surfaceAt,removedTreeIds:removed,width:.22,maxNodes:settings.routeNodes});
+    if(route&&routeBlocked({...worker,route:route.points,routeIndex:0},buildings))return null;
     routeCache.set(cacheKey,route?.points??null);return route?.points??null;
   }
   function release(worker){if(claims.get(worker.nodeId)===worker.id)claims.delete(worker.nodeId);}
-  function choose(worker){
+  function* choose(worker){
     const candidates=nodesFor(worker).filter(node=>!claims.has(node.id)).sort((a,b)=>distance(worker.home,a)-distance(worker.home,b));
     // Rotate the first few work sites so every house doesn't stream into the
     // same corner of the same field or crowd a single ore face.
     const shortlist=candidates.slice(0,9),offset=Math.floor(hash(`${worker.id}:${worker.trip}:site`)*Math.min(3,shortlist.length));
     for(let i=0;i<Math.min(3,shortlist.length);i++){
-      const node=shortlist[(i+offset)%shortlist.length],route=routeTo(worker,node);if(!route)continue;
+      const node=shortlist[(i+offset)%shortlist.length],route=yield* routeTo(worker,node);if(!route||session.shared?.isSceneryRemoved?.(node.farmId??node.id)||worker.workKind==='tree'&&removed.has(node.id))continue;
       nodes.set(node.id,node);worker.nodeId=node.id;worker.route=route;worker.routeIndex=1;worker.activity='outbound';worker.indoors=false;worker.carrying=false;
       claims.set(node.id,worker.id);visibilityRevision++;return true;
     }
@@ -172,7 +173,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     for(const point of worker.route.slice(worker.routeIndex)){for(const item of obstacles)if(item.id!==worker.houseId&&segmentHits(previous,point,item))return true;previous=point;}
     return false;
   }
-  function reroute(worker){
+  function* reroute(worker){
     const node=nodes.get(worker.nodeId),returning=worker.activity==='returning';
     if(!returning&&!nodeAvailable(worker)){goHome(worker);return;}
     const target=returning?worker.home:targetFor(node,worker),heading=Math.atan2(target.x-worker.x,target.z-worker.z);
@@ -183,7 +184,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     let plan=null;
     for(const offset of [0,Math.PI/2,-Math.PI/2,Math.PI]){
       const from={id:`worker-origin:${worker.id}`,kind:'work-target',x:worker.x,z:worker.z,depth:-.84,doorOffset:0,rotation:heading+offset};
-      routeSearches++;plan=planSettlementPath(world,from,to,{placements:obstacles,surfaceAt,removedTreeIds:removed,width:.22,maxNodes:Math.max(24,Math.floor(settings.routeNodes/4))});if(plan)break;
+      routeSearches++;plan=yield* planSettlementPathSteps(world,from,to,{placements:obstacles,surfaceAt,removedTreeIds:removed,width:.22,maxNodes:Math.max(24,Math.floor(settings.routeNodes/4))});if(plan)break;
     }
     if(!plan){worker.rerouteWait=2;return;}
     if(returning){worker.route=plan.points;worker.routeIndex=1;}
@@ -235,15 +236,16 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   function update(dt,{night=0,dayPhase}={}){
     if(!Number.isFinite(dt)||dt<=0)return;sync();time+=dt;
     const nextDark=dayPhase?dayPhase==='night':night>(dark?.35:.65);
-    if(nextDark!==dark){dark=nextDark;for(const worker of workers.values()){
+    if(nextDark!==dark){dark=nextDark;planner=null;plannerWorker=null;for(const worker of workers.values()){
       if(dark&&['outbound','inspecting','working','packing'].includes(worker.activity))goHome(worker);
       else if(dark&&['waiting','leaving'].includes(worker.activity))beginPassage(worker,'entering');
       else if(!dark&&worker.indoors)worker.wait=.4+hash(`${worker.id}:dawn`)*4;
     }}
     updateRegrowth();
-    if(time>=nextRoute){nextRoute=time+settings.routeInterval;const list=[...workers.values()];for(let i=0;i<list.length;i++){
-      const index=(planningCursor+i)%list.length,worker=list[index];if(worker.reroute&&worker.rerouteWait<=0){reroute(worker);planningCursor=(index+1)%list.length;break;}if(!dark&&worker.activity==='waiting'&&worker.wait<=0){choose(worker);planningCursor=(index+1)%list.length;break;}
+    if(!planner&&time>=nextRoute){nextRoute=time+settings.routeInterval;const list=[...workers.values()];for(let i=0;i<list.length;i++){
+      const index=(planningCursor+i)%list.length,worker=list[index];if(worker.reroute&&worker.rerouteWait<=0){plannerWorker=worker;planner=reroute(worker);planningCursor=(index+1)%list.length;break;}if(!dark&&worker.activity==='waiting'&&worker.wait<=0){plannerWorker=worker;planner=choose(worker);planningCursor=(index+1)%list.length;break;}
     }}
+    if(planner&&planner.next().done){planner=null;plannerWorker=null;}
     for(const worker of workers.values()){
       worker.idleTime+=dt;worker.moving=false;
       if(worker.indoors){if(!dark){worker.wait=Math.max(0,worker.wait-dt);if(worker.wait<=0)beginPassage(worker,'leaving');}continue;}
@@ -283,5 +285,5 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   return{update,sync,workers,get residents(){return workers;},get nodes(){return [...nodes.values()];},trackTree,get placements(){return placements.filter(item=>!session.shared?.isSceneryRemoved?.(item));},get placementRevision(){return placementRevision;},get membershipRevision(){return membershipRevision;},get revision(){return revision;},get visibilityRevision(){return visibilityRevision;},get elapsed(){return time;},
     get stats(){return{workers:workers.size,residents:workers.size,indoors:[...workers.values()].filter(worker=>worker.indoors).length,completedTrips,production:0,routeSearches,regrowing:regrowth.size};},
     snapshot(){return [...workers.values()].map(({home,route,...worker})=>({...worker,route:route.map(point=>({...point}))}));},
-    drainEvents(){return events.splice(0);},dispose(){workers.clear();nodes.clear();events.length=0;regrowth.clear();claims.clear();sources.clear();routeCache.clear();oreSites.clear();placements=[];}};
+    drainEvents(){return events.splice(0);},dispose(){planner=null;plannerWorker=null;workers.clear();nodes.clear();events.length=0;regrowth.clear();claims.clear();sources.clear();routeCache.clear();oreSites.clear();placements=[];}};
 }

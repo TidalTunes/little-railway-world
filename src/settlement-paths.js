@@ -1,11 +1,12 @@
 import {isHarvestableWood,woodSourceId} from './harvestable-wood.js';
-import {surfaceDisplacement,surfaceOffset} from './world-surface.js';
+import {surfaceDisplacement,surfaceOffset,surfaceChartRadius} from './world-surface.js';
 
 export const SETTLEMENT_PATH=Object.freeze({width:.45,houseWidth:2.2,houseDepth:2.2,
   doorOffset:.9,landingOffset:1.52,clearance:.04,step:.45,maxSlope:.32,sampleSpacing:.18,maxNodes:3200});
 const BLOCKING=new Set(['house','tree','rock','farm','cactus','landmark','station','apartment','civic','tower']);
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 const finitePoint=point=>Number.isFinite(point?.x)&&Number.isFinite(point?.z);
+const pathBounds=new WeakMap();
 const radiusOf=item=>item.radius??({tree:.85,rock:.6,cactus:.7,landmark:2,station:3.42,apartment:2.05,civic:2.8,tower:2.1}[item.kind]??1)*(item.scale??1);
 
 /** Civic frontages look toward the local homes at placement time. Their
@@ -58,6 +59,13 @@ export function sampleSettlementPath(points,visit,spacing=SETTLEMENT_PATH.sample
 export function houseBlocksSettlementPath(world,house,path,gap=.12){
   const {width,depth}=footprintDimensions(house),scale=house.scale??1,halfWidth=width*scale/2,halfDepth=depth*scale/2;
   const margin=(path.width??SETTLEMENT_PATH.width)/2+gap,c=Math.cos(house.rotation??0),s=Math.sin(house.rotation??0);
+  let bounds=pathBounds.get(path.points);
+  if(!bounds||bounds.count!==path.points.length){bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity,count:path.points.length};
+    for(const point of path.points){bounds.minX=Math.min(bounds.minX,point.x);bounds.maxX=Math.max(bounds.maxX,point.x);bounds.minZ=Math.min(bounds.minZ,point.z);bounds.maxZ=Math.max(bounds.maxZ,point.z);}pathBounds.set(path.points,bounds);}
+  const extent=surfaceChartRadius(world,house.x,house.z,Math.hypot(halfWidth,halfDepth)+margin);
+  if(house.z+extent<bounds.minZ||house.z-extent>bounds.maxZ)return false;
+  const hits=x=>x+extent>=bounds.minX&&x-extent<=bounds.maxX,period=world.surface?.projection?.type==='equirectangular'?Math.PI*2*world.surface.projection.radius:0;
+  if(!hits(house.x)&&!(period&&(hits(house.x-period)||hits(house.x+period))))return false;
   return !sampleSettlementPath(path.points,point=>{
     const delta=surfaceDisplacement(world,house,point),x=delta.x*c-delta.z*s,z=delta.x*s+delta.z*c;
     const dx=Math.max(0,Math.abs(x)-halfWidth),dz=Math.max(0,Math.abs(z)-halfDepth);
@@ -79,7 +87,7 @@ class MinHeap{
  * eight-neighbour search handles a tree, another house, or a shallow bay.
  * Line-of-sight simplification removes grid stair-steps without cutting corners.
  * This remains pure data, so detailed and overhead views share the same path. */
-export function planSettlementPath(world,from,to,{placements=[],surfaceAt,removedTreeIds=new Set(),width=SETTLEMENT_PATH.width,maxNodes=SETTLEMENT_PATH.maxNodes}={}){
+export function* planSettlementPathSteps(world,from,to,{placements=[],surfaceAt,removedTreeIds=new Set(),width=SETTLEMENT_PATH.width,maxNodes=SETTLEMENT_PATH.maxNodes,nodeBudget=12}={}){
   if(!finitePoint(from)||!finitePoint(to)||typeof surfaceAt!=='function')return null;
   const start=settlementDoor(world,from,landingOffset(from)),end=settlementDoor(world,to,landingOffset(to));
   const doorA=settlementDoor(world,from),doorB=settlementDoor(world,to),margin=width/2+SETTLEMENT_PATH.clearance;
@@ -143,6 +151,7 @@ export function planSettlementPath(world,from,to,{placements=[],surfaceAt,remove
     const initial={x:start.x,z:start.z,ix:0,iz:0,cost:0,score:distance(start,end),parent:null};
     nodes.set('0:0',initial);queue.push(initial);let found=null,visited=0;
     while(queue.length&&visited++<maxNodes){
+      if(visited>1&&(visited-1)%Math.max(1,nodeBudget)===0)yield;
       const current=queue.pop();if(current.closed||nodes.get(key(current.ix,current.iz))!==current)continue;current.closed=true;
       if(distance(current,end)<=step*1.5&&clearSegment(current,end)){found=current;break;}
       for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++){
@@ -162,12 +171,19 @@ export function planSettlementPath(world,from,to,{placements=[],surfaceAt,remove
     if(!found)return null;
     const reverse=[end];for(let node=found;node;node=node.parent)reverse.push({x:node.x,z:node.z});
     const raw=reverse.reverse();route=[raw[0]];
-    for(let index=0;index<raw.length-1;){let next=raw.length-1;
-      while(next>index+1&&!clearSegment(raw[index],raw[next]))next--;
+    for(let index=0;index<raw.length-1;){yield;let next=raw.length-1,checks=0;
+      while(next>index+1&&!clearSegment(raw[index],raw[next])){next--;if(++checks%3===0)yield;}
       route.push(raw[next]);index=next;
     }
   }
   const points=[doorA,...route,doorB].filter((point,index,array)=>!index||distance(point,array[index-1])>.001)
     .map(point=>({x:point.x,y:terrainAt(point.x,point.z).height+.015,z:point.z}));
   return {id:`path:${from.id??'preview'}:${to.id}`,fromHouseId:from.id??'preview',toHouseId:to.id,width,points};
+}
+
+/** Authoritative construction remains synchronous; cosmetic workers share the
+ * identical solver but consume its bounded steps over successive frames. */
+export function planSettlementPath(world,from,to,options){
+  const search=planSettlementPathSteps(world,from,to,options);let result;
+  do{result=search.next();}while(!result.done);return result.value;
 }

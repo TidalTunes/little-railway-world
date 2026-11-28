@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planSettlementPath,sampleSettlementPath,settlementDoor,houseBlocksSettlementPath,SETTLEMENT_PATH} from '../src/settlement-paths.js';
+import {planSettlementPath,planSettlementPathSteps,sampleSettlementPath,settlementDoor,houseBlocksSettlementPath,SETTLEMENT_PATH} from '../src/settlement-paths.js';
 
 const flat=()=>({type:'ground',height:0});
 const home=(id,x,z,rotation=0)=>({id,kind:'house',x,z,y:0,rotation,scale:1});
@@ -66,4 +66,24 @@ test('civic routes respect wide rectangular envelopes and use each building’s 
   assert.equal(houseBlocksSettlementPath({},market,path,0),false);
   const through={width:.45,points:[{x:-3,z:2.5},{x:3,z:2.5}]};
   assert.equal(houseBlocksSettlementPath({},market,through),true);
+});
+
+
+test('incremental route planning yields during blocked searches and returns the identical collision-safe path',()=>{
+  const from=home('a',0,0),to=home('b',12,0),obstacle={id:'grove',kind:'rock',x:6,z:1.52,radius:2.4};
+  let samples=0,largestSlice=0,slices=0,last=0;
+  const options={placements:[obstacle],surfaceAt:()=>{samples++;return flat();},nodeBudget:2};
+  const search=planSettlementPathSteps({},from,to,options);let result;
+  do{result=search.next();largestSlice=Math.max(largestSlice,samples-last);last=samples;slices++;}while(!result.done);
+  assert.ok(result.value);assert.ok(slices>5,'an obstacle search is spread across updates');
+  assert.ok(largestSlice<samples/2,'no one update performs the whole search');
+  assert.deepEqual(result.value,planSettlementPath({},from,to,{...options,surfaceAt:flat}));
+});
+
+test('distant immutable paths cache their bounds instead of resampling across every house candidate',()=>{
+  let reads=0;const points=Array.from({length:50},(_,i)=>({get x(){reads++;return i;},get z(){reads++;return 0;}})),path={width:.45,points};
+  assert.equal(houseBlocksSettlementPath({},home('far',100,100),path),false);const indexedReads=reads;
+  for(let i=0;i<100;i++)assert.equal(houseBlocksSettlementPath({},home(`far-${i}`,100+i,100),path),false);
+  assert.equal(reads,indexedReads,'the distant path is rejected from cached bounds');
+  assert.equal(houseBlocksSettlementPath({},home('near',25,0),path),true,'the broad phase preserves exact local collisions');
 });

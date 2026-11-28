@@ -2,11 +2,11 @@ import {isHarvestableWood} from './harvestable-wood.js';
 import {SETTLEMENT,settlementTreeId} from './settlement-game.js';
 import {worldSurface} from './world-model.js';
 import {settlementDoor} from './settlement-paths.js';
+import {surfaceDistance,surfaceDisplacement,surfaceOffset,surfaceHeading} from './world-surface.js';
 
 export const PLAYER_BOT=Object.freeze({speed:2.3,targetHouses:15,swingDuration:.58,swingImpact:.22,
   constructionTime:2,decisionInterval:.16,radius:.17,searchRadius:38,navigationStep:.65,maxRouteNodes:1100,routeNodeBudget:12});
 const tau=Math.PI*2;
-const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 const wrap=value=>Math.atan2(Math.sin(value),Math.cos(value));
 const solidKinds=new Set(['house','civic','apartment','tower','station','landmark','tree','rock','farm','cactus']);
 const finite=point=>Number.isFinite(point?.x)&&Number.isFinite(point?.z);
@@ -23,25 +23,36 @@ class Queue{
  * house, road and milestone; the bot only chooses inputs and walks to them.
  * Its CPU scenery catalogue remains available when no camera is nearby. */
 export function createPlayerBot(world,game,{config,getPlacements=()=>world.gameplay?.botScenery??[],
-  getRevision=()=>game.spatialRevision??game.revision,onChop=()=>{},onBuild=()=>{},surfaceAt=(x,z)=>worldSurface(world,x,z),policy:initialPolicy={}}={}){
+  getRevision=()=>game.spatialRevision??game.revision,onChop=()=>{},onBuild=()=>{},surfaceAt=(x,z)=>worldSurface(world,x,z),policy:initialPolicy={},getRole=()=>config?.role??'hybrid',coarseUpdates=false}={}){
   if(!finite(config?.spawn)||!finite(config?.starterHouse))throw new TypeError('Player bot requires a spawn and starting house');
   const position={x:config.spawn.x,y:surfaceAt(config.spawn.x,config.spawn.z).height+.035,z:config.spawn.z};
-  const anchor=config.starterHouse,phase=hash(`${world.seed}:${config.id}`)*tau,terrainCache=new Map();
+  const distance=(a,b)=>surfaceDistance(world,a,b),offset=(point,x,z)=>surfaceOffset(world,point.x,point.z,x,z),delta=(a,b)=>surfaceDisplacement(world,a,b);
+  const direction=(from,to)=>{const d=delta(from,to);return Math.atan2(d.x,d.z);};
+  const anchor={...config.starterHouse},phase=hash(`${world.seed}:${config.id}`)*tau,terrainCache=new Map();
   let heading=config.spawn.heading??0,speed=0,gait=0,swingTime=0,state='thinking',cooldown=hash(config.id)*.4;
   let revision=null,placements=[],obstacles=new Map(),route=[],routeIndex=0,job=null,impact=false,stopped=false;
   let siteIndex=0,sites=[],clearingTree=null,treeChoices=[],treeIndex=0,chosenRevision=null,planner=null;
-  let constructionTime=0,elapsed=0,statusRevision=-1,houseCount=1,level=0,timberDelivery=null;
+  let constructionTime=0,elapsed=0,statusRevision=-1,houseCount=1,level=0,timberDelivery=null,planningSteps=Infinity,anchorHasHomes=true;
   let policy={targetHouses:PLAYER_BOT.targetHouses,logReserve:0,allowChop:true,paused:false,...initialPolicy};
   function updateStatus(){if(statusRevision!==(game.spatialRevision??game.revision)){statusRevision=game.spatialRevision??game.revision;houseCount=game.houses.length;level=game.cities[0]?.level??0;}}
   const stats={distance:0,trees:0,logsEarned:0,logsDeposited:0,deliveries:0,houses:0,routeSearches:0,routeNodes:0,siteChecks:0,blocked:0};
 
   function refresh(){
-    const next=getRevision();if(next===revision)return;
+    const next=getRevision(anchor);if(next===revision)return;
     revision=next;
     // Most of the world's trees are irrelevant to this town. Keep one small,
     // stable source array per world mutation, including any foreign buildings.
+    const ownHomes=game.houses;
+    if(world.gameplay?.match&&anchorHasHomes&&!ownHomes.length){
+      // A losing founder keeps walking from their real location but starts a
+      // fresh neighbourhood, rather than donating every future home forever.
+      for(let i=0;i<12;i++){const a=phase+i*2.39996323,p=offset(config.starterHouse,Math.sin(a)*(24+i*2),Math.cos(a)*(24+i*2)),ground=surfaceAt(p.x,p.z);
+        if(ground&&['ground','mountain'].includes(ground.type)){anchor.x=p.x;anchor.z=p.z;break;}}
+      createSites();
+    }
+    anchorHasHomes=ownHomes.length>0;
     const seen=new Set();placements=[];
-    for(const item of [...getPlacements(),...game.houses,...game.buildings]){
+    for(const item of [...getPlacements(anchor),...ownHomes,...game.buildings]){
       if(!finite(item)||distance(item,anchor)>PLAYER_BOT.searchRadius+14)continue;
       const key=item.id??item;if(seen.has(key))continue;seen.add(key);placements.push(item);
     }
@@ -52,8 +63,9 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       const radius=(item.kind==='tree'?.14*scale:item.kind==='rock'?.59*scale:item.kind==='cactus'?.31*scale:item.radius??1);
       const halfWidth=(item.width??(item.kind==='house'?2.2:3.5))*scale/2,halfDepth=(item.depth??(item.kind==='house'?2.2:3.5))*scale/2;
       const bound=(circle?radius:Math.hypot(halfWidth,halfDepth))+PLAYER_BOT.radius+.04;
-      const shape={x:item.x,z:item.z,circle,radius,halfWidth,halfDepth,c:Math.cos(item.rotation??0),s:Math.sin(item.rotation??0)};
-      for(let x=Math.floor((item.x-bound)/3);x<=Math.floor((item.x+bound)/3);x++)for(let z=Math.floor((item.z-bound)/3);z<=Math.floor((item.z+bound)/3);z++){
+      const local=delta(anchor,item),angle=item.rotationSpace==='surface'?item.rotation??0:surfaceHeading(world,item.x,item.z,item.rotation??0);
+      const shape={x:item.x,z:item.z,circle,radius,halfWidth,halfDepth,c:Math.cos(angle),s:Math.sin(angle)};
+      for(let x=Math.floor((local.x-bound)/3);x<=Math.floor((local.x+bound)/3);x++)for(let z=Math.floor((local.z-bound)/3);z<=Math.floor((local.z+bound)/3);z++){
         const key=`${x}:${z}`;if(!obstacles.has(key))obstacles.set(key,[]);obstacles.get(key).push(shape);
       }
     }
@@ -69,11 +81,12 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
   function clear(point,padding=.035){
     const center=ground(point);if(!center||!Number.isFinite(center.height)||!['ground','mountain'].includes(center.type))return false;
     for(const [dx,dz]of [[.17,0],[-.17,0],[0,.17],[0,-.17]]){
-      const edge=ground({x:point.x+dx,z:point.z+dz});
+      const edge=ground(offset(point,dx,dz));
       if(!edge||!['ground','mountain'].includes(edge.type)||Math.abs(edge.height-center.height)>.17*.65)return false;
     }
-    for(const item of obstacles.get(`${Math.floor(point.x/3)}:${Math.floor(point.z/3)}`)??[]){
-      const dx=point.x-item.x,dz=point.z-item.z;
+    const local=delta(anchor,point);
+    for(const item of obstacles.get(`${Math.floor(local.x/3)}:${Math.floor(local.z/3)}`)??[]){
+      const displacement=delta(item,point),dx=displacement.x,dz=displacement.z;
       if(item.circle){
         const radius=item.radius+PLAYER_BOT.radius+padding;
         if(dx*dx+dz*dz<radius*radius)return false;
@@ -85,9 +98,9 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     return true;
   }
   function clearSegment(a,b,padding=.035){
-    const length=distance(a,b),count=Math.max(1,Math.ceil(length/.08));let last=ground(a);
+    const d=delta(a,b),length=Math.hypot(d.x,d.z),count=Math.max(1,Math.ceil(length/.08));let last=ground(a);
     for(let i=1;i<=count;i++){
-      const point={x:a.x+(b.x-a.x)*i/count,z:a.z+(b.z-a.z)*i/count};
+      const point=offset(a,d.x*i/count,d.z*i/count);
       if(!clear(point,padding))return false;
       const next=ground(point);if(Math.abs(next.height-last.height)>length/count*.65+.008)return false;last=next;
     }
@@ -99,8 +112,8 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     if(!clear(target))return null;
     if(clearSegment(position,target))return[{...target}];
     stats.routeSearches++;yield;
-    const step=PLAYER_BOT.navigationStep,pad=5,minX=Math.min(position.x,target.x)-pad,maxX=Math.max(position.x,target.x)+pad;
-    const minZ=Math.min(position.z,target.z)-pad,maxZ=Math.max(position.z,target.z)+pad;
+    const origin={...position},toward=delta(origin,target),step=PLAYER_BOT.navigationStep,pad=5,minX=Math.min(0,toward.x)-pad,maxX=Math.max(0,toward.x)+pad;
+    const minZ=Math.min(0,toward.z)-pad,maxZ=Math.max(0,toward.z)+pad;
     const initial={x:position.x,z:position.z,ix:0,iz:0,cost:0,score:distance(position,target),parent:null};
     const nodes=new Map([['0:0',initial]]),queue=new Queue();queue.push(initial);let found=null,count=0;
     while(queue.length&&count++<PLAYER_BOT.maxRouteNodes){
@@ -112,8 +125,9 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
         if(!dx&&!dz)continue;
         const ix=current.ix+dx,iz=current.iz+dz,key=`${ix}:${iz}`,old=nodes.get(key);
         if(old?.closed||old?.blocked)continue;
-        const x=position.x+ix*step,z=position.z+iz*step;
-        if(x<minX||x>maxX||z<minZ||z>maxZ)continue;
+        const localX=ix*step,localZ=iz*step;
+        if(localX<minX||localX>maxX||localZ<minZ||localZ>maxZ)continue;
+        const {x,z}=offset(origin,localX,localZ);
         const cost=current.cost+Math.hypot(dx,dz)*step;if(old&&cost>=old.cost)continue;
         const point={x,z};if(!clear(point)){nodes.set(key,{blocked:true});continue;}
         if(!clearSegment(current,point))continue;
@@ -154,9 +168,9 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     // Two trees, at most two full route searches each, per decision tick.
     for(let attempt=0;attempt<2&&treeIndex<treeChoices.length;attempt++,treeIndex++){
       const tree=treeChoices[treeIndex];if(game.isTreeRemoved(tree))continue;
-      const angle=Math.atan2(position.x-tree.x,position.z-tree.z);
+      const angle=direction(tree,position);
       for(const offset of [0,Math.PI/2,-Math.PI/2,Math.PI]){
-        const target={x:tree.x+Math.sin(angle+offset)*.86,z:tree.z+Math.cos(angle+offset)*.86};
+        const target=surfaceOffset(world,tree.x,tree.z,Math.sin(angle+offset)*.86,Math.cos(angle+offset)*.86);
         if(!clear(target))continue;
         if(offset!==0&&Math.abs(offset)!==Math.PI&& !clearSegment(position,target))continue;
         const points=yield* navigate(target);if(points){beginRoute(points,{kind:'tree',tree});return true;}
@@ -173,7 +187,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       const radius=4.2+ring*2.9,count=10+ring*5;
       for(let i=0;i<count;i++){
         const angle=i/count*tau+phase+ring*.37;
-        sites.push({x:anchor.x+Math.sin(angle)*radius,z:anchor.z+Math.cos(angle)*radius});
+        sites.push(offset(anchor,Math.sin(angle)*radius,Math.cos(angle)*radius));
       }
     }
   }
@@ -181,8 +195,8 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     const houses=game.houses;
     for(let checks=0;checks<5&&siteIndex<sites.length;checks++,siteIndex++){
       yield;
-      const site=sites[siteIndex];if(!houses.some(home=>distance(site,home)<=SETTLEMENT.connectionRange))continue;
-      const facing=Math.atan2(site.x-position.x,site.z-position.z);
+      const site=sites[siteIndex];if(houses.length&&!houses.some(home=>distance(site,home)<=SETTLEMENT.connectionRange))continue;
+      const facing=direction(position,site);
       stats.siteChecks++;
       const evaluation=game.evaluateBuild(site,{placements,heading:facing,player:position,enforceReach:false});
       if(!evaluation.siteValid){
@@ -197,9 +211,9 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       if(distance(position,site)<SETTLEMENT.buildReach-.3){
         job=nextJob;state='building';constructionTime=0;return true;
       }
-      const fromAngle=Math.atan2(position.x-site.x,position.z-site.z);
+      const fromAngle=direction(site,position);
       for(const offset of [0,Math.PI/2,-Math.PI/2,Math.PI]){
-        const stand={x:site.x+Math.sin(fromAngle+offset)*2.5,z:site.z+Math.cos(fromAngle+offset)*2.5};
+        const stand=surfaceOffset(world,site.x,site.z,Math.sin(fromAngle+offset)*2.5,Math.cos(fromAngle+offset)*2.5);
         const points=yield* navigate(stand);if(points){beginRoute(points,nextJob);return true;}
       }
     }
@@ -242,6 +256,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     }else yield* chooseHouse();
   }
   function planStep(){
+    if(planningSteps<=0)return;planningSteps--;
     const result=planner.next();
     if(result.done){planner=null;if(state==='planning')state='thinking';}
   }
@@ -255,15 +270,15 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       while(remaining>1e-8&&routeIndex<route.length){
         const target=route[routeIndex],length=distance(position,target),amount=Math.min(remaining,length);
         if(length<1e-6){routeIndex++;continue;}
-        const next={x:position.x+(target.x-position.x)*amount/length,z:position.z+(target.z-position.z)*amount/length};
+        const toward=delta(position,target),next=offset(position,toward.x*amount/length,toward.z*amount/length);
         if(!clearSegment(position,next,0)){stats.blocked++;route=[];state='thinking';cooldown=.4;job=null;return;}
-        const direction=Math.atan2(target.x-position.x,target.z-position.z);
-        heading+=wrap(direction-heading)*Math.min(1,step*14);
+        const bearing=direction(position,target);
+        heading+=wrap(bearing-heading)*Math.min(1,step*14);
         position.x=next.x;position.z=next.z;position.y=ground(next).height+.035;
         travelled+=amount;remaining-=amount;if(amount>=length-1e-8)routeIndex++;
       }
       stats.distance+=travelled;gait+=travelled*tau/1.05;speed=travelled/step;
-      if(routeIndex>=route.length){state=job.kind==='tree'?'chopping':job.kind==='depot'?'depositing':'building';if(state==='chopping'){swingTime=PLAYER_BOT.swingDuration;impact=false;heading=Math.atan2(job.tree.x-position.x,job.tree.z-position.z);}else constructionTime=0;}
+      if(routeIndex>=route.length){state=job.kind==='tree'?'chopping':job.kind==='depot'?'depositing':'building';if(state==='chopping'){swingTime=PLAYER_BOT.swingDuration;impact=false;heading=direction(position,job.tree);}else constructionTime=0;}
     }else if(state==='chopping'){
       swingTime=Math.max(0,swingTime-step);
       if(!impact&&swingTime<=PLAYER_BOT.swingDuration-PLAYER_BOT.swingImpact){
@@ -301,10 +316,17 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
       const changed=Object.entries(next).some(([key,value])=>policy[key]!==value);policy={...policy,...next};
       if(changed){stopped=false;if(state==='complete'||state==='waiting')state='thinking';cooldown=0;}
     },
-    update(dt){if(!Number.isFinite(dt)||dt<=0||stopped)return;let left=Math.min(dt,60);while(left>1e-8&&!stopped){const step=Math.min(left,1/30);advance(step);left-=step;}},
+    update(dt){
+      if(!Number.isFinite(dt)||dt<=0)return;
+      if(getRole()==='tps'){elapsed+=dt;state='tps';speed=0;stopped=true;planner=null;route=[];job=null;swingTime=0;return;}
+      if(state==='tps'){stopped=false;state='thinking';cooldown=0;}
+      if(stopped)return;planningSteps=coarseUpdates?1:Infinity;
+      let left=coarseUpdates?dt:Math.min(dt,60);while(left>1e-8&&!stopped){const step=Math.min(left,coarseUpdates?.2:1/30);advance(step);left-=step;}
+    },
     snapshot(){updateStatus();return{id:config.id,ownerId:game.ownerId,position:{...position},heading,speed,gait,swingTime,state,
       houseCount,logs:game.logs,level,stopped,elapsed,policy:{targetHouses:policy.targetHouses,logReserve:policy.logReserve,allowChop:policy.allowChop,paused:policy.paused},stats:{...stats},
       target:job?.kind==='tree'?{kind:'tree',id:settlementTreeId(job.tree),x:job.tree.x,z:job.tree.z}:job?.site?{kind:job.kind==='depot'?'depot':'house',...job.site}:null};},
+    readPosition(target={}){target.x=position.x;target.y=position.y;target.z=position.z;return target;},
     get position(){return{...position};},get state(){return state;},get stopped(){return stopped;},get deliveringTimber(){return Boolean(timberDelivery);},get stats(){return{...stats};},
   };
 }

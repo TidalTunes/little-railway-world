@@ -30,6 +30,7 @@ import {createMilitaryController} from './military-controller.js';
 import './style.css';
 import './settlement-hud.css';
 import './military-hud.css';
+import './match-hud.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
 const artCanvasDescription=canvas.getAttribute('aria-label');
@@ -56,7 +57,7 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;sc
 
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
-let settlement,localLighting,military;
+let settlement,localLighting,military,matchStartPending=false;
 function refreshCanvasCursor(){
   const mode=settlement?.building?'build':walkingMode&&canvas.dataset.pointerLocked!=='false'?'hidden':'overview';
   if(canvas.dataset.cursor!==mode)canvas.dataset.cursor=mode;
@@ -98,8 +99,11 @@ const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
 });
 const {navigation,controls}=view;
 const walkingInput=createWalkingInput(canvas,{isActive:()=>walkingMode||characterTransition.active,onToggle:()=>walkingMode?leaveWalking():enterWalking(),onExit:leaveWalking,
+  combat:()=>!!military?.matchMode,canLook:()=>!military?.modal,
   onLockChange:locked=>{canvas.dataset.pointerLocked=String(locked);refreshCanvasCursor();},
   onKey:event=>{
+    if(military?.matchMode&&(military.modal||military.controlledUnit?.kind!=='soldier')&&['e','b'].includes(event.key.toLowerCase()))return true;
+    if(military?.role==='tps'&&event.key.toLowerCase()==='t')return true;
     return settlement?.keyDown(event)??false;
   }});
 const transitionFocus=new THREE.Vector3();
@@ -123,6 +127,9 @@ function spawnHeading(){
   return offset?Math.atan2(offset.x,offset.z):Math.atan2(controls.target.x-navigation.position.x,controls.target.z-navigation.position.z);
 }
 function initializeCharacter(){
+  if(matchStartPending&&military?.matchMode&&walkSpawn&&detail.hasCoverageAt(walkSpawn,2)){
+    matchStartPending=false;enterWalking();return;
+  }
   if(!walker||walker.initialized||!walkSpawn||!detail.hasCoverageAt(walkSpawn,2))return;
   // Resolve the persistent character against the fully resident building and
   // tree records, even when the player has not entered walking mode yet.
@@ -141,11 +148,14 @@ function finishCharacterTransition(){
 }
 function enterWalking(){
   if(!walker||walkingMode)return;
+  if(military?.matchMode&&!military.enterGround())return;
   const fromCamera=snapshotCamera(),fromTarget=displayedTarget();
   const previousHeightScale=worldRoot.scale.y;
   worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
-  if(!walker.enter(walkSpawn,spawnHeading())){worldRoot.scale.y=previousHeightScale;worldRoot.updateMatrixWorld(true);return;}
+  if(military?.controlledUnit)walker.followUnit(military.controlledUnit,0);
+  else if(!walker.enter(walkSpawn,spawnHeading())){worldRoot.scale.y=previousHeightScale;worldRoot.updateMatrixWorld(true);return;}
   walkingMode=true;calendarState();view.setInputEnabled(false);transitionMapStart=renderedMapBlend;
+  canvas.focus({preventScroll:true});
   characterTransition.begin({fromCamera,toCamera:walker.camera,fromTarget,toTarget:walkingTarget(),toWalking:true,sphere:transitionSphere()});
   entryFrame=true;
   if(!characterTransition.active)finishCharacterTransition();
@@ -153,9 +163,11 @@ function enterWalking(){
 }
 function leaveWalking(){
   if(!walker||!walkingMode)return;
+  if(military?.matchMode&&!military.leaveGround())return;
   settlement?.cancelBuild();
   const fromCamera=snapshotCamera(),fromTarget=displayedTarget(),heading=walker.heading;
   const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;calendarState();refreshCanvasCursor();
+  canvas.focus({preventScroll:true});
   view.setInputEnabled(false);view.overlook(point,{heading,zoom:view.zoomScale*1.35});
   const target=view.renderTarget;surfacePoint(model,target.x,target.y,target.z,transitionFocus);
   transitionMapStart=renderedMapBlend;
@@ -255,7 +267,7 @@ async function loadWorld(input={}){
     if(nextShell){root.add(nextShell.detail);nextMap.root.add(nextShell.map);}
     nextRailway=makeTrains(root,next);
     nextDetail=createWorldRenderer(root,next,{maxPending:3,requestChunk:(region,options)=>nextWorker.request('chunk',region,options),uploadMesh:mesh=>geometryUploader.upload(mesh)});
-    walkingMode=false;walkingInput.clear();view.setInputEnabled(true);
+    walkingMode=false;matchStartPending=false;walkingInput.clear();view.setInputEnabled(true);
     characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
     scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
     military?.dispose();military=null;settlement?.dispose();settlement=null;refreshCanvasCursor();
@@ -266,6 +278,7 @@ async function loadWorld(input={}){
     mapWorld=nextMap;surfaceShell=nextShell;detailBase=nextBase;mapScene.add(mapWorld.root);scene.add(root);authoring=config;time=0;
     shaderReady=false;shaderJob=null;generationMs=generated.milliseconds;fitWorld();
     if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
+      getPermissions:()=>({build:!military?.matchMode||military.controlledUnit?.kind==='soldier',strategy:military?.role!=='tps'}),
       onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},onClaimPointer:()=>view.claimPointer(),reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
       getCollisionTrains:()=>settlement?.getCollisionTrains()??[],getCollisionLines:()=>settlement?.railwayLines??model.lines,
@@ -277,13 +290,15 @@ async function loadWorld(input={}){
     clockHands=createClockHands(root,model);
     localLighting=createLocalLighting(scene,model);
     if(model.gameplay?.military?.enabled){
-      military=createMilitaryController({canvas,world:model,parent:root,mapParent:mapWorld.root,settlement,renderer,onClaimPointer:()=>view.claimPointer(),reducedMotion});
-      military.prepare();
+      military=createMilitaryController({canvas,world:model,parent:root,mapParent:mapWorld.root,settlement,renderer,onClaimPointer:()=>view.claimPointer(),reducedMotion,
+        onCursor:()=>walkingInput.releaseLook(),onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},
+        onControl:unit=>{if(!unit)return;walker.followUnit(unit,0);walkSpawn={x:unit.x,z:unit.z};if(!walkingMode)enterWalking();canvas.focus({preventScroll:true});walkingInput.requestLook();}});
+      military.prepare();matchStartPending=military.matchMode;
     }
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Railway settlement. Explore on foot, build your town, and connect directed railway circuits. Select tracks in overview to add trains. Recruit infantry, tanks, artillery and helicopters with 1–4. Drag to select units in overview, then right-click to move or attack. Middle-drag or WASD moves the strategy camera.');
+    if(settlement)canvas.setAttribute('aria-label','Globe match. V changes between field control and map command; Q chooses a unit. WASD moves, mouse or arrow keys aim, left click fires, E harvests, B builds, and Space jumps as infantry. Railway settlement. Explore on foot, build your town, and connect directed railway circuits. Select tracks in overview to add trains. Recruit infantry, tanks, artillery and helicopters with 1–4. Drag to select units in overview, then right-click to move or attack. Middle-drag or WASD moves the strategy camera.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(loopGameplay()){
@@ -317,7 +332,7 @@ const frameTimes=new Float32Array(180),cpuTimes=new Float32Array(180);
 let sampleCount=0,sampleCursor=0,measurementAt=0,frames=0,last=performance.now(),frameHandle;
 let transitionCpuMax=0,transitionFrameMax=0,transitionSamples=0;
 let transitionPeak='';
-let trafficCpu=0,detailCpu=0,viewCpu=0,renderCpu=0;
+let trafficCpu=0,detailCpu=0,viewCpu=0,renderCpu=0,settlementCpu=0,militaryCpu=0;
 function clearMeasurements(){sampleCount=sampleCursor=0;transitionCpuMax=transitionFrameMax=transitionSamples=0;transitionPeak='';measurementAt=performance.now();}
 function metrics(now,interval,cpu){
   frameTimes[sampleCursor]=interval;cpuTimes[sampleCursor]=cpu;
@@ -338,7 +353,7 @@ function metrics(now,interval,cpu){
     detailLimited:String(detail.stats.coverageLimited??false),detailErrors:String(detail.stats.errors??0),
     transitionCpuMax:transitionCpuMax.toFixed(2),transitionFrameMax:transitionFrameMax.toFixed(2),transitionFrames:String(transitionSamples),
     transitionPeak,
-    trafficCpu:trafficCpu.toFixed(2),detailCpu:detailCpu.toFixed(2),viewCpu:viewCpu.toFixed(2),renderCpu:renderCpu.toFixed(2),
+    trafficCpu:trafficCpu.toFixed(2),detailCpu:detailCpu.toFixed(2),viewCpu:viewCpu.toFixed(2),renderCpu:renderCpu.toFixed(2),settlementCpu:settlementCpu.toFixed(2),militaryCpu:militaryCpu.toFixed(2),
     simulationSeconds:time.toFixed(1),
     simulationCpu:(railway.stats.simulationMs??0).toFixed(2),poseCpu:(railway.stats.poseMs??0).toFixed(2),
     generationMs:generationMs.toFixed(0),loadMs:loadMs.toFixed(0),night:daylight.night.toFixed(3),dayPhase:daylight.phase,dayElapsed:calendar.read().elapsedSeconds.toFixed(1),dayNumber:String(calendar.read().dayNumber),
@@ -366,7 +381,14 @@ function frame(now){
       if(!characterTransition.active)finishCharacterTransition();
     }else if(walkingMode){
       const input=walkingInput.sample(dt),swings=walker.stats.swings;
-      walker.update(dt,settlement?settlement.prepareInput(input):input);
+      const prepared=settlement?settlement.prepareInput(input):input;
+      if(military?.matchMode){
+        if(military.controlledUnit){
+          walker.followUnit(military.renderUnit??military.controlledUnit,dt,prepared);
+          const ready=detail.hasCoverageAt(walker.position,2);
+          military.control(ready?prepared:{...prepared,forward:0,right:0,fire:false},walker);
+        }
+      }else walker.update(dt,prepared);
       if(walker.stats.swings>swings)settlement?.onSwing();
     }
     else view.updateNavigation(dt);
@@ -384,8 +406,12 @@ function frame(now){
       groundFocus,groundRadius,groundOnly:groundLayer,
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
+    const settlementStart=performance.now();
     settlement?.update(simulationPaused?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,zoom:navigation.zoom,dayState,night:daylight.night,uiDt:dt});
+    settlementCpu=performance.now()-settlementStart;const militaryStart=performance.now();
     military?.update(simulationPaused?0:dt,{renderReady:shaderReady,walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,night:daylight.night});
+    militaryCpu=performance.now()-militaryStart;
+    if(military?.matchMode&&military.renderUnit&&!characterTransition.active)walker.followUnit(military.renderUnit,0);
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:settlement?.cityStreets??detail.cityStreets,railLines:settlement?.railwayLines??model.lines,
@@ -432,7 +458,7 @@ function frame(now){
       walking:walkingMode,walkingWeight,viewportHeight:innerHeight});
     // Keep the figure where it can be read; its fixed-size locator represents
     // the same position once the figure becomes subpixel geometry.
-    walker.root.visible=walker.initialized&&(groundLayer||blend<.999&&characterMarker.characterReadable);
+    walker.root.visible=!military?.matchMode&&walker.initialized&&(groundLayer||blend<.999&&characterMarker.characterReadable);
     canvas.dataset.view=walkingMode?'person':view.mode;canvas.dataset.gameplayPaused=String(simulationPaused);refreshCanvasCursor();
     canvas.dataset.cameraTransition=String(characterTransition.active);canvas.dataset.walkingWeight=walkingWeight.toFixed(3);
     canvas.dataset.mapBlend=blend.toFixed(3);canvas.dataset.characterVisible=String(walker.initialized&&walker.root.visible);
