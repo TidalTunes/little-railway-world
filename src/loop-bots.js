@@ -1,4 +1,8 @@
+import {LOOP_ECONOMY_RULES,loopTrainCost} from './loop-economy-rules.js';
+
 const DETOURS=[28,-28,44,-44,64,-64];
+const TURNAROUNDS=[28,-28,44,-44].flatMap(offset=>[-.8,.8].flatMap(bias=>[1,-1,2].map(second=>({offset,bias,second}))));
+const ROUTE_VARIANTS=DETOURS.length+TURNAROUNDS.length;
 
 /** Keep the same distance-based control count as the player's editor. A small
  * family of bowed corridors gives a return track room beside its outward
@@ -7,10 +11,13 @@ export function loopBotRouteOptions(from,to,ownerId,attempt=0,baseline={}){
   if(attempt===0)return{ownerId};
   const start=baseline.handles?.[0]??from,end=baseline.handles?.at(-1)??to;
   const dx=end.x-start.x,dz=end.z-start.z,length=Math.hypot(dx,dz)||1;
-  const count=baseline.waypointCount??Math.max(1,Math.min(12,Math.ceil(Math.hypot(to.x-from.x,to.z-from.z)/48)-1));
-  const offset=DETOURS[attempt-1];if(offset===undefined)return null;
+  const count=baseline.waypointCount??Math.max(1,Math.min(12,Math.ceil(Math.hypot(to.x-from.x,to.z-from.z)/LOOP_ECONOMY_RULES.trackUnitLength)-1));
+  const turnaround=TURNAROUNDS[attempt-DETOURS.length-1],offset=DETOURS[attempt-1]??turnaround?.offset;if(offset===undefined)return null;
   return{ownerId,controlCount:count,waypoints:Array.from({length:count},(_,index)=>{
-    const t=(index+1)/(count+1),bow=Math.sin(t*Math.PI)*offset;
+    // Some platform directions require passing beyond one city before
+    // turning home. A midpoint bow alone keeps crossing the outward track.
+    // Shift the same handles past an endpoint; never add editing nodes.
+    const t=(index+1)/(count+1)+(turnaround?.bias??0),bow=turnaround?offset*(index?turnaround.second:1):Math.sin(t*Math.PI)*offset;
     return{x:start.x+dx*t-dz/length*bow,z:start.z+dz*t+dx/length*bow};
   })};
 }
@@ -24,12 +31,16 @@ export function createLoopBots(world,{session,bots,railways,economy,onRailBuild=
   }));
   let elapsed=0,cursor=0,pending=null,disposed=false;
   const stats={decisions:0,previews:0,validations:0,routes:0,trains:0};
+  const availableResources=entry=>economy.resourcesAt?.(entry.game.ownerId)?.resources??entry.game.resourcesAt?.()?.resources??entry.game.logs??0;
+  const reserveFor=(cost,closing)=>loopTrainCost(2)+(closing?0:cost);
   for(const entry of entries)entry.bot.setPolicy({targetHouses:6,logReserve:0});
-  function fail(entry,key,code){entry.failures.set(key,{code,retryAt:elapsed+30});entry.state=code==='not-enough-gold'?'saving':'finding-loop';}
+  function fail(entry,key,code){entry.failures.set(key,{code,retryAt:elapsed+30});entry.state=code==='not-enough-resources'?'saving':'finding-loop';}
   function commit(request,plan){
     const {entry,from,to,options,key}=request;
-    if(!plan?.siteValid||plan.valid===false&&plan.code!=='not-enough-gold'){fail(entry,key,plan?.code??'route-blocked');return;}
-    const reserve=20;if(entry.game.gold-plan.cost<reserve){fail(entry,key,'not-enough-gold');return;}
+    if(!plan?.siteValid||plan.valid===false&&plan.code!=='not-enough-resources'){fail(entry,key,plan?.code??'route-blocked');return;}
+    // Recheck spendable resources after worker adoption: upkeep or a house
+    // purchase may have consumed them while this geometry was being checked.
+    if(!Number.isFinite(plan.cost)||availableResources(entry)-plan.cost<reserveFor(plan.cost,request.closing)){fail(entry,key,'not-enough-resources');return;}
     const result=railways.build(from,to,{...options,requireCached:true});
     if(result.ok){entry.routes++;stats.routes++;entry.state='closing-loop';onRailBuild(result);}
     else fail(entry,key,result.code);
@@ -78,18 +89,17 @@ export function createLoopBots(world,{session,bots,railways,economy,onRailBuild=
       const from=outward?partner.id:city.id,to=outward?city.id:partner.id,key=`${from}>${to}`;
       if(entry.failures.get(key)?.retryAt>elapsed)continue;
       let probe=entry.probes.get(key);
-      if(!probe||probe.revision!==railways.revision||probe.attempt>DETOURS.length){probe={revision:railways.revision,attempt:0,baseline:null};entry.probes.set(key,probe);}
+      if(!probe||probe.revision!==railways.revision||probe.attempt>ROUTE_VARIANTS){probe={revision:railways.revision,attempt:0,baseline:null};entry.probes.set(key,probe);}
       const options=loopBotRouteOptions(cities.find(candidate=>candidate.id===from)??city,cities.find(candidate=>candidate.id===to)??partner,entry.game.ownerId,probe.attempt,probe.baseline??{});stats.previews++;
       const preview=railways.preview(from,to,options);
       if(probe.attempt===0)probe.baseline=preview;probe.attempt++;
       if(!preview?.siteValid){
-        if(['route-blocked','invalid-alignment'].includes(preview?.code)&&probe.attempt<=DETOURS.length){entry.state='shaping-loop';return;}
+        if(['route-blocked','invalid-alignment'].includes(preview?.code)&&probe.attempt<=ROUTE_VARIANTS){entry.state='shaping-loop';return;}
         fail(entry,key,preview?.code??'route-blocked');continue;
       }
-      const remaining=outward?20:20+preview.cost;
-      if(!Number.isFinite(preview.cost)||entry.game.gold-preview.cost<remaining){fail(entry,key,'not-enough-gold');continue;}
+      if(!Number.isFinite(preview.cost)||availableResources(entry)-preview.cost<reserveFor(preview.cost,outward)){fail(entry,key,'not-enough-resources');continue;}
       entry.partnerId=partner.id;stats.validations++;
-      const request={entry,from,to,options,key,geometryKey:railways.geometryKey(from,to,options),response:null};
+      const request={entry,from,to,options,key,closing:outward,geometryKey:railways.geometryKey(from,to,options),response:null};
       if(planRoute){
         pending=request;entry.state='planning';
         try{Promise.resolve(planRoute(from,to,options)).then(response=>{if(!disposed&&pending===request)request.response=response??{error:true};},()=>{if(!disposed&&pending===request)request.response={error:true};});}

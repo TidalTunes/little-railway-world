@@ -8,7 +8,10 @@ function fixture({surfaceAt=()=>({type:'ground',height:0})}={}){
   const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:2,houseCount:6},{id:'b',x:65,z:20,ownerId:'gray',level:2,houseCount:6},{id:'c',x:45,z:-60,ownerId:'orange',level:2,houseCount:6}];
   const buildings=cities.flatMap(city=>[[0,0],[4,0],[0,4],[-4,0],[0,-4],[4,4]].map(([x,z],index)=>({id:`${city.id}:home:${index}`,kind:'house',cityId:city.id,ownerId:city.ownerId,x:city.x+x,z:city.z+z,rotation:0,width:2.2,depth:2.2})));
   for(const city of cities)city.houseIds=buildings.filter(h=>h.cityId===city.id).map(h=>h.id);
-  const makeAccount=city=>({ownerId:city.ownerId,cities:[city],gold:200,spendGold(amount){this.gold-=amount;return {ok:true,totalGold:this.gold};}});
+  const makeAccount=city=>({ownerId:city.ownerId,cities:[city],gold:0,logs:40,debt:0,
+    resourcesAt(){return {resources:Math.max(0,this.logs-this.debt)};},
+    spendResources(amount){if(this.resourcesAt().resources<amount)return {ok:false,code:'not-enough-resources'};this.logs-=amount;return {ok:true,totalResources:this.resourcesAt().resources};},
+    spendGold(){assert.fail('loop railways must not spend Gold');}});
   const session={player:makeAccount(cities[0]),bots:cities.slice(1).map(city=>({game:makeAccount(city)})),buildings,shared:{removedTreeIds:new Set()}};
   const world={seed:'directed-rail-test',gameplay:{economy:'loops'},rivers:[]};
   return {cities,session,world,rail:createSettlementRailways(world,{session,surfaceAt,sceneryCatalog:[]})};
@@ -17,7 +20,7 @@ function fixture({surfaceAt=()=>({type:'ground',height:0})}={}){
 test('level two creates deterministic fixed-direction stations, with no railway charge',()=>{
   const f=fixture();f.cities[2].level=1;f.cities[2].houseCount=3;
   assert.equal(f.rail.evaluate('a','b').code,'station-required');
-  const added=f.rail.synchronizeStations();assert.equal(added.changed,true);assert.equal(added.stations.length,2);assert.equal(f.session.player.gold,200);
+  const added=f.rail.synchronizeStations();assert.equal(added.changed,true);assert.equal(added.stations.length,2);assert.equal(f.session.player.gold,0);assert.equal(f.session.player.logs,40);
   assert.equal(f.rail.synchronizeStations().changed,false);
   const original=f.rail.stations;assert.equal(f.rail.evaluate('a','c').code,'station-required');
   assert.deepEqual(f.rail.stations,original);const other=fixture();other.cities[2].level=1;other.cities[2].houseCount=3;other.rail.synchronizeStations();assert.deepEqual(other.rail.stations,original);
@@ -113,4 +116,29 @@ test('blocked drafts retain explicit station and track anchors before any interi
   assert.ok(Math.abs(retained.distance-track.distance)<1e-7);assert.ok(Math.hypot(retained.x-track.x,retained.z-track.z)<1e-7);
   assert.deepEqual(result.handles.at(-1).attachment,to);
   result.handles[0].attachment.distance=999;assert.notEqual(track.distance,999,'returned handles cannot mutate the submitted anchor');
+});
+
+test('loop railway prices use straight city distance and spend Resources with zero Gold',()=>{
+  const {rail,session}=fixture();rail.synchronizeStations();
+  const straight=rail.preview('a','b'),bent=rail.preview('a','b',{waypoints:[{x:60,z:-50}]});
+  assert.equal(straight.costResource,'resources');assert.equal(straight.cost,4);
+  assert.equal(bent.cost,straight.cost,'bending does not add priced distance units');
+  assert.equal(bent.waypointCount,straight.waypointCount);
+  assert.notDeepEqual(bent.lines[0].points,straight.lines[0].points);
+  const built=rail.build('a','b');assert.equal(built.ok,true,built.reason);
+  assert.equal(built.costResource,'resources');assert.equal(built.connection.costResource,'resources');
+  assert.equal(built.totalResources,36);assert.equal(session.player.logs,36);assert.equal(session.player.gold,0);
+});
+
+test('loop affordability respects upkeep debt and refreshes cached or adopted geometry without terrain work',()=>{
+  let probes=0;const {rail,session}=fixture({surfaceAt:()=>{probes++;return {type:'ground',height:0};}});rail.synchronizeStations();
+  const plan=rail.evaluate('a','b'),key=rail.geometryKey('a','b'),checked=probes;
+  assert.equal(plan.valid,true);session.player.debt=37;session.player.gold=1000;
+  const poor=rail.evaluate('a','b');assert.equal(poor.siteValid,true);assert.equal(poor.valid,false);
+  assert.equal(poor.code,'not-enough-resources');assert.equal(poor.costResource,'resources');assert.equal(probes,checked);
+  assert.equal(rail.adoptPreview('a','b',plan,key),true);
+  assert.equal(rail.build('a','b',{requireCached:true}).code,'not-enough-resources');assert.equal(probes,checked);assert.equal(session.player.logs,40);
+  session.player.debt=36;
+  const built=rail.build('a','b',{requireCached:true});assert.equal(built.ok,true,built.reason);assert.equal(built.totalResources,0);assert.equal(probes,checked);
+  assert.equal(session.player.gold,1000,'Gold never pays for a resource-priced railway');
 });

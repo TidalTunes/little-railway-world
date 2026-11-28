@@ -63,20 +63,28 @@ let loadingVersion=0,shaderReady=false,shaderJob=null,generationMs=0,loadMs=0,lo
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 let characterTransition=createCharacterTransition({reducedMotion});
 const daylight=createDaylight({scene,mapScene,sky,sun,fill,renderer});
-const calendar=createDayCalendar();
+let calendar=createDayCalendar();
 let daylightStartedAt;
 const calendarWallTime=()=>daylightStartedAt===undefined?0:(performance.now()-daylightStartedAt)/1000;
+const loopGameplay=()=>model?.gameplay?.economy==='loops';
+let gameplayPaused=false;
+function calendarState(wallSeconds=calendarWallTime()){
+  return calendar.setPaused(loopGameplay()&&(document.hidden||gameplayPaused&&!walkingMode),wallSeconds);
+}
 const nightSky=createNightSky(scene,mapScene);
 const walkingSky=createWalkingSky(scene),walkingSunDirection=new THREE.Vector3();
 let paused=reducedMotion.matches;
-reducedMotion.addEventListener('change',event=>{paused=event.matches;});
+reducedMotion.addEventListener('change',event=>{paused=event.matches||loopGameplay()&&gameplayPaused;});
 const compositor=createViewCompositor(renderer);
 const geometryUploader=createGeometryUploader(renderer);
 const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
   getTrains:()=>settlement?[...trains,...settlement.tradeArt?.trains??[]]:trains,getWorldRoot:()=>worldRoot,getWorld:()=>model,
   isDetailReady:()=>!!detail?.ready&&shaderReady,
   isPointerSelectionBlocked:()=>settlement?.railwayPlanning??false,
-  onPause:()=>{paused=!paused;},
+  onPause:()=>{
+    if(loopGameplay()){gameplayPaused=!gameplayPaused;paused=gameplayPaused||reducedMotion.matches;calendarState();}
+    else paused=!paused;
+  },
   onRegenerate:()=>{
     if(!model)return;
     const seed=String(Number.isFinite(Number(model.seed))?Number(model.seed)+1:Date.now());
@@ -133,7 +141,7 @@ function enterWalking(){
   const previousHeightScale=worldRoot.scale.y;
   worldRoot.scale.set(1,1,1);worldRoot.updateMatrixWorld(true);
   if(!walker.enter(walkSpawn,spawnHeading())){worldRoot.scale.y=previousHeightScale;worldRoot.updateMatrixWorld(true);return;}
-  walkingMode=true;view.setInputEnabled(false);transitionMapStart=renderedMapBlend;
+  walkingMode=true;calendarState();view.setInputEnabled(false);transitionMapStart=renderedMapBlend;
   characterTransition.begin({fromCamera,toCamera:walker.camera,fromTarget,toTarget:walkingTarget(),toWalking:true,sphere:transitionSphere()});
   entryFrame=true;
   if(!characterTransition.active)finishCharacterTransition();
@@ -143,7 +151,7 @@ function leaveWalking(){
   if(!walker||!walkingMode)return;
   settlement?.cancelBuild();
   const fromCamera=snapshotCamera(),fromTarget=displayedTarget(),heading=walker.heading;
-  const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;refreshCanvasCursor();
+  const point=walker.exit();walker.root.visible=true;walkingInput.clear();walkingMode=false;calendarState();refreshCanvasCursor();
   view.setInputEnabled(false);view.overlook(point,{heading,zoom:view.zoomScale*1.35});
   const target=view.renderTarget;surfacePoint(model,target.x,target.y,target.z,transitionFocus);
   transitionMapStart=renderedMapBlend;
@@ -268,7 +276,13 @@ async function loadWorld(input={}){
     if(settlement)canvas.setAttribute('aria-label','Railway settlement. Explore on foot, build your town, and connect directed railway circuits. Select tracks in overview to inspect a circuit and add trains.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
-    if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
+    if(loopGameplay()){
+      // A newly created economy starts at the same zero as its calendar, even
+      // when replacing another world after a long session or hidden load.
+      calendar=createDayCalendar();daylightStartedAt=performance.now();gameplayPaused=false;paused=reducedMotion.matches;
+      calendar.setPaused(document.hidden,0);
+    }else if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
+    else calendarState();
     canvas.dataset.loading='false';loadMs=performance.now()-loadStarted;
     clearMeasurements();return model;
   }catch(error){
@@ -325,11 +339,13 @@ function metrics(now,interval,cpu){
 function frame(now){
   const start=performance.now(),interval=now-last,dt=THREE.MathUtils.clamp(interval/1000,0,.05);last=now;
   if(model){
-    if(!paused)time+=dt;
-    const dayState=calendar.read((now-(daylightStartedAt??now))/1000);
+    const simulationPaused=loopGameplay()?gameplayPaused&&!walkingMode:paused&&!walkingMode;
+    const ambientPaused=loopGameplay()?reducedMotion.matches||simulationPaused:paused;
+    if(!ambientPaused)time+=dt;
+    const dayState=calendarState((now-(daylightStartedAt??now))/1000);
     daylight.update(dt,time,dayState.elapsedSeconds);nightSky.update();scene.fog.color.copy(scene.background);
     let stamp=performance.now();
-    railway.update(paused?0:dt);
+    railway.update(ambientPaused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
     const wasTransitioning=characterTransition.active;
     if(wasTransitioning){
@@ -358,7 +374,7 @@ function frame(now){
       groundFocus,groundRadius,groundOnly:groundLayer,
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
-    settlement?.update(paused&&!walkingMode?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,zoom:navigation.zoom,dayState,night:daylight.night,uiDt:dt});
+    settlement?.update(simulationPaused?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,zoom:navigation.zoom,dayState,night:daylight.night,uiDt:dt});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:settlement?.cityStreets??detail.cityStreets,railLines:settlement?.railwayLines??model.lines,
@@ -401,7 +417,7 @@ function frame(now){
     // Keep the figure where it can be read; its fixed-size locator represents
     // the same position once the figure becomes subpixel geometry.
     walker.root.visible=walker.initialized&&(groundLayer||blend<.999&&characterMarker.characterReadable);
-    canvas.dataset.view=walkingMode?'person':view.mode;refreshCanvasCursor();
+    canvas.dataset.view=walkingMode?'person':view.mode;canvas.dataset.gameplayPaused=String(simulationPaused);refreshCanvasCursor();
     canvas.dataset.cameraTransition=String(characterTransition.active);canvas.dataset.walkingWeight=walkingWeight.toFixed(3);
     canvas.dataset.mapBlend=blend.toFixed(3);canvas.dataset.characterVisible=String(walker.initialized&&walker.root.visible);
     canvas.dataset.characterMarker=String(characterMarker.root.visible||characterMarker.mapRoot.visible);
@@ -415,6 +431,7 @@ function frame(now){
   frameHandle=requestAnimationFrame(frame);
 }
 document.addEventListener('visibilitychange',()=>{
+  calendarState();
   if(document.hidden)cancelAnimationFrame(frameHandle);
   else{last=performance.now();clearMeasurements();frameHandle=requestAnimationFrame(frame);}
 });

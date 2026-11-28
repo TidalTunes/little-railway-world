@@ -189,3 +189,18 @@ test('wrong-way endpoint drafts stay editable red without terrain work or wallet
   for(const gold of [0,10,100]){const state=f.editor.update('a','b',{}, {gold});assert.equal(state.checking,false);assert.equal(state.confirmed,false);assert.equal(state.result.valid,false);assert.equal(state.result.code,'wrong-direction');assert.deepEqual(state.result.handles,handles);}
   assert.equal(f.requests.length,0);
 });
+
+test('resource-priced drafts refresh spendable resources after asynchronous validation without rerouting',async t=>{
+  const f=fixture(t),options=initial(),preview=f.railways.preview;
+  f.railways.preview=(...args)=>({...preview(...args),cost:4,costResource:'resources'});
+  const draft=f.editor.update('home','village',options,{gold:0,resources:4}).result;
+  assert.equal(draft.valid,true,'zero Gold does not prevent a Resources purchase');
+  f.editor.update('home','village',options,{gold:1000,resources:{resources:3}});
+  f.complete(0,{result:{...draft,provisional:false}});await tick();
+  assert.equal(f.editor.state.confirmed,true);assert.equal(f.editor.state.result.valid,false);
+  assert.equal(f.editor.state.result.siteValid,true,'insufficient funds never marks legal geometry impossible');
+  assert.equal(f.editor.state.result.code,'not-enough-resources');assert.equal(f.editor.state.result.reason,'A railway costs 4 resources');
+  const geometry=f.editor.state.result.lines,restored=f.editor.update('home','village',options,{gold:0,resources:4});
+  assert.equal(restored.result.valid,true);assert.equal(restored.result.costResource,'resources');
+  assert.equal(restored.result.lines,geometry);assert.equal(f.previews.length,1);assert.equal(f.requests.length,1);
+});

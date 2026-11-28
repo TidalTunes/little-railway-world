@@ -20,9 +20,9 @@ function fixture(){
 }
 const gain=(overrides={})=>({id:'cut-1',ownerId:'teal',kind:'production',x:0,y:0,z:0,resource:'resources',amount:1,...overrides});
 
-test('only actual positive finite resource events create receipts, with exact unrounded amounts',()=>{
+test('only nonzero finite resource events create receipts, with exact unrounded amounts',()=>{
   const queue=createResourceGainQueue();
-  for(const patch of [{amount:0},{amount:-1},{amount:NaN},{amount:Infinity},{x:NaN},{z:Infinity},{y:NaN},{resource:'unknown'}])assert.equal(queue.emit(gain(patch)),null);
+  for(const patch of [{amount:0},{amount:NaN},{amount:Infinity},{x:NaN},{z:Infinity},{y:NaN},{resource:'unknown'}])assert.equal(queue.emit(gain(patch)),null);
   assert.equal(queue.active.length,0);
   queue.emit(gain({amount:1.25}));assert.equal(queue.active[0].resources.resources,1.25);
   assert.equal(queue.emit(gain({amount:1.25})),null,'re-reading a unique event must not invent a second gain');
@@ -36,6 +36,18 @@ test('nearby bursts merge without mixing owners, collected cargo, or credited re
   queue.emit(gain({id:'other',ownerId:'blue'}));assert.equal(queue.active.length,4);
   queue.update(.5);queue.emit(gain({id:'cut-3'}));assert.equal(queue.active.length,5,'a later collection gets its own receipt');
   queue.update(3);assert.equal(queue.active.length,0);assert.equal(queue.emit(gain()),null,'expiry does not permit replaying the same authoritative event');
+});
+
+test('city production reports signed net changes and cancelling events do not leave empty popups',()=>{
+  const{document,effects,options}=fixture();
+  effects.emit(gain({kind:'production',resources:{resources:-5,food:2,gold:1}}));effects.update(.2,options);
+  const values=document.body.children[0].children[0].children[0].children;
+  assert.equal(values[0].children[1].textContent,'−5');assert.equal(values[0].dataset.negative,'true');
+  assert.equal(values[1].children[1].textContent,'+2');assert.equal(values[2].children[1].textContent,'+1');
+  effects.dispose();
+  const queue=createResourceGainQueue();queue.emit(gain({amount:5}));queue.emit(gain({id:'upkeep',amount:-5}));assert.equal(queue.active.length,0);
+  assert.equal(queue.emit(gain({id:'bad-pickup',kind:'pickup',amount:-5})),null,'a negative pickup cannot invent expenditure');
+  assert.equal(queue.emit(gain({id:'zero',resources:{resources:0,food:0,gold:0}})),null);
 });
 
 test('legacy timber and ore receipts combine once while canonical resources remain authoritative',()=>{
@@ -74,10 +86,11 @@ test('third-person and off-screen gains stay hidden, age normally, and do not re
   assert.equal(effects.emit(gain()),null);effects.dispose();assert.equal(effects.emit(gain({id:'late'})),null);
 });
 
-test('gathering uses a single unlabelled resource symbol and DOM slots are reused',()=>{
+test('cosmetic gathering stays unlabelled while authoritative production shows its exact amount',()=>{
   const{document,effects,options}=fixture();effects.emit(gain({kind:'gathered'}));effects.emit(gain({kind:'production'}));effects.update(.2,options);
   const slots=document.body.children[0].children;assert.equal(slots.length,2);
-  for(const slot of slots){assert.equal(slot.children.length,1);assert.equal(slot.children[0].children.filter(value=>!value.hidden).length,1);assert.equal(slot.children[0].children[0].children[1].hidden,true);}
+  for(const slot of slots){assert.equal(slot.children.length,1);assert.equal(slot.children[0].children.filter(value=>!value.hidden).length,1);}
+  assert.equal(slots[0].children[0].children[0].children[1].hidden,true);assert.equal(slots[1].children[0].children[0].children[1].textContent,'+1');
   assert.notEqual(slots[0].style.transform,slots[1].style.transform);
   effects.update(3,options);effects.emit(gain({id:'new-work'}));effects.update(.2,options);assert.equal(effects.stats.allocated,2);assert.equal(effects.visibleCount,1);assert.equal(slots[1].hidden,true);effects.dispose();
 });

@@ -25,19 +25,26 @@ export function completedDayCount(elapsedSeconds){
   return Number.isFinite(elapsedSeconds)?Math.max(0,Math.floor((elapsedSeconds+DAY_NIGHT_CYCLE.nightSeconds)/cycleSeconds)):0;
 }
 
-/** Testing skips forward to the next phase, never rewinds the economy's day
- * identity. Real time then resumes from that boundary at the normal pace. */
+/** One shared calendar can suspend at a precise wall-clock boundary. Resuming
+ * rebases that boundary, so hidden time never becomes a simulation backlog.
+ * Legacy callers remain continuous unless they explicitly pause the clock. */
 export function createDayCalendar(){
-  let wall=0,anchorWall=0,anchorElapsed=0;
+  let wall=0,anchorWall=0,anchorElapsed=0,paused=false;
   const state={};
   function read(wallSeconds=wall){
     if(Number.isFinite(wallSeconds))wall=Math.max(wall,wallSeconds);
-    const elapsed=anchorElapsed+(wall-anchorWall);dayCycleAt(elapsed,state);
+    const elapsed=anchorElapsed+(paused?0:wall-anchorWall);dayCycleAt(elapsed,state);
     state.elapsedSeconds=elapsed;state.completedDays=completedDayCount(elapsed);
     state.dayNumber=Math.floor(elapsed/cycleSeconds)+1;return state;
   }
   return{
     read,
+    setPaused(next,wallSeconds=wall){
+      const current=read(wallSeconds);
+      if(Boolean(next)!==paused){anchorElapsed=current.elapsedSeconds;anchorWall=wall;paused=Boolean(next);}
+      return read();
+    },
+    get paused(){return paused;},
     advance(wallSeconds){
       const current=read(wallSeconds),phaseEnd=current.phase==='day'?DAY_NIGHT_CYCLE.daySeconds:cycleSeconds;
       // Keep the requested boundary exact. Summed offsets can round a skip

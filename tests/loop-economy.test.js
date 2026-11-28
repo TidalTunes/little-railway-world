@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSettlementGame} from '../src/settlement-game.js';
 import {LOOP_ECONOMY,cityResource} from '../src/loop-economy.js';
+import {loopTrackCost,loopTrainCost} from '../src/loop-economy-rules.js';
 import {createSettlementEconomy} from '../src/settlement-economy.js';
 
 const flat=()=>({type:'ground',height:0});
@@ -14,7 +15,7 @@ function fixture({closed=true,population=1,formed=true}={}){
   const proxy=new Proxy(game,{get(target,key){return key==='cities'?(formed?[city]:[]):key==='houses'?populationHomes:key==='population'?populationHomes.length:target[key];}});session.player=proxy;
   const loop={id:'circle',cityIds:['own','farm'],stationIds:['own-station','farm-station'],length:40,
     stops:[{cityId:'own',stationId:'own-station',distance:0},{cityId:'farm',stationId:'farm-station',distance:20}],pieces:[{lineId:'out'},{lineId:'back'}]};
-  const networkFactory=()=>({loops:id=>closed&&id==='own'?[loop]:[],sample:(_loop,distance)=>{
+  const networkFactory=()=>({loops:id=>closed&&['own','farm'].includes(id)?[loop]:[],sample:(_loop,distance)=>{
     const a=((distance%40)+40)%40/40*Math.PI*2;
     return {x:Math.cos(a)*10,y:0,z:Math.sin(a)*10,angle:-a,tangent:{x:-Math.sin(a),y:0,z:Math.cos(a)}};
   }});
@@ -26,11 +27,11 @@ function fixture({closed=true,population=1,formed=true}={}){
 
 test('loop mode starts with a global wallet and eight-resource homes, with no tool requirement or outposts',()=>{
   const {world}=fixture(),game=createSettlementGame(world,{surfaceAt:flat});
-  assert.equal(game.logs,12);assert.equal(game.gold,60);assert.equal(game.economyMode,'loops');
-  assert.deepEqual(game.constructionCost,{resources:8});
+  assert.equal(game.logs,40);assert.equal(game.food,12);assert.equal(game.gold,0);assert.equal(game.economyMode,'loops');
+  assert.deepEqual(game.constructionCost,{resources:8,food:2});
   const before=game.snapshot();assert.equal(game.build({x:40,z:0}).code,'outside-city');assert.deepEqual(game.snapshot(),before);
   game.addLogs(60);assert.ok(game.build({x:5,z:0}).ok);assert.ok(game.build({x:0,z:5}).ok);
-  assert.equal(game.cities.length,1);assert.deepEqual(game.constructionCost,{resources:8});
+  assert.equal(game.cities.length,1);assert.deepEqual(game.constructionCost,{resources:8,food:2});
   assert.equal(game.settleIncome(600),null);
 });
 
@@ -43,106 +44,142 @@ test('all player biomes produce unified resources and only neutral villages prod
   assert.equal(cityResource(world,{ownerId:'other',neutral:true}),'food');
 });
 
-test('population produces at a constant rate without NPC trips or local depots',()=>{
-  const {economy,game}=fixture();economy.update(600);
-  assert.equal(game.logs,32);assert.equal(game.gold,60);
-  assert.equal(economy.resourcesAt('gray').food,120);
-  assert.equal(economy.resourcesAt('teal',{x:999,z:999}).resources,32);
-  assert.deepEqual(economy.snapshot().stats.produced,{resources:20,food:120,gold:0});
-  assert.equal(economy.city('own').stock,undefined);assert.equal(economy.snapshot().stats.productionEvents,140);
-  assert.equal(economy.depositTimber,undefined);assert.equal(economy.setIndustry,undefined);
-  const before=economy.snapshot();
-  assert.deepEqual(economy.creditProduction('teal','resources',100,'cosmetic-trip'),{ok:false,code:'production-is-passive'});
-  assert.deepEqual(economy.creditProduction('gray','food',100,'cosmetic-trip'),{ok:false,code:'production-is-passive'});
-  assert.deepEqual(economy.snapshot(),before,'visual workers cannot mint resources or duplicate production');
+test('calendar production pays exactly on daytime minute boundaries, including sunset',()=>{
+  const {economy,game}=fixture();
+  economy.update(.01,{elapsedSeconds:59.999});assert.equal(game.logs,40);
+  assert.ok(Math.abs(economy.snapshot().clock.secondsRemaining-.001)<1e-6);
+  economy.update(.01,{elapsedSeconds:60});assert.equal(game.logs,41);
+  economy.update(100,{elapsedSeconds:20});assert.equal(economy.elapsed,60,'a stale absolute clock cannot advance or rewind the economy');
+  economy.update(0,{elapsedSeconds:300});assert.equal(game.logs,45);assert.equal(game.gold,0);
+  assert.equal(economy.resourcesAt('gray').food,30);
+  assert.deepEqual(economy.snapshot().stats.produced,{resources:5,food:30,gold:0});
+  assert.equal(economy.snapshot().clock.dayPhase,'night');assert.equal(economy.snapshot().clock.secondsRemaining,360);
+  economy.update(300);assert.equal(game.logs,45);assert.equal(economy.snapshot().clock.dayPhase,'day');
+  assert.equal(economy.snapshot().clock.secondsRemaining,60);assert.equal(economy.snapshot().clock.ticksRemaining,5);
+  economy.update(60);assert.equal(game.logs,46);
+  assert.deepEqual(economy.drainEvents().filter(event=>event.ownerId==='teal').map(event=>event.time),[60,120,180,240,300,660]);
+  const before=economy.snapshot();assert.equal(economy.creditProduction('teal','resources',100,'cosmetic-trip').ok,false);
+  assert.deepEqual(economy.snapshot(),before);
 });
 
-test('outposts produce before becoming cities and population is not capped at level five',()=>{
+test('outposts and populations beyond level five receive full boundary payouts without fractional accrual',()=>{
   const {economy,game,setPopulation}=fixture({formed:false});
   assert.equal(economy.cities.some(city=>city.ownerId==='teal'),false);
-  economy.update(30);assert.equal(game.logs,13);
-  setPopulation(21);economy.update(30);assert.equal(game.logs,34);
+  economy.update(59);assert.equal(game.logs,40);setPopulation(21);
+  economy.update(1);assert.equal(game.logs,61,'the population at the boundary determines the whole payout');
+  economy.update(59);setPopulation(0);economy.update(1);assert.equal(game.logs,61);
+  setPopulation(37);economy.update(60);assert.equal(game.logs,98);
   const owner=economy.snapshot().owners.find(owner=>owner.ownerId==='teal');
-  assert.equal(owner.population,21);assert.equal(owner.productionRate,.7);
-  assert.equal(economy.resourcesAt('teal').cityId,null);
+  assert.equal(owner.population,37);assert.equal(owner.rates.resources,37);assert.equal(economy.resourcesAt('teal').cityId,null);
 });
 
-test('changing population preserves fractional production, including an empty settlement',()=>{
-  const {economy,game,setPopulation}=fixture({population:37});
-  economy.update(12.5);assert.equal(game.logs,27,'37 residents earn 15 whole units and retain the fraction');
-  setPopulation(0);economy.update(20);assert.equal(game.logs,27);
-  setPopulation(2);economy.update(8.75);assert.equal(game.logs,28,'fractional earnings survive the pause and changed production rate');
-  economy.update(15);assert.equal(game.logs,29);
-});
-
-test('passive production is frame independent across population changes and day/night boundaries',()=>{
+test('production is frame independent across population changes, day and night',()=>{
   const a=fixture({population:17}),b=fixture({population:17});
   for(const [duration,population]of [[300,23],[300,2],[150,0],[150,19],[30,19]]){
     a.economy.update(duration);for(let i=0;i<duration*4;i++)b.economy.update(.25);
     assert.deepEqual(a.economy.snapshot(),b.economy.snapshot());
-    assert.deepEqual(a.economy.drainEvents(),b.economy.drainEvents());
-    a.setPopulation(population);b.setPopulation(population);
+    assert.deepEqual(a.economy.drainEvents(),b.economy.drainEvents());a.setPopulation(population);b.setPopulation(population);
   }
-  assert.equal(a.game.logs,12+170+230+10+19);
+  assert.equal(a.game.logs,40+85+4);
 });
 
-test('invalid construction is atomic and the timber compatibility alias never creates a second balance',()=>{
+test('resource and food construction is atomic and uses the authoritative food wallet',()=>{
   const {economy,game}=fixture(),before=economy.snapshot();
-  for(const cost of [{resources:13},{resources:8,tools:2},{resources:8,timber:8},{wood:8},{metal:1},{resources:-1},{resources:1.5},{resources:NaN}]){
-    assert.equal(economy.spendConstruction('teal',null,cost).ok,false);
-    assert.deepEqual(economy.snapshot(),before);
+  for(const cost of [{resources:41},{resources:8,food:13},{resources:8,tools:2},{resources:8,timber:8},{wood:8},{metal:1},{resources:-1},{resources:1.5},{resources:NaN}]){
+    assert.equal(economy.spendConstruction('teal',null,cost).ok,false);assert.deepEqual(economy.snapshot(),before);
   }
-  assert.ok(economy.spendConstruction('teal',null,{resources:8}).ok);assert.equal(game.logs,4);
-  assert.ok(economy.spendConstruction('teal',null,{timber:4,tools:0}).ok);assert.equal(game.logs,0);
-  assert.deepEqual(economy.snapshot().stats.construction,{resources:12,food:0});
-  assert.equal(economy.resourcesAt('teal').timber,0);
+  assert.ok(economy.spendConstruction('teal',null,{resources:8,food:2}).ok);assert.equal(game.logs,32);assert.equal(game.food,10);
+  assert.ok(economy.spendConstruction('teal',null,{timber:4,tools:0}).ok);assert.equal(game.logs,28);
+  assert.deepEqual(economy.snapshot().stats.construction,{resources:12,food:2});
   assert.equal(economy.resourcesAt('teal').wood,undefined);assert.equal(economy.resourcesAt('teal').metal,undefined);
 });
 
-test('only an owned level-two city with a complete directed loop can buy a train',()=>{
-  const open=fixture({closed:false});assert.equal(open.economy.buyTrain('own','circle','teal').code,'no-complete-loop');assert.equal(open.game.gold,60);
+test('track and train prices share material rules and exclude the engine from paid cargo cars',()=>{
+  assert.equal(loopTrainCost(1),10);assert.equal(loopTrainCost(2),15);assert.equal(loopTrainCost(3),20);assert.equal(loopTrainCost(0),Infinity);
+  assert.equal(loopTrackCost(48),2);assert.equal(loopTrackCost(48.01),4);assert.equal(loopTrackCost(96),4);
+});
+
+test('only an owned level-two city with a complete loop can buy a train using resources and zero gold',()=>{
+  const open=fixture({closed:false});assert.equal(open.economy.buyTrain('own','circle','teal').code,'no-complete-loop');assert.equal(open.game.gold,0);
   const {economy,game}=fixture();assert.equal(economy.buyTrain('farm','circle','teal').code,'not-your-city');
-  assert.equal(economy.buyTrain('own','circle','coral').code,'not-your-city');
-  assert.equal(economy.buyTrain('own','missing','teal').code,'no-complete-loop');
-  game.spendGold(41);assert.equal(economy.buyTrain('own','circle','teal').code,'not-enough-gold');assert.equal(game.gold,19);
-  game.creditGold(1);const bought=economy.buyTrain('own','circle','teal');assert.ok(bought.ok);assert.equal(bought.cost,20);
-  assert.equal(game.gold,3,'the home station earns its first visit payment');assert.equal(economy.trains.length,1);
+  assert.equal(economy.buyTrain('own','circle','coral').code,'not-your-city');assert.equal(economy.buyTrain('own','missing','teal').code,'no-complete-loop');
+  game.spendLogs(26);assert.equal(economy.buyTrain('own','circle','teal').code,'not-enough-resources');assert.equal(game.logs,14);
+  game.addLogs(1);const bought=economy.buyTrain('own','circle','teal');assert.ok(bought.ok);assert.equal(bought.cost,15);
+  assert.equal(game.logs,0);assert.equal(game.gold,0,'purchase and initial departure never mint gold');assert.equal(economy.trains.length,1);
 });
 
-test('each loop stop mints ten goods without taking owner stock; cargo credits only on a full circuit',()=>{
+test('each stop mints cargo without source deductions; only actual arrivals pay gold and full circuits deliver',()=>{
   const {economy,game}=fixture();economy.buyTrain('own','circle','teal');
-  assert.equal(game.logs,12);assert.equal(economy.trains[0].cargo.resources,10);
-  economy.update(6);assert.equal(economy.trains[0].cargo.food,10);assert.equal(game.logs,12);
-  assert.equal(economy.resourcesAt('gray').food,1,'the village retains its independently produced food');
-  assert.equal(economy.resourcesAt('gray').gold,3);
-  economy.update(4);assert.equal(game.logs,22);assert.equal(economy.resourcesAt('teal').food,10);
-  assert.equal(economy.snapshot().stats.laps,1);assert.equal(economy.trains[0].laps,1);
-  assert.equal(economy.trains[0].backing,false);assert.equal(economy.trains[0].carPoses.length,2);
+  assert.equal(game.logs,25);assert.equal(game.gold,0);assert.equal(economy.trains[0].cargo.resources,10);
+  economy.update(6);assert.equal(economy.trains[0].cargo.food,10);assert.equal(game.logs,25);assert.equal(game.food,12);
+  assert.equal(economy.resourcesAt('gray').food,0);assert.equal(economy.resourcesAt('gray').gold,3);
+  economy.update(4);assert.equal(game.logs,35);assert.equal(game.food,22);assert.equal(game.gold,3);
+  assert.equal(economy.snapshot().stats.laps,1);assert.equal(economy.trains[0].backing,false);assert.equal(economy.trains[0].carPoses.length,2);
 });
 
-test('plains cities load resources and still earn the same station visit payment',()=>{
-  const {economy,city,session,game}=fixture();city.biome='plains';session.revision++;
-  economy.buyTrain('own','circle','teal');assert.deepEqual(economy.trains[0].cargo,{resources:10,food:0});
-  assert.equal(game.gold,43);
-  economy.update(10);assert.equal(game.logs,22);assert.equal(economy.resourcesAt('teal').food,10);
-});
-
-test('whole-loop reservations prevent trains meeting on shared tracks and serve the oldest waiting train',()=>{
-  const {economy}=fixture();economy.buyTrain('own','circle','teal');economy.buyTrain('own','circle','teal');
-  assert.deepEqual(economy.trains.map(train=>train.state),['dwell','waiting']);
+test('whole-loop reservations serve waiting trains fairly and estimated rates account for the shared queue',()=>{
+  const {economy}=fixture();economy.buyTrain('own','circle','teal');
+  const first=economy.resourcesAt('teal').rates;
+  assert.deepEqual(first,{resources:56,food:60,gold:18});
+  economy.buyTrain('own','circle','teal');assert.deepEqual(economy.trains.map(train=>train.state),['dwell','waiting']);
+  const second=economy.resourcesAt('teal').rates;
+  assert.equal(second.food,first.food);assert.equal(second.gold,first.gold);assert.equal(second.resources,first.resources-5);
   economy.update(10);assert.deepEqual(economy.trains.map(train=>train.state),['waiting','dwell']);
+  assert.equal(economy.resourcesAt('teal').gold,3,'the returning train is paid even while waiting for its next circuit');
   economy.update(10);assert.deepEqual(economy.trains.map(train=>train.state),['dwell','waiting']);
   assert.deepEqual(economy.trains.map(train=>train.laps),[1,1]);
 });
 
-test('train accounting is frame-size independent and display reads do not advance time',()=>{
-  const a=fixture(),b=fixture();a.economy.buyTrain('own','circle','teal');b.economy.buyTrain('own','circle','teal');
-  a.economy.update(140);for(let i=0;i<560;i++)b.economy.update(.25);
-  assert.deepEqual(a.economy.snapshot(),b.economy.snapshot());
-  const before=a.economy.snapshot();a.economy.city('own');a.economy.trains;a.economy.resourcesAt('teal');
-  assert.deepEqual(a.economy.snapshot(),before);
+test('estimated gold includes foreign train arrivals at the owned station without pre-crediting them',()=>{
+  const {economy,game,session,world}=fixture();
+  const foreign={ownerId:'coral',logs:40,food:12,gold:0,population:6,cities:[{id:'farm',ownerId:'coral',x:20,z:0,level:2,houseCount:6}],
+    spendLogs(n){if(this.logs<n)return{ok:false};this.logs-=n;return{ok:true};},addLogs(n){this.logs+=n;return{ok:true};},
+    creditGold(n){this.gold+=n;return{ok:true};},spendGold(n){if(this.gold<n)return{ok:false};this.gold-=n;return{ok:true};},
+    addFood(n){this.food+=n;return{ok:true};},spendFood(n){if(this.food<n)return{ok:false};this.food-=n;return{ok:true};}};
+  world.gameplay.farmVillages.cities=[];session.bots.push({game:foreign});session.revision++;
+  assert.ok(economy.buyTrain('farm','circle','coral').ok);assert.equal(game.gold,0);assert.equal(foreign.gold,0);
+  assert.deepEqual(economy.resourcesAt('teal').rates,{resources:1,food:0,gold:18});
+  economy.update(6);assert.equal(game.gold,3);assert.equal(game.logs,40);assert.equal(game.food,12);
 });
 
+test('upkeep includes waiting trains and unpaid amounts are settled before any resource spending',()=>{
+  const {economy,game,loop}=fixture();loop.length=10000;loop.stops[1].distance=5000;
+  economy.buyTrain('own','circle','teal');economy.buyTrain('own','circle','teal');
+  economy.update(180);
+  let wallet=economy.resourcesAt('teal');assert.equal(wallet.resources,0);assert.equal(wallet.resourceDebt,17);assert.equal(wallet.resourceNet,-17);
+  assert.deepEqual(wallet.upkeep,{due:30,paid:13,unpaid:17});assert.ok(wallet.rates.resources<0);
+  assert.equal(economy.spendResources('teal',1).ok,false);assert.equal(economy.spendConstruction('teal',null,{resources:1}).ok,false);
+  economy.creditResources('teal',4);assert.equal(economy.resourcesAt('teal').resourceDebt,13);
+  game.addLogs(20);wallet=economy.resourcesAt('teal');assert.equal(wallet.resources,7);assert.equal(wallet.resourceDebt,0);
+  assert.deepEqual(economy.snapshot().stats.upkeep,{due:30,paid:30,unpaid:0});
+  assert.equal(economy.spendResources('teal',8).ok,false);assert.equal(economy.spendResources('teal',7).ok,true);
+  const production=economy.drainEvents().filter(event=>event.type==='production'&&event.ownerId==='teal');
+  assert.deepEqual(production.map(event=>event.amount),[-9,-9,-9]);assert.ok(production.every(event=>event.gross===1&&event.upkeep===10));
+  assert.deepEqual(production.map(event=>event.paidUpkeep),[10,2,1],'tick feedback includes repayment of older upkeep debt');
+});
+
+test('night pauses population output while train upkeep continues each minute',()=>{
+  const {economy,game,loop}=fixture({population:0});loop.length=10000;loop.stops[1].distance=5000;
+  economy.buyTrain('own','circle','teal');game.spendLogs(25);economy.update(300);
+  assert.equal(economy.resourcesAt('teal').resourceDebt,25);economy.update(60);
+  assert.equal(economy.resourcesAt('teal').resourceDebt,30);assert.equal(economy.snapshot().clock.dayPhase,'night');
+  assert.deepEqual(economy.snapshot().stats.produced,{resources:0,food:30,gold:0});
+});
+
+test('train delivery pays outstanding upkeep before adding spendable resources',()=>{
+  const {economy,game,loop}=fixture({population:0});loop.length=590;loop.stops[1].distance=300;
+  economy.buyTrain('own','circle','teal');game.spendLogs(25);economy.update(120);
+  assert.equal(economy.trains[0].laps,1);assert.equal(game.logs,0);assert.equal(game.food,22);
+  assert.equal(economy.resourcesAt('teal').resourceDebt,0);assert.equal(economy.snapshot().stats.deliveryDebtPaid,10);
+  const delivery=economy.drainEvents().find(event=>event.type==='delivery');assert.equal(delivery.resources.resources,10);assert.equal(delivery.spendableResources.resources,0);assert.equal(delivery.debtPaid,10);assert.equal(delivery.cargo.resources,10);
+});
+
+test('train accounting and upkeep are frame independent and reads do not advance time',()=>{
+  const a=fixture(),b=fixture();a.economy.buyTrain('own','circle','teal');b.economy.buyTrain('own','circle','teal');
+  a.economy.update(740);for(let i=0;i<2960;i++)b.economy.update(.25);
+  assert.deepEqual(a.economy.snapshot(),b.economy.snapshot());assert.deepEqual(a.economy.drainEvents(),b.economy.drainEvents());
+  const before=a.economy.snapshot();a.economy.city('own');a.economy.trains;a.economy.resourcesAt('teal');assert.deepEqual(a.economy.snapshot(),before);
+});
 
 test('all founding sites and growing centroids keep the same resource product',()=>{
   const world={gameplay:{ownerId:'teal',starterHouse:{x:0,z:0,biome:'forest'},playerBots:[{ownerId:'coral',starterHouse:{x:20,z:0,biome:'desert'}}]}};
@@ -155,13 +192,13 @@ test('all founding sites and growing centroids keep the same resource product',(
 test('game resource adapters preserve global balances through production, train purchase and delivery',()=>{
   const {game,economy,world}=fixture();
   const standalone=createSettlementGame(world,{surfaceAt:flat});
-  assert.deepEqual(standalone.resourcesAt(),{resources:12,timber:12,food:0,gold:60,grain:0,tools:0,cityId:null});
+  assert.equal(standalone.resourcesAt().resources,40);assert.equal(standalone.resourcesAt().food,12);assert.equal(standalone.resourcesAt().gold,0);
   assert.deepEqual(game.resourcesAt(),economy.resourcesAt('teal'));
   economy.update(120);economy.buyTrain('own','circle','teal');
-  assert.equal(game.resourcesAt().gold,43);assert.equal(game.resourcesAt().resources,16);
+  assert.equal(game.resourcesAt().gold,0);assert.equal(game.resourcesAt().resources,27);
   economy.update(10);
   assert.deepEqual(game.resourcesAt({x:500,z:500}),economy.resourcesAt('teal'));
-  assert.equal(game.resourcesAt().food,10);assert.equal(game.resourcesAt().resources,26);
+  assert.equal(game.resourcesAt().food,22);assert.equal(game.resourcesAt().resources,37);
   game.setEconomy({resourcesAt:()=>({resources:0,food:19,gold:23}),spendConstruction:()=>({ok:false})});
   assert.equal(game.resourcesAt().food,19);assert.equal(game.resourcesAt().gold,23);
   assert.equal(game.resourcesAt().metal,undefined);assert.equal(game.resourcesAt().wood,undefined);
@@ -178,7 +215,7 @@ test('every arrival holds a train for one second and earns rewards exactly once'
   assert.equal(atHome.nextStopCityId,'farm');assert.ok(Math.abs(atHome.arrivalRemaining-5.52)<1e-8);
   economy.update(.75);
   assert.deepEqual(economy.trains[0].pose,initial);assert.equal(economy.trains[0].dwellRemaining,.25);
-  assert.equal(economy.trains[0].dwellProgress,.75);assert.equal(game.gold,43);
+  assert.equal(economy.trains[0].dwellProgress,.75);assert.equal(game.gold,0);
   economy.update(.25);assert.equal(economy.trains[0].state,'moving');assert.equal(economy.trains[0].stopCityId,null);
   economy.update(4.52);
   const atFarm=economy.trains[0],farmPose=atFarm.pose;
@@ -191,7 +228,7 @@ test('every arrival holds a train for one second and earns rewards exactly once'
   const events=economy.drainEvents();
   assert.deepEqual(events.filter(event=>event.type==='pickup').map(event=>[event.cityId,Math.round(event.time*100)/100]),[['own',0],['farm',5.52],['own',10]]);
   assert.deepEqual(events.filter(event=>event.type==='delivery').map(event=>event.time),[10]);
-  assert.equal(game.logs,22);assert.equal(game.gold,46);assert.equal(economy.resourcesAt('teal').food,10);
+  assert.equal(game.logs,35);assert.equal(game.gold,3);assert.equal(economy.resourcesAt('teal').food,22);
 });
 
 test('station gain events describe exact positions and distinguish loaded cargo from wallet delivery',()=>{
@@ -204,17 +241,17 @@ test('station gain events describe exact positions and distinguish loaded cargo 
   assert.equal(pickups[1].ownerId,'teal');assert.equal(pickups[1].cityOwnerId,'gray');assert.equal(pickups[1].gold,3);
   assert.deepEqual(pickups[1].resources,{resources:0,food:10,gold:0});
   assert.deepEqual(delivery.resources,{resources:10,food:10,gold:0});
-  assert.equal(delivery.stationId,'own-station');assert.equal(delivery.x,10);assert.equal(delivery.z,0);
+  assert.equal(delivery.cityOwnerId,'teal');assert.equal(delivery.gold,3);assert.equal(delivery.stationId,'own-station');assert.equal(delivery.x,10);assert.equal(delivery.z,0);
 });
 
 test('production events describe the credited settlement and cosmetic trips cannot add feedback',()=>{
-  const {economy}=fixture();economy.update(30);
+  const {economy}=fixture();economy.update(60);
   const events=economy.drainEvents(),own=events.filter(event=>event.ownerId==='teal');
   assert.equal(own.length,1);assert.equal(own[0].type,'production');assert.equal(own[0].amount,1);
   assert.deepEqual(own[0].resources,{resources:1,food:0,gold:0});
   assert.equal(own[0].cityId,'own');assert.equal(own[0].x,0);assert.equal(own[0].y,0);assert.equal(own[0].z,0);
-  assert.equal(own[0].workerId,undefined);assert.equal(own[0].time,30);
-  assert.equal(events.filter(event=>event.cityId==='farm').length,6);
+  assert.equal(own[0].workerId,undefined);assert.equal(own[0].time,60);
+  assert.equal(events.filter(event=>event.cityId==='farm').length,1);
   economy.creditProduction('teal','resources',2,'trip-8',{x:4,y:2,z:7});
   assert.deepEqual(economy.drainEvents(),[]);
 });

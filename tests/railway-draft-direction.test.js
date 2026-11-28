@@ -48,7 +48,10 @@ function fixture(){
     id:`${city.id}:home:${index}`,kind:'house',cityId:city.id,ownerId:city.ownerId,x:city.x+x,z:city.z+z,rotation:0,width:2.2,depth:2.2,
   })));
   for(const city of cities)city.houseIds=buildings.filter(home=>home.cityId===city.id).map(home=>home.id);
-  const account=city=>({ownerId:city.ownerId,cities:[city],gold:200,spendGold(amount){this.gold-=amount;return {ok:true,totalGold:this.gold};}});
+  const account=city=>({ownerId:city.ownerId,cities:[city],gold:0,logs:40,
+    resourcesAt(){return {resources:this.logs};},
+    spendResources(amount){if(this.logs<amount)return {ok:false,code:'not-enough-resources'};this.logs-=amount;return {ok:true,totalResources:this.logs};},
+    spendGold(){assert.fail('directed railways must spend Resources');}});
   const session={player:account(cities[0]),bots:[{game:account(cities[1])}],buildings,shared:{removedTreeIds:new Set()}};
   const rail=createSettlementRailways({seed:'directed-rail-test',gameplay:{economy:'loops'},rivers:[]},{
     session,surfaceAt:()=>({type:'ground',height:0}),sceneryCatalog:[],
@@ -82,16 +85,17 @@ test('the remaining station ends complete a continuous return loop whichever end
   }
 });
 
-test('conflicting entry ports remain red without spending gold and can be repaired by moving one endpoint',()=>{
+test('conflicting entry ports remain red without spending Resources and can be repaired by moving one endpoint',()=>{
   const {rail,session,port}=fixture();
   const start=port('a',-1),end=port('b',-1),reverse=railwayDraftDirection({start,end});
   assert.equal(reverse,false);
-  const gold=session.player.gold,invalid=rail.build('a','b',{attachments:{from:start,to:end}});
+  const resources=session.player.logs,invalid=rail.build('a','b',{attachments:{from:start,to:end}});
   assert.equal(invalid.code,'wrong-direction');
   assert.deepEqual(invalid.directionErrors,['from']);
-  assert.equal(session.player.gold,gold);
+  assert.equal(session.player.logs,resources);
   assert.equal(rail.snapshot().connections.length,0);
-  assert.equal(rail.build('a','b',{attachments:{from:port('a',1),to:end}}).ok,true);
+  const built=rail.build('a','b',{attachments:{from:port('a',1),to:end}});
+  assert.equal(built.ok,true);assert.equal(built.costResource,'resources');assert.equal(session.player.logs,resources-built.cost);assert.equal(session.player.gold,0);
 });
 
 test('entry-first selection also closes a circuit through two ends of the same station',()=>{

@@ -16,7 +16,7 @@ test('ore swings award exactly one shared construction resource without consumin
     const result=game.mine(ore,{player});assert.equal(result.ok,true);assert.equal(result.amount,1);
     assert.equal(result.resource,'resources');assert.equal(game.resourcesAt().resources,initial+i+1);
   }
-  assert.deepEqual(game.constructionCost,{resources:8});
+  assert.deepEqual(game.constructionCost,{resources:8,food:2});
   assert.equal(game.population,1);assert.equal(game.spatialRevision,spatial);assert.equal(game.removedTreeIds.size,0);
   const built=game.build({x:5,z:0});assert.equal(built.ok,true);
   assert.equal(game.resourcesAt().resources,initial);assert.equal(game.population,2);
@@ -41,4 +41,17 @@ test('a forest tree and desert ore feed the same balance while only player chopp
   assert.equal(game.isTreeRemoved(tree),true);assert.equal(game.isTreeRemoved(ore),false);
   assert.equal(game.chop(tree,{player}).code,'already-chopped');
   assert.ok(!('wood' in game.resourcesAt())&&!('metal' in game.resourcesAt()));
+});
+
+test('loop house payments spend both wallets and missing food never spends resources or reserves a site',()=>{
+  const game=fixture();assert.equal(game.gold,0);assert.equal(game.food,12);
+  game.spendFood(11);const before=game.snapshot();
+  const rejected=game.build({x:5,z:0});assert.equal(rejected.code,'not-enough-food');assert.equal(rejected.siteValid,true);
+  assert.deepEqual(game.snapshot(),before);
+  game.addFood(1);assert.ok(game.build({x:5,z:0}).ok);
+  assert.equal(game.food,0);assert.equal(game.logs,32);assert.equal(game.population,2);
+  for(const amount of [-1,NaN,Infinity,.5,Number.MAX_SAFE_INTEGER+1]){
+    assert.equal(game.spendFood(amount).ok,false);assert.equal(game.addFood(amount).ok,false);
+  }
+  assert.equal(game.spendFood(1).ok,false);assert.equal(game.food,0);
 });

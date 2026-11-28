@@ -8,6 +8,7 @@ import {createPlayerBot} from '../src/player-bots.js';
 import {createSettlementRailways} from '../src/settlement-railways.js';
 import {createSettlementEconomy} from '../src/settlement-economy.js';
 import {createEconomicBots} from '../src/economic-bots.js';
+import {LOOP_ECONOMY_RULES,loopTrainCost} from '../src/loop-economy-rules.js';
 
 test('island loop rivals buy complete directed railway circuits through real physical settlements',()=>{
   const world=generateWorld(createSettlementWorld({economy:'loops'}),{detail:'network'});
@@ -23,11 +24,12 @@ test('island loop rivals buy complete directed railway circuits through real phy
   const railways=createSettlementRailways(world,{session,getPlacements}),economy=createSettlementEconomy(world,{session,railways});
   const games=[session.player,...session.bots.map(entry=>entry.game)],initialGold=economy.snapshot().owners.reduce((sum,owner)=>sum+owner.gold,0);
   for(const game of games)game.setEconomy({resourcesAt:point=>economy.resourcesAt(game.ownerId,point),
-    spendConstruction:(point,cost)=>economy.spendConstruction(game.ownerId,point,cost)});
+    spendConstruction:(point,cost)=>economy.spendConstruction(game.ownerId,point,cost),
+    spendResources:amount=>economy.spendResources(game.ownerId,amount)});
   for(const {config,game}of session.bots)bots.push(createPlayerBot(world,game,{config,getPlacements,getRevision:()=>session.revision}));
   let railwayCost=0;
   const coordinator=createEconomicBots(world,{session,bots,railways,economy,onRailBuild(result){
-    railwayCost+=result.cost;const data=railways.snapshot();
+    assert.equal(result.costResource,'resources');railwayCost+=result.cost;const data=railways.snapshot();
     infrastructure={revision:data.revision,buildings:data.stations,paths:data.paths,clearedPlacementIds:data.clearedPlacementIds,
       corridors:data.reservations.filter(item=>item.kind==='rail-corridor')};
   }});
@@ -45,8 +47,11 @@ test('island loop rivals buy complete directed railway circuits through real phy
   assert.ok(coordinator.stats.routes>=2,'rivals buy both directions of a real circuit');
   assert.ok(result.stats.trainsBought>0,'a valid physical circle supports a purchased train');
   assert.ok(result.stats.laps>0,'a purchased train completes the actual track loop');
+  assert.ok(bots.some(bot=>bot.game.houses.length>6),'trade-delivered Food lets a rival resume construction beyond the station milestone');
   for(const train of result.trains)assert.equal(train.backing,false);
-  assert.equal(result.owners.reduce((sum,owner)=>sum+owner.gold,0),initialGold+result.stats.currencyMinted-railwayCost-result.stats.trainSpent);
-  assert.equal(session.player.logs,42,'the starting resident produces 30 resources in fifteen minutes');assert.equal(session.player.gold,60,'bots never spend or reward the human wallet');
+  assert.ok(railwayCost>0);assert.ok(result.stats.trainSpent>=loopTrainCost(2));assert.equal(initialGold,0,'every player begins without Gold');
+  assert.equal(result.owners.reduce((sum,owner)=>sum+owner.gold,0),initialGold+result.stats.currencyMinted,'railways and trains only debit Resources');
+  assert.equal(session.player.logs,LOOP_ECONOMY_RULES.startResources+10,'the starter earns ten daytime production ticks across fifteen minutes');
+  assert.equal(session.player.food,LOOP_ECONOMY_RULES.startFood);assert.equal(session.player.gold,0,'bots never spend or reward the human wallet');
   coordinator.dispose();
 });

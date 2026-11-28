@@ -6,6 +6,7 @@ import {riverBankDistance} from './hydrology.js';
 import {settlementTreeId} from './settlement-game.js';
 import {planSettlementPath} from './settlement-paths.js';
 import {BoundsTree,pointBox} from './spatial-index.js';
+import {LOOP_ECONOMY_RULES,loopTrackCost} from './loop-economy-rules.js';
 
 export const SETTLEMENT_RAILWAY=Object.freeze({cost:5,minRadius:8,halfWidth:1.12,
   railY:.42,spineLength:14,stationOffset:3,stationWidth:6.4,stationDepth:2.4,
@@ -40,7 +41,7 @@ const routeOptions=options=>({waypoints:(options?.waypoints===undefined?[]:Array
   ...(options?.controlCount!==undefined?{controlCount:options.controlCount}:{}),
   ...(options?.ownerId!==undefined?{ownerId:options.ownerId}:{})});
 const validControlCount=count=>Number.isInteger(count)&&count>=1&&count<=12;
-export const railwayControlCount=(from,to)=>Math.max(1,Math.min(12,Math.ceil(dist(from,to)/48)-1));
+export const railwayControlCount=(from,to)=>Math.max(1,Math.min(12,Math.ceil(dist(from,to)/LOOP_ECONOMY_RULES.trackUnitLength)-1));
 const waypointCount=(from,to,controlCount)=>validControlCount(controlCount)?controlCount:railwayControlCount(from,to);
 function routeHandles(from,to,alignment,{waypoints=[],attachments={},controlCount}={},start,end){
   const count=waypointCount(from,to,controlCount),point=(p,kind,index)=>{
@@ -602,8 +603,10 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     const route=normalizedOptions(options);
     const cities=allCities(),from=cities.find(city=>city.id===fromCityId),to=cities.find(city=>city.id===toCityId);
     const range={maxConnectionDistance,distance:from&&to?dist(from,to):null};
-    const cost=economic?8+Math.ceil((range.distance??0)/50):SETTLEMENT_RAILWAY.cost;
-    const base={fromCityId,toCityId,ownerId:account.ownerId,cost,affordable:account.gold>=cost,provisional,
+    const cost=directed?loopTrackCost(range.distance??0):economic?8+Math.ceil((range.distance??0)/50):SETTLEMENT_RAILWAY.cost;
+    const costResource=directed?'resources':'gold',balance=directed?(account.resourcesAt?.().resources??account.logs??0):account.gold;
+    const shortage={code:`not-enough-${costResource}`,reason:`A railway costs ${cost} ${costResource}`};
+    const base={fromCityId,toCityId,ownerId:account.ownerId,cost,costResource,affordable:balance>=cost,provisional,
       ...range,range,lines:[],stations:[],paths:[],clearedTreeIds:[],clearedPlacementIds:[],clearedPlacements:[],handles:[],waypoints:route.waypoints,attachments:route.attachments};
     const fail=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(options.ownerId!==undefined&&!accounts.some(game=>game.ownerId===options.ownerId))return fail('invalid-owner','Choose a valid railway owner');
@@ -621,7 +624,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     // occupied buildings / existing rail geometry invalidate an expensive plan.
     const cacheKey=geometryKey(from.id,to.id,route);
     if(!provisional&&cached?.key===cacheKey){const plan=cached.plan;
-      return plan.code==='ready'?{...base,...copy(plan),siteValid:true,valid:base.affordable,code:base.affordable?'ready':'not-enough-gold',reason:base.affordable?plan.reason:`A railway costs ${cost} gold`}:
+      return plan.code==='ready'?{...base,...copy(plan),siteValid:true,valid:base.affordable,...(base.affordable?{code:'ready',reason:plan.reason}:shortage)}:
         {...base,...copy(plan),siteValid:false,valid:false};}
     const occupied=obstacles();
     if(geometryCache?.key!==cacheKey)geometryCache={key:cacheKey,plan:findGeometry(from,to,occupied,route)};
@@ -631,7 +634,7 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
       if(!allowed.has(fromLine)&&!allowed.has(toLine))return {...base,...copy(plan),valid:false,siteValid:false,code:'outside-jurisdiction',reason:'Connect to your station or its approach before another city'};
     }
     if(!provisional)cached={key:cacheKey,plan};
-    return {...base,...copy(plan),siteValid:true,valid:base.affordable,code:base.affordable?'ready':'not-enough-gold',reason:base.affordable?plan.reason:`A railway costs ${cost} gold`};
+    return {...base,...copy(plan),siteValid:true,valid:base.affordable,...(base.affordable?{code:'ready',reason:plan.reason}:shortage)};
   }
   const preview=(from,to,options={})=>asAccount(options,()=>resultFor(from,to,options,true)),evaluate=(from,to,options={})=>asAccount(options,()=>resultFor(from,to,options,false));
   function geometryKey(fromCityId,toCityId,options={}){const cities=allCities();return `${options.ownerId??session.player.ownerId}:${fromCityId}>${toCityId}:${maxConnectionDistance}:${revision}:${cities.map(city=>`${city.id}:${city.x}:${city.z}:${city.houseCount}`).join('|')}:${obstacles().key}:${JSON.stringify(normalizedOptions(options))}`;}
@@ -651,15 +654,16 @@ export function createSettlementRailways(world,{session,getPlacements=()=>[],sur
     for(const actor of session.shared.getActors?.()??[])if(finite(actor)&&result.stations.some(station=>pointDistance(station,actor)<.25)){
       return {ok:false,...result,valid:false,code:'player-blocked',reason:'Move away from the new platform'};
     }
-    const payment=account.spendGold(result.cost);if(!payment.ok)return {ok:false,...result,...payment};
+    const payment=result.costResource==='resources'?(account.spendResources??account.spendLogs).call(account,result.cost):account.spendGold(result.cost);
+    if(!payment.ok)return {ok:false,...result,...payment,...(result.costResource==='resources'&&payment.code==='not-enough-timber'?{code:'not-enough-resources'}:{})};
     const connection={id:result.lines.at(-1).id.replace(/^rail-link:/,'connection:'),key:connectionKey(fromCityId,toCityId),from:fromCityId,to:toCityId,
-      lineId:result.lines.at(-1).id,directed,fromStationId:result.fromStationId,toStationId:result.toStationId,fromJunction:result.fromJunction,toJunction:result.toJunction,ownerId:account.ownerId,cost:result.cost};
+      lineId:result.lines.at(-1).id,directed,fromStationId:result.fromStationId,toStationId:result.toStationId,fromJunction:result.fromJunction,toJunction:result.toJunction,ownerId:account.ownerId,cost:result.cost,costResource:result.costResource};
     stations.push(...result.stations);lines.push(...result.lines);paths.push(...result.paths);connections.push(connection);
     for(const id of result.clearedTreeIds)session.shared.removedTreeIds.add(id);
     for(const id of result.clearedPlacementIds)clearedPlacementIds.add(id);
     for(const station of result.stations)reservations.push({...station});
     for(const line of result.lines)reservations.push({id:line.id,kind:'rail-corridor',width:SETTLEMENT_RAILWAY.halfWidth*2+.3,points:line.points});
-    revision++;cached=null;const built={ok:true,...result,connection:copy(connection),totalGold:payment.totalGold,revision};onBuild?.(built);return built;
+    revision++;cached=null;const built={ok:true,...result,connection:copy(connection),totalGold:payment.totalGold,...(result.costResource==='resources'?{totalResources:payment.totalResources??payment.totalLogs??account.resourcesAt?.()?.resources}:{}),revision};onBuild?.(built);return built;
   }
   const build=(from,to,options={})=>asAccount(options,()=>buildAs(from,to,options));
   function synchronizeStations(){

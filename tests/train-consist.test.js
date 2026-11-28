@@ -10,7 +10,7 @@ function fixture(initial=loop()){
   let current=initial;
   const cities=initial.cityIds.map((id,i)=>({id,ownerId:i?'gray':'teal',level:2,houseCount:6,biome:i?'farmland':'forest',x:i*10,z:0}));
   const world={gameplay:{ownerId:'teal',starterHouse:{biome:'forest'},farmVillages:{ownerId:'gray',cities:cities.slice(1)}}};
-  const game={ownerId:'teal',logs:0,gold:1000,cities:[cities[0]],creditGold(n){this.gold+=n;return{ok:true};},spendGold(n){if(this.gold<n)return{ok:false};this.gold-=n;return{ok:true};},addLogs(n){this.logs+=n;return{ok:true};}};
+  const game={ownerId:'teal',logs:1000,gold:0,cities:[cities[0]],creditGold(n){this.gold+=n;return{ok:true};},spendGold(n){if(this.gold<n)return{ok:false};this.gold-=n;return{ok:true};},addLogs(n){this.logs+=n;return{ok:true};},spendLogs(n){if(this.logs<n)return{ok:false};this.logs-=n;return{ok:true};}};
   const session={player:game,bots:[],revision:0},railways={revision:0,snapshot(){return{revision:this.revision};}};
   const sample=(circuit,distance,revision=0)=>{
     const along=((distance%circuit.length)+circuit.length)%circuit.length,angle=along/circuit.length*Math.PI*2,radius=circuit.length/(Math.PI*2);

@@ -1,6 +1,7 @@
 import {loopHudState,loopResourceLabel} from './loop-hud-state.js';
 import {createLoopHudAnchor} from './loop-hud-anchor.js';
 import {resourceIcon} from './resource-icons.js';
+import {LOOP_ECONOMY_RULES} from './loop-economy-rules.js';
 const write=(node,value)=>{if(node.textContent!==String(value))node.textContent=value;};
 const icon=resource=>resource==='train'?'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="16" rx="3"/><path d="M5 11h14M8 6h8M8 22l2-3m6 3-2-3M8 15h1m6 0h1"/></svg>':resourceIcon(resource==='wood'||resource==='metal'?'resources':resource);
 
@@ -10,7 +11,7 @@ export function createLoopHud({parent,world,ownerId,onBuyTrain,onCycle,onClose,d
   const root=doc.createElement('aside');root.className='loop-hud';root.hidden=true;root.setAttribute('aria-label','Selected railway');
   root.innerHTML=`<div class="loop-actions" data-loop="route">
     <div class="loop-alternatives" data-loop="alternatives"><button data-loop="previous" aria-label="Previous circuit on this track">‹</button><span data-loop="index"></span><button data-loop="next" aria-label="Next circuit on this track">›</button></div>
-    <button class="loop-buy" data-loop="buy" aria-keyshortcuts="Enter">${icon('train')}<kbd>Enter</kbd><strong class="loop-cost">${icon('gold')}<span data-loop="cost"></span></strong></button>
+    <button class="loop-buy" data-loop="buy" aria-keyshortcuts="Enter">${icon('train')}<kbd>Enter</kbd><strong class="loop-cost">${icon('resources')}<span data-loop="cost"></span></strong></button>
     <button class="loop-close" data-loop="close" aria-label="Close selection" title="Close · Esc">×</button></div>
     <p class="loop-shortfall" data-loop="shortfall" role="status" hidden></p>
     <div class="loop-city-facts" data-loop="city" hidden></div>`;
@@ -41,11 +42,11 @@ export function createLoopHud({parent,world,ownerId,onBuyTrain,onCycle,onClose,d
     nodes.route.hidden=!selected;nodes.city.hidden=!!selected;nodes.shortfall.hidden=!selected||!shortfall;
     if(selected){
       nodes.buy.disabled=!canBuy;write(nodes.cost,state.cost);
-      nodes.buy.setAttribute('aria-label',`Add train · ${state.cost} gold`);nodes.buy.title=`Add train · ${state.cost} gold · Enter`;
+      nodes.buy.setAttribute('aria-label',`Add train · ${state.cost} resources. Upkeep ${LOOP_ECONOMY_RULES.trainUpkeep} resources per minute.`);nodes.buy.title=`Add train · ${state.cost} resources · Enter. ${LOOP_ECONOMY_RULES.trainBase} resources + ${LOOP_ECONOMY_RULES.trainPerCar} per cargo car; upkeep ${LOOP_ECONOMY_RULES.trainUpkeep}/min.`;
       nodes.alternatives.hidden=!alternatives;const candidates=props.candidateIds??[];write(nodes.index,`${Math.max(0,candidates.indexOf(selected.id))+1}/${candidates.length}`);
-      write(nodes.shortfall,`${shortfall} more gold`);
+      write(nodes.shortfall,`${shortfall} more resources`);
     }else{
-      nodes.city.innerHTML=`<span>${icon(city.resource)} ${loopResourceLabel(city.resource)}</span>${state.station?`<span title="Gold per train visit">${icon('gold')}3</span>`:''}`;
+      nodes.city.innerHTML=`<span>${icon(city.resource)} ${loopResourceLabel(city.resource)}</span>${state.station?`<span title="Gold per train visit">${icon('gold')}${LOOP_ECONOMY_RULES.visitGold}</span>`:''}`;
     }
     // Layout is measured only when content changes; camera movement only writes transforms.
     actionWidth=root.offsetWidth||204;positionAction();

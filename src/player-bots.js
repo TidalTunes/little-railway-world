@@ -235,7 +235,7 @@ export function createPlayerBot(world,game,{config,getPlacements=()=>world.gamep
     }
     const cost=game.constructionCost??{timber:SETTLEMENT.houseCost,tools:0};
     const resources=policy.resourcesAt?.(anchor)??game.resourcesAt?.(anchor)??{timber:game.logs,tools:0};
-    if((resources.tools??0)<(cost.tools??0)){
+    if((resources.tools??0)<(cost.tools??0)||(resources.food??0)<(cost.food??0)){
       state='waiting';cooldown=1;
     }else if((resources.resources??resources.timber??0)<(cost.resources??cost.timber??0)){
       if(policy.allowChop)yield* chooseTree();else{state='waiting';cooldown=1;}

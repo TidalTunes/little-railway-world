@@ -44,7 +44,7 @@ function fixture(){
   const document=documentFixture(),buys=[],cycles=[],closed=[],camera=cameraFixture();
   const hud=createLoopHud({parent:document.body,world:{},ownerId:'teal',onBuyTrain:(...args)=>buys.push(args),onCycle:delta=>cycles.push(delta),onClose:()=>closed.push(true)});
   const nodes=Object.fromEntries(hud.root.querySelectorAll('[data-loop]').map(node=>[node.dataset.loop,node]));
-  const props={city,ownCity:city,selectedLoopId:loop.id,resources:{gold:20},walking:false,tool:'axe',camera,viewport,anchor:{x:5,y:.6,z:2},candidateIds:[loop.id]};
+  const props={city,ownCity:city,selectedLoopId:loop.id,resources:{resources:20},walking:false,tool:'axe',camera,viewport,anchor:{x:5,y:.6,z:2},candidateIds:[loop.id]};
   return{document,hud,nodes,buys,cycles,closed,camera,props};
 }
 
@@ -75,9 +75,9 @@ test('purchase button and Enter action share explicit selection and affordabilit
   try{
     assert.equal(hud.buySelected(),false);
     hud.update({...props,selectedLoopId:null});assert.equal(hud.root.hidden,false);assert.equal(nodes.route.hidden,true);assert.equal(nodes.city.hidden,false);assert.equal(hud.buySelected(),false);
-    hud.update({...props,resources:{gold:19}});assert.equal(hud.selectedLoopId,loop.id);assert.equal(nodes.buy.disabled,true);assert.equal(nodes.shortfall.hidden,false);assert.equal(nodes.shortfall.textContent,'1 more gold');
+    hud.update({...props,resources:{resources:19}});assert.equal(hud.selectedLoopId,loop.id);assert.equal(nodes.buy.disabled,true);assert.equal(nodes.shortfall.hidden,false);assert.equal(nodes.shortfall.textContent,'1 more resources');
     assert.equal(hud.buySelected(),false);nodes.buy.dispatch('click');assert.equal(buys.length,0);
-    hud.update(props);assert.equal(nodes.buy.disabled,false);assert.equal(nodes.shortfall.hidden,true);assert.equal(nodes.cost.textContent,'20');assert.equal(nodes.buy.getAttribute('aria-label'),'Add train · 20 gold');
+    hud.update(props);assert.equal(nodes.buy.disabled,false);assert.equal(nodes.shortfall.hidden,true);assert.equal(nodes.cost.textContent,'20');assert.equal(nodes.buy.getAttribute('aria-label'),'Add train · 20 resources. Upkeep 5 resources per minute.');
     assert.equal(hud.buySelected(),true);nodes.buy.dispatch('click');assert.deepEqual(buys,[[city.id,loop.id],[city.id,loop.id]]);
     hud.update({...props,selectedLoopId:'removed'});assert.equal(hud.selectedLoopId,null);assert.equal(hud.buySelected(),false);
     const foreign={...city,ownerId:'coral'};hud.update({...props,city:foreign,ownCity:foreign});assert.equal(hud.buySelected(),false);assert.equal(nodes.buy.disabled,true);
@@ -112,7 +112,7 @@ test('circuit cycling, event containment and disposal release the action control
   const{document,hud,nodes,props,buys,cycles,closed}=fixture();let worldClicks=0;document.body.addEventListener('click',()=>worldClicks++);
   hud.update({...props,candidateIds:[loop.id,alternate.id]});assert.equal(nodes.alternatives.hidden,false);assert.equal(nodes.index.textContent,'1/2');
   nodes.previous.dispatch('click');nodes.next.dispatch('click');nodes.close.dispatch('click');assert.deepEqual(cycles,[-1,1]);assert.deepEqual(closed,[true]);assert.equal(worldClicks,0);
-  hud.update({...props,selectedLoopId:alternate.id,resources:{gold:30},candidateIds:[loop.id,alternate.id]});assert.equal(nodes.index.textContent,'2/2');assert.equal(hud.buySelected(),true);assert.deepEqual(buys,[[city.id,alternate.id]]);
+  hud.update({...props,selectedLoopId:alternate.id,resources:{resources:30},candidateIds:[loop.id,alternate.id]});assert.equal(nodes.index.textContent,'2/2');assert.equal(hud.buySelected(),true);assert.deepEqual(buys,[[city.id,alternate.id]]);
   hud.dispose();assert.equal(document.body.children.length,0);assert.equal(hud.buySelected(),false);
   for(const node of [hud.root,...Object.values(nodes)])for(const listeners of node.listeners.values())assert.equal(listeners.size,0);
   nodes.buy.dispatch('click');nodes.previous.dispatch('click');nodes.close.dispatch('click');hud.update(props);

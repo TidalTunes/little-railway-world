@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {settlementHudProgress,settlementHudRailway,settlementHudConstruction} from '../src/settlement-hud.js';
+import {settlementHudProgress,settlementHudRailway,settlementHudConstruction,settlementHudRate,settlementHudProductionClock} from '../src/settlement-hud.js';
 
 test('construction guidance distinguishes timber and tools instead of claiming timber is enough',()=>{
   const buildCost={timber:8,tools:2},input={economic:true,logs:8,buildCost};
@@ -10,6 +10,38 @@ test('construction guidance distinguishes timber and tools instead of claiming t
   const unknown=settlementHudConstruction(input);assert.equal(unknown.affordable,false);assert.equal(unknown.readiness,'Timber ready; 2 tools also required.');
   const both=settlementHudConstruction({...input,logs:5,resources:{tools:1}});assert.equal(both.shortage,'3 more timber + 1 more tool');assert.ok(!both.readiness.includes('logs'));
   const legacy=settlementHudConstruction({logs:10});assert.equal(legacy.affordable,true);assert.equal(legacy.costLabel,'10 logs');assert.equal(legacy.readiness,'Enough logs gathered.');
+});
+
+test('construction requires both resources and food without borrowing against upkeep debt',()=>{
+  const input={economic:'loops',buildCost:{resources:8,food:2},logs:999};
+  const missing=settlementHudConstruction({...input,resources:{resources:7,food:1,resourceNet:99}});
+  assert.equal(missing.costLabel,'8 resources + 2 food');assert.equal(missing.shortage,'1 more resources + 1 more food');assert.equal(missing.affordable,false);
+  const ready=settlementHudConstruction({...input,resources:{resources:8,food:2}});assert.equal(ready.affordable,true);assert.equal(ready.readiness,'Resources and food ready.');
+  assert.equal(settlementHudConstruction({...input,resources:{resources:0,food:2,resourceNet:-3}}).affordable,false);
+});
+
+test('resource railway shortfalls remain cost feedback and gold cannot pay them',()=>{
+  const route={stage:'preview',hasCity:true,siteValid:true,canBuild:false,cost:12,costResource:'resources',code:'not-enough-resources'};
+  const short=settlementHudRailway(route,{resources:{resources:4},gold:999});
+  assert.equal(short.canBuild,false);assert.equal(short.shortfall,8);assert.equal(short.missingGold,0);assert.equal(short.status,'8 resources short');assert.equal(short.statusKind,'cost');
+  const ready=settlementHudRailway({...route,canBuild:true,code:'ready'},{resources:12,gold:0});assert.equal(ready.canBuild,true);assert.equal(ready.costResource,'resources');
+  const invalid=settlementHudRailway({...route,siteValid:false,code:'invalid-alignment',reason:'Give this bend more room'},{resources:0});assert.equal(invalid.statusKind,'error');
+});
+
+test('production countdown follows authoritative tick time and stays paused overnight',()=>{
+  assert.equal(settlementHudProductionClock({daytime:true,secondsRemaining:60}).label,'1:00');
+  assert.equal(settlementHudProductionClock({daytime:true,secondsRemaining:.01}).label,'0:01');
+  assert.equal(settlementHudProductionClock({daytime:true,secondsRemaining:60,interval:60}).progress,0);
+  assert.equal(settlementHudProductionClock({daytime:true,secondsRemaining:30,interval:60}).progress,.5);
+  const sunset=settlementHudProductionClock({daytime:false,secondsRemaining:360,interval:60},'night');
+  assert.equal(sunset.label,'6:00');assert.equal(sunset.progress,0);assert.match(sunset.description,/pauses at night/);
+  assert.equal(settlementHudProductionClock({daytime:false,secondsRemaining:61},'night').label,'1:01');
+});
+
+test('estimated rates retain signs and meaningful positive, negative and neutral states',()=>{
+  assert.deepEqual(settlementHudRate(12.36),{value:12.4,tone:'positive',label:'+12.4/min'});
+  assert.deepEqual(settlementHudRate(-5),{value:-5,tone:'negative',label:'−5/min'});
+  for(const input of [0,-.01,undefined,NaN,Infinity])assert.deepEqual(settlementHudRate(input),{value:0,tone:'zero',label:'+0/min'});
 });
 
 test('HUD city growth uses homes through each of the five three-home milestones',()=>{
@@ -166,8 +198,14 @@ test('the live ledger combines materials, mining changes the action, and legacy 
     assert.equal(nodes['cost-symbol'].innerHTML,nodes['stock-symbol'].innerHTML);assert.equal(nodes['house-cost'].parentElement.getAttribute('aria-label'),'8 resources');
     assert.equal(buttons.axe.querySelector('[data-action-label]').textContent,'Mine');assert.match(buttons.axe.getAttribute('aria-label'),/Mine nearby ore/);
     assert.equal(hud.root.dataset.target,'true');
+    hud.update({resources:{resources:0,food:1,gold:8,resourceNet:-7},rates:{resources:-5,food:2.5,gold:0},buildCost:{resources:8,food:2},productionClock:{daytime:false,secondsRemaining:360,interval:60},dayPhase:'night'});
+    assert.equal(nodes.logs.textContent,'-7');assert.equal(nodes.logs.dataset.negative,'true');assert.equal(nodes['resources-rate'].textContent,'−5/min');assert.equal(nodes['resources-rate'].dataset.tone,'negative');
+    assert.equal(nodes['food-rate'].textContent,'+2.5/min');assert.equal(nodes['food-rate'].dataset.tone,'positive');assert.equal(nodes['gold-rate'].textContent,'+0/min');assert.equal(nodes['gold-rate'].dataset.tone,'zero');
+    assert.match(nodes['resources-rate'].title,/Estimated.*asynchronous train income and upkeep/);assert.equal(nodes['production-clock'].dataset.paused,'true');assert.equal(nodes['clock-time'].textContent,'6:00');
+    assert.equal(nodes['food-cost'].hidden,false);assert.equal(nodes['house-food-cost'].textContent,'2');assert.equal(nodes['house-cost'].parentElement.getAttribute('aria-label'),'8 resources + 2 food');assert.equal(hud.root.dataset.affordable,'false');
+    hud.update({productionClock:{daytime:true,secondsRemaining:59,interval:60},dayPhase:'day'});assert.equal(nodes['clock-time'].textContent,'0:59');assert.equal(nodes['production-clock'].dataset.paused,'false');
     hud.update({targetOre:false,targetTree:false});assert.equal(buttons.axe.querySelector('[data-action-label]').textContent,'Chop');assert.match(buttons.axe.getAttribute('aria-label'),/Chop trees or mine ore/);assert.equal(hud.root.dataset.target,'false');
-    hud.update({economic:false,logs:5,buildCost:{timber:10}});assert.equal(nodes['timber-label'].textContent,'Logs');assert.equal(nodes.logs.textContent,'5');assert.equal(nodes['food-stock'].hidden,true);
+    hud.update({economic:false,logs:5,buildCost:{timber:10}});assert.equal(nodes['timber-label'].textContent,'Logs');assert.equal(nodes.logs.textContent,'5');assert.equal(nodes['food-stock'].hidden,true);assert.equal(nodes['resources-rate'].hidden,true);assert.equal(nodes['production-clock'].hidden,true);
     assert.doesNotMatch(nodes['stock-symbol'].innerHTML,/data-material="ore"/);assert.equal(nodes['house-cost'].parentElement.getAttribute('aria-label'),'10 logs');
     hud.update({economic:true,logs:8,resources:{tools:1},buildCost:{timber:8,tools:2}});assert.equal(nodes['timber-label'].textContent,'Timber');assert.equal(hud.root.dataset.affordable,'false');assert.match(buttons.house.getAttribute('aria-label'),/Need 1 more tool/);
   }finally{hud.dispose();if(previous===undefined)delete globalThis.document;else globalThis.document=previous;}

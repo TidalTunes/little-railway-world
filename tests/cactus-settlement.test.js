@@ -10,6 +10,8 @@ test('the default desert settler physically harvests cacti and builds its six-ho
   const world=generateWorld(createSettlementWorld(),{detail:'network'});preparePlayerBotScenery(world,generateWorldRegion);
   const session=createSettlementSession(world),entry=session.bots.find(candidate=>candidate.config.biome==='desert');
   assert.ok(entry,'the default map has a dryland competitor');
+  // Exercise harvesting after the new opening stock has been spent.
+  entry.game.spendResources(entry.game.logs-12);
   const village=world.gameplay.farmVillages,permanent=[...world.gameplay.botScenery,...village.houses,...village.buildings];
   let revision=-1,placements=[];const hits=[];
   const getPlacements=()=>{

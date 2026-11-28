@@ -2,19 +2,21 @@
  * station-access checks run after selection or release, and only a matching
  * authoritative result can enable the purchase. */
 export function createRailwayPreview(railways,planner){
-  let key='',result=null,checking=false,confirmed=false,requested='',epoch=0,disposed=false,gold;
+  let key='',result=null,checking=false,confirmed=false,requested='',epoch=0,disposed=false,gold,resources;
   const state=()=>({key,result,checking,confirmed});
   function wallet(){
-    if(!result||!Number.isFinite(gold))return;
-    const affordable=gold>=(result.cost??5),valid=!!result.siteValid&&affordable;
+    if(!result)return;
+    const costResource=result.costResource??'gold',balance=costResource==='resources'?resources:gold;
+    if(!Number.isFinite(balance))return;
+    const affordable=balance>=(result.cost??5),valid=!!result.siteValid&&affordable;
     if(result.affordable===affordable&&result.valid===valid)return;
-    result={...result,affordable,valid,...(result.siteValid?{code:affordable?'ready':'not-enough-gold',reason:affordable?'Connect these cities':`A railway costs ${result.cost??5} gold`}:{})};
+    result={...result,affordable,valid,...(result.siteValid?{code:affordable?'ready':`not-enough-${costResource}`,reason:affordable?'Connect these cities':`A railway costs ${result.cost??5} ${costResource}`}:{})};
   }
   function clear(){epoch++;key=requested='';result=null;checking=confirmed=false;}
   return {
     update(from,to,options={},settings={}){
       if(disposed)return state();
-      gold=settings.gold;
+      gold=settings.gold;resources=typeof settings.resources==='object'?settings.resources?.resources:settings.resources;
       const nextKey=railways.geometryKey(from,to,options);
       if(nextKey!==key){
         epoch++;key=nextKey;requested='';confirmed=false;checking=true;
