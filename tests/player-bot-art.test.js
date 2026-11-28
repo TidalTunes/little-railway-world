@@ -24,7 +24,7 @@ test('other players share the human scale, solid figure and right-hand axe with 
   assert.ok(Math.abs(bounds.min.y)<1e-7,'sole meets the same supporting datum as the human');
   const coat=bot.root.getObjectByName('traveller-coat'),cap=bot.root.getObjectByName('traveller-cap');
   assert.ok(coat.material.color.equals(playerColors(world.players[0]).body));
-  assert.ok(!cap.material.color.equals(coat.material.color));
+  assert.ok(cap.material.color.equals(playerColors(world.players[0]).body));
   assert.equal(bot.art.axe.parent,bot.art.rightArm);assert.ok(bot.art.rightArm.position.x<0);
   assert.ok(Math.abs(bot.art.shadow.matrix.elements[13]-.036)<1e-9);
 });

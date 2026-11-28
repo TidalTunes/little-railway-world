@@ -1,7 +1,5 @@
 import * as THREE from 'three';
-import {color} from './palette.js';
 import {createPlayerPalette,playerColors} from './player-palette.js';
-import {applySceneStyle} from './scene-style.js';
 import {createTravellerArt,poseTravellerArt,TRAVELLER_SWING_DURATION} from './traveller-art.js';
 import {createCharacterMarker} from './character-marker.js';
 import {chartHeadingForSurface,rigidSurfacePoseMatrix,surfaceDistance} from './world-surface.js';
@@ -14,9 +12,8 @@ const finite=value=>Number.isFinite(value)?value:0;
  * economy, pathfinding or independently advancing swing timer. */
 export function createPlayerBotArt(parent,mapParent,world,{ownerId,markerParent=parent,markerMapParent=mapParent}={}){
   const owner=world.players?.find(player=>player.id===ownerId),palette=createPlayerPalette(owner),colors=playerColors(owner);
-  const cap=applySceneStyle(new THREE.MeshStandardMaterial({color:color(.67,.12,((owner?.color?.h??22)+140)%360),roughness:1,flatShading:true}));
   const root=new THREE.Group();root.name=`player-bot-${ownerId??'neutral'}`;root.visible=false;root.userData.ownerId=ownerId;parent.add(root);
-  const art=createTravellerArt(root,{coatMaterial:palette.body,capMaterial:cap,trouserMaterial:palette.dark});
+  const art=createTravellerArt(root,{coatMaterial:palette.body,capMaterial:palette.body,trouserMaterial:palette.dark});
   const marker=createCharacterMarker(markerParent,markerMapParent,world,{color:colors.dark,accent:colors.body,trim:colors.trim,name:root.name,self:false});
   const pose=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
   let disposed=false;
@@ -41,6 +38,6 @@ export function createPlayerBotArt(parent,mapParent,world,{ownerId,markerParent=
       poseTravellerArt(art,{gait:reducedMotion?0:finite(snapshot.gait),moving:reducedMotion?0:THREE.MathUtils.clamp(speed/.7,0,1),
         running:0,grounded:true,swingElapsed:TRAVELLER_SWING_DURATION-remaining});
     },
-    dispose(){if(disposed)return;disposed=true;root.removeFromParent();art.dispose();root.clear();marker.dispose();Object.values(palette).forEach(material=>material.dispose());cap.dispose();},
+    dispose(){if(disposed)return;disposed=true;root.removeFromParent();art.dispose();root.clear();marker.dispose();Object.values(palette).forEach(material=>material.dispose());},
   };
 }

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import {createTravellerArt,poseTravellerArt,TRAVELLER_SWING_DURATION} from './traveller-art.js';
+import {playerColors} from './player-palette.js';
+import {applySceneStyle} from './scene-style.js';
 import {PERSON_HEIGHT,PERSON_RADIUS} from './person-scale.js';
 import {worldSurface,pointSegmentDistance} from './world-model.js';
 import {polylineTree} from './spatial-index.js';
@@ -18,7 +20,9 @@ const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
  * meshes, including at high latitudes. No input listeners or renderer owned. */
 export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>world.placements??[],getTerrainMeshes=()=>[],isReadyAt=()=>true}={}){
   const root=new THREE.Group();root.name='walking-player';root.visible=false;parent.add(root);
-  const art=createTravellerArt(root),camera=new THREE.PerspectiveCamera(WALKING.fov,1,WALKING.near,WALKING.far);
+  const owner=world.players?.find(player=>player.id===world.gameplay?.ownerId);
+  const cap=owner?applySceneStyle(new THREE.MeshStandardMaterial({name:'player-hat',color:playerColors(owner).body,roughness:1,flatShading:true})):null;
+  const art=createTravellerArt(root,cap?{capMaterial:cap}:{}),camera=new THREE.PerspectiveCamera(WALKING.fov,1,WALKING.near,WALKING.far);
   camera.name='walking-camera';
   const position={x:0,y:0,z:0},previousPosition={x:0,y:0,z:0},renderPosition={x:0,y:0,z:0},velocity={x:0,y:0,z:0},matrix=new THREE.Matrix4(),frame=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
   const up=new THREE.Vector3(),groundPoint=new THREE.Vector3(),target=new THREE.Vector3(),desired=new THREE.Vector3(),direction=new THREE.Vector3();
@@ -66,7 +70,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       let radius;
       if(kind==='tree')radius=.14*scale;
       else if(kind==='cactus')radius=.31*scale;
-      else if(kind==='rock')radius=.59*scale;
+      else if(kind==='rock')radius=(item.collisionRadius??.59)*scale;
       else if(kind==='landmark')radius=1.35*scale;
       if(radius!==undefined){if(Math.hypot(collisionDelta.x,collisionDelta.z)<radius+WALKING.radius)return true;continue;}
       // Small oriented boxes let the player pass under roof overhangs and along
@@ -284,6 +288,6 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     },
     exit(){active=false;root.visible=false;poseSpeed=runBlend=0;swingTime=swingDuration;swingDown=false;setPose(0,0);velocity.x=velocity.y=velocity.z=0;jumpDown=false;return{...position};},
     resize(aspect){camera.aspect=Math.max(.01,Number.isFinite(aspect)?aspect:1);camera.updateProjectionMatrix();},
-    dispose(){if(disposed)return;disposed=true;active=false;swingTime=swingDuration;swingDown=false;root.removeFromParent();art.dispose();root.clear();},
+    dispose(){if(disposed)return;disposed=true;active=false;swingTime=swingDuration;swingDown=false;root.removeFromParent();art.dispose();root.clear();cap?.dispose();},
   };
 }

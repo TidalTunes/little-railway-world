@@ -1,9 +1,12 @@
-const labels={wood:'Wood',metal:'Metal',food:'Food',gold:'Gold'};
+const labels={resources:'Resources',wood:'Resources',metal:'Resources',food:'Food',gold:'Gold'};
 export const loopResourceLabel=resource=>labels[resource]??'Resources';
 export function loopCargo(loop,city){
   const stops=new Map((loop?.stops??[]).map(stop=>[stop.cityId,stop.resource]));
   if(city&&(loop?.cityIds??[]).includes(city.id))stops.set(city.id,city.resource);
-  const result={wood:0,metal:0,food:0};for(const resource of stops.values())if(Object.hasOwn(result,resource))result[resource]+=10;
+  const result={resources:0,food:0};for(const value of stops.values()){
+    const resource=value==='wood'||value==='metal'?'resources':value;
+    if(Object.hasOwn(result,resource))result[resource]+=10;
+  }
   return result;
 }
 export function loopHudState({city,ownCity,houses=1,resources={},walking=true,ownerId,selectedLoopId}={}){

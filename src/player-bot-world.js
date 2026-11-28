@@ -89,7 +89,7 @@ function createLoopBotStarts(world,count){
     const starterHouse={id:`${id}:home-1`,kind:'house',x:candidate.x,y:0,z:candidate.z,rotation,width:2.2,depth:2.2,scale:1,variant:index,ownerId,radius:Math.hypot(2.2,2.2)/2};
     const spawn={x:candidate.x+Math.sin(rotation)*3.4,z:candidate.z+Math.cos(rotation)*3.4,heading:rotation};
     // A small managed grove gives every settler the same physical opening,
-    // including the dryland town whose workers will later gather metal.
+    // including the dryland town whose workers will later mine ore.
     const guaranteedTrees=[];
     for(let attempt=0;attempt<60&&guaranteedTrees.length<8;attempt++){
       const angle=rotation+attempt*2.399963229728653,radius=8+attempt%4*1.9;

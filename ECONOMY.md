@@ -4,23 +4,22 @@ The default island uses the deliberately small `economy: 'loops'` ruleset. The e
 
 ## Founding and resources
 
-Each human or rival settler starts with one home, 12 wood and 60 gold. An axe strike fells a tree for 4–6 wood. A home costs eight wood, must join the existing settlement, and keeps the ordinary footprint, terrain, reach and connecting-path checks. Each owner has one city. Three homes establish level 1; six, nine, twelve and fifteen homes reach levels 2–5. New homes add workers.
+Each human or rival settler starts with one home, 12 resources and 60 gold. An axe strike fells a tree for 4–6 resources. A home costs eight resources, must join the existing settlement, and keeps the ordinary footprint, terrain, reach and connecting-path checks. Each owner has one city. Three homes establish level 1; six, nine, twelve and fifteen homes reach levels 2–5. New homes add residents. Level 5 caps the displayed city level, not its population or production.
 
-An owner's wood, metal, food and gold are global totals shown at the top of the screen. Goods are not held at a particular house or station. The biome at the founding home fixes the town's product, so growth across a biome border does not unexpectedly change it.
+An owner's resources, food and gold are global totals shown at the top of the screen. Wood and metal share one **Resources** balance; neither has a separate inventory. Goods are not held at a particular house or station.
 
-| Town | Product |
+| Settlement | Product |
 | --- | --- |
-| Player or rival founded in forest | Wood |
-| Player or rival founded in desert | Metal |
-| Player or rival founded in plains | Gold |
-| Player or rival in any other supported land biome | Gold |
+| Player or rival, in any biome | Resources |
 | Gray farming village | Food |
 
-Only gray villages produce food. The launch island gives each gray village six homes and a station. The three competing settlers begin in forest, desert and plains respectively.
+Only gray villages produce food. The launch island gives each gray village six homes and a station. The three competing settlers begin in forest, desert and plains respectively, but all have the same resource production rules.
 
-Production comes from visible work, not a city-level timer. A worker leaves their actual house, walks to a reachable tree, ore face, field gate or civic frontage, works, and returns home carrying the result. A completed trip adds one unit to the owner's total. Unique completion IDs prevent the same trip being credited twice. A blocked route produces nothing. Workers return indoors at night; a bundle already collected can be delivered on that return. Day and night each last five minutes.
+Each resident produces **one unit every thirty simulation seconds**, continuously through day and night. One resident therefore yields two resources per minute; six yield twelve; fifteen yield thirty. A new homestead produces immediately, even before three homes form a city. Additional homes beyond fifteen keep increasing the rate. Fractions accumulate rather than round away, and changing the population preserves already earned fractional progress. Gray villages apply the same population rate to food.
 
-Desert towns receive small ore outcrops placed clear of buildings and paths. Trees cut by players or workers become eligible to regrow after 95 simulation seconds. Regrowth waits if a building, permanent railway clearing, path, or nearby worker would obstruct it. The restored tree has its original position and identity.
+NPCs visually walk from their real houses to trees, ore faces or fields, work, and return home. Their trips are cosmetic: distance, blocked paths, visibility and sleeping at night never change the production rate or award a second copy of the resources. The economy owns the timer and credits the global balance. Day and night each last five minutes.
+
+Desert towns receive small ore outcrops placed clear of buildings and paths. Trees cut by players become eligible to regrow after 95 simulation seconds. Regrowth waits if a building, permanent railway clearing, path, or nearby worker would obstruct it. The restored tree has its original position and identity.
 
 ## Stations and directed railways
 
@@ -40,21 +39,20 @@ Click an actual railway or either station end in overview to select a complete c
 
 At each visited city:
 
-- If the city produces wood, metal or food, the train picks up ten newly created units of that resource.
+- The train picks up ten newly created resources at a player or rival city, or ten food at a gray village.
 - The city owner receives three newly created gold.
-- A gold-producing city gives the visit payment but adds no resource cargo.
 
-These pickups do **not** consume the visited owner's resources. NPC work and railway pickups are independent sources. No purchase payment is deducted from the train owner during visits. A train collects once at its home station when beginning a circuit, then once at each intermediate station. Returning home delivers the whole cargo into the train owner's global totals. Beginning another circuit starts another home visit; it is not counted as two pickups on the completed lap.
+These pickups do **not** consume the visited owner's resources. Population production and railway pickups are independent sources. No purchase payment is deducted from the train owner during visits. A train collects once at its home station when beginning a circuit, then once at each intermediate station. Returning home delivers the whole cargo into the train owner's global totals. Beginning another circuit starts another home visit; it is not counted as two pickups on the completed lap.
 
 Trains travel at five world units per second and pause one second at each visited station. Each distinct city has one assigned car; the home city uses the front steam engine, and other cities use trailing wagons. A stop occurs when that city’s car, rather than the engine, reaches the pickup point. Cars follow the same forward geometry in every view, including the home crossing; all cargo stays with its assigned wagon until home delivery. Current traffic control reserves all source lines and stations of a circuit together. Waiting trains are admitted oldest first; a waiting train does not appear on already occupied rails. This prevents collisions and deadlocks, but extra trains sharing a circuit do not yet improve its throughput. This is a deliberate first traffic model, not a finished signal system.
 
-In overview, resource popups appear at the actual worker or station position with the exact quantity. A worker's **Gathered** popup marks collection at a resource node. Plain resource icons and quantities mark its credited return home. A train's **On board** popup marks its newly loaded cargo; the same unframed resource icons mark the completed circuit's wallet credit. A separate **+3 gold** popup appears for the station owner when that owner is the player. Collection captions distinguish carried resources from the plain credited gains; showing a popup never awards anything a second time.
+In overview, station popups show the exact loaded or delivered quantity. A train's **On board** popup marks its newly loaded cargo; plain resource icons mark the completed circuit's wallet credit. A separate **+3 gold** popup appears for the station owner when that owner is the player. Population earnings appear at the settlement. Workers' gathering visuals describe cosmetic trips and never credit the wallet. Showing a popup never awards anything a second time.
 
 ## Rival settlers
 
-Rivals use ordinary physical movement, tree chopping, house placement, track costs and train purchases. They grow to six homes first, choose a reachable useful partner, fund both directions and retain enough money for a train. They prefer missing wood or food and otherwise a different product. Once a train runs, they grow toward fifteen homes. Browser route validation runs through the same asynchronous planner as player construction; one pending bot request is allowed at a time.
+Rivals use ordinary physical movement, tree chopping, house placement, track costs and train purchases. They grow to six homes first, choose a reachable useful partner, fund both directions and retain enough money for a train. They prefer food-producing gray villages, then use distance to choose practical connections. Once a train runs, they grow toward fifteen homes. Browser route validation runs through the same asynchronous planner as player construction; one pending bot request is allowed at a time.
 
-There are no industry-specific bot policies in this version. A desert rival gathers metal because of its starting location, not because it can change its town into a workshop. Guaranteed small groves let all three rivals gather their opening construction wood without an artificial wallet grant. Desert groves use harvestable cacti, which share tree chopping and regrowth rules; natural cacti are sparse compared with forest trees.
+There are no industry-specific bot policies in this version. A desert rival has the same resource balance and passive rate as a forest rival. Guaranteed small groves let all three rivals gather opening construction resources without an artificial wallet grant. Desert groves use harvestable cacti, which share tree chopping and regrowth rules; natural cacti are sparse compared with forest trees.
 
 ## Reproducible checks
 
@@ -66,21 +64,21 @@ node scripts/simulate-economy.mjs --json
 node scripts/simulate-economy.mjs --long
 ```
 
-The benchmark compares a food loop, a metal loop, and a mixed three-city loop at near and distant spacing. It runs the real railway planner, directed graph, purchased train simulation, resource-worker movement and five-minute day/night cycle without opening a renderer. Towns start already formed with six homes, 12 wood and 60 gold; it does not model the time or wood spent constructing those opening homes. A mixed circuit includes a rival-funded mine-to-farm connection. Only the two tracks funded by the human account appear in its railway expenditure. Each scenario uses the same founding sites and available resource nodes.
+The benchmark compares a food loop, a resource loop, and a mixed three-city loop at near and distant spacing. It runs the real railway planner, directed graph, purchased train simulation and population production without opening a renderer. Towns start already formed with six homes, 12 resources and 60 gold; it does not model the time or resources spent constructing those opening homes. A mixed circuit includes a rival-funded connection to the farm. Only the two tracks funded by the human account appear in its railway expenditure. Cosmetic NPC movement is deliberately absent, demonstrating that pathfinding does not affect earnings.
 
 Measured outcomes after fifteen simulation minutes:
 
-| Spacing | Loop | Gold | Wood | Metal | Food | Completed laps |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Near | Food | 92 | 282 | 0 | 230 | 23 |
-| Near | Metal | 77 | 233 | 180 | 0 | 18 |
-| Near | Mixed | 52 | 183 | 130 | 130 | 13 |
-| Distant | Food | 69 | 212 | 0 | 160 | 16 |
-| Distant | Metal | 60 | 183 | 130 | 0 | 13 |
-| Distant | Mixed | 38 | 143 | 90 | 90 | 9 |
+| Spacing | Loop | Gold | Resources | Food | Completed laps |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Near | Food | 92 | 422 | 230 | 23 |
+| Near | Resources | 77 | 552 | 0 | 18 |
+| Near | Mixed | 52 | 452 | 130 | 13 |
+| Distant | Food | 69 | 352 | 160 | 16 |
+| Distant | Resources | 60 | 452 | 0 | 13 |
+| Distant | Mixed | 38 | 372 | 90 | 9 |
 
-The first completed circuit takes 38.5–66.75 seconds in the near scenario and 53.5–91.5 seconds in the distant scenario, measured at quarter-second simulation steps. These results expose the current tradeoff: short circuits return more frequently, while longer mixed circuits supply a broader resource collection. Metal and food do not yet have spending sinks, so these measurements cannot establish a winning competitive strategy or monetary value for diversification. Military costs and later construction recipes will determine those values.
+Every scenario earns exactly 180 resources from its six residents during these fifteen minutes. The first completed circuit takes 38.5–66.75 seconds in the near scenario and 53.5–91.5 seconds in the distant scenario, measured at quarter-second simulation steps. Short food circuits return food quickly; resource circuits supply more building material; mixed circuits collect both in one train. Food does not yet have a spending sink, so these measurements cannot establish its competitive value. Military costs and later construction recipes will determine that value.
 
-Focused tests check global and exactly-once worker credit, no timer production, stable founding biomes, contiguous ownership, paid train creation, incomplete-loop rejection, pickup creation without source deductions, home-only delivery, frame-size independence, continuous forward geometry, construction jurisdiction, and safe train queues. A separate 900-second real-island simulation verifies physical rival growth, paid outward and return tracks, completed circuits and gold accounting. The older depot economy is tested separately using explicit legacy configuration and `scripts/simulate-legacy-economy.mjs`.
+Focused tests check continuous population production, uncapped resident counts, homestead output, fractional carry through population changes, cosmetic workers' inability to mint, unified global balances, paid train creation, incomplete-loop rejection, pickup creation without source deductions, home-only delivery, frame-size independence, continuous forward geometry, construction jurisdiction, and safe train queues. A separate 900-second real-island simulation verifies physical rival growth, paid outward and return tracks, completed circuits and gold accounting. The older depot economy is tested separately using explicit legacy configuration and `scripts/simulate-legacy-economy.mjs`.
 
 Follow `AGENTS.md` when testing: keep at most one rendered instance, close it afterward, stop task-owned servers, and run the full suite with limited concurrency.

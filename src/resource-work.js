@@ -6,7 +6,7 @@ import {worldSurface} from './world-model.js';
 import {settlementDoor,planSettlementPath} from './settlement-paths.js';
 import {settlementTreeId} from './settlement-game.js';
 
-export const RESOURCE_WORK=Object.freeze({speed:1.12,workSeconds:3.8,restSeconds:3,amount:1,treeRegrowSeconds:95,searchRadius:38,routeInterval:.12,routeNodes:420});
+export const RESOURCE_WORK=Object.freeze({speed:1.12,workSeconds:3.8,restSeconds:3,amount:1,treeRegrowSeconds:95,searchRadius:38,routeInterval:.12,routeNodes:420,oreNodes:64});
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z),wrap=value=>Math.atan2(Math.sin(value),Math.cos(value));
 const hash=value=>{let n=2166136261;for(const c of String(value))n=Math.imul(n^c.charCodeAt(0),16777619);return(n>>>0)/4294967296;};
 const idOf=item=>isHarvestableWood(item)?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
@@ -15,13 +15,13 @@ const solid=item=>['tree','rock','house','civic','farm','station','tower','apart
 function pointSegment(point,a,b){const dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.z-a.z)*dz)/(dx*dx+dz*dz||1)));return Math.hypot(point.x-a.x-t*dx,point.z-a.z-t*dz);}
 
 
-/** Simulation, not rendering, owns work. Every credit has a unique completed
- * round trip: leave a real doorway, reach a reachable node, work, return home.
- * The camera cannot create citizens, speed production, or pause distant towns. */
+/** Cosmetic work keeps actual doorways, reachable sites and a return trip.
+ * Population production belongs to the economy clock, never these animations.
+ * NPCs leave resource nodes intact; only player cuts enter shared regrowth. */
 export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt=(x,z)=>worldSurface(world,x,z),tuning={}}={}){
   if(!session?.player)throw new TypeError('Resource work requires a settlement session');
-  const settings={...RESOURCE_WORK,...tuning},workers=new Map(),nodes=new Map(),events=[],regrowth=new Map(),claims=new Map(),sources=new Map(),routeCache=new Map();
-  let time=0,revision=0,placementRevision=0,visibilityRevision=0,layoutKey='',layoutRevision=-1,sceneryRevision=-1,removedKey='',dark=false,nextRoute=0,planningCursor=0,production=0,routeSearches=0;
+  const settings={...RESOURCE_WORK,...tuning},workers=new Map(),nodes=new Map(),events=[],regrowth=new Map(),claims=new Map(),sources=new Map(),routeCache=new Map(),oreSites=new Set();
+  let time=0,revision=0,placementRevision=0,visibilityRevision=0,layoutKey='',layoutRevision=-1,sceneryRevision=-1,removedKey='',dark=false,nextRoute=0,planningCursor=0,completedTrips=0,routeSearches=0,desertsSeeded=false;
   let scenery=[],buildings=[],paths=[],cityRecords=[],placements=[];
   let knownBlockers=new Set(),blockersInitialized=false;
   const removed=session.shared?.removedTreeIds??new Set();
@@ -45,34 +45,62 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     for(const item of [...scenery,...buildings,...placements])if(solid(item)&&!(isHarvestableWood(item)&&removed.has(idOf(item)))&&distance(point,item)<padding+radius(item)+.3)return false;
     return !paths.some(path=>(path.points??[]).slice(1).some((b,i)=>pointSegment(point,path.points[i],b)<padding+(path.width??.7)/2+.25));
   }
-  function makeOre(city){
+  function foundingBiome(game,city){
+    const config=game.ownerId===world.gameplay?.ownerId?world.gameplay:world.gameplay?.playerBots?.find(entry=>entry.ownerId===game.ownerId),anchor=config?.starterHouse??game.houses[0];
+    return anchor?.biome??(anchor&&world.biomes?.regions?biomeAt(world,anchor.x,anchor.z):city?.biome??'plains');
+  }
+  function oreAt(point,id,extra={}){return{id,kind:'rock',resource:'resources',workKind:'ore',...point,y:surfaceAt(point.x,point.z).height,radius:1.02,collisionRadius:1.02,height:1.1,scale:1,rotation:hash(id)*Math.PI*2,...extra};}
+  function makeOre(site,home){
     const result=[];
-    for(let i=0;i<48&&result.length<3;i++){
-      const angle=hash(`${world.seed}:${city.id}:ore`)*Math.PI*2+i*2.39996323,r=(city.radius??5)+3+Math.floor(i/12)*3.2;
-      const point={x:city.x+Math.sin(angle)*r,z:city.z+Math.cos(angle)*r};
+    for(let i=0;i<80&&result.length<3;i++){
+      const angle=hash(`${world.seed}:${site.id}:ore`)*Math.PI*2+i*2.39996323,r=7+Math.floor(i/16)*3.2;
+      const point={x:site.x+Math.sin(angle)*r,z:site.z+Math.cos(angle)*r};
       if(world.biomes?.regions&&biomeAt(world,point.x,point.z)!=='desert'||!emptySite(point,1.05)||result.some(item=>distance(item,point)<3.4))continue;
-      const item={id:`ore:${city.id}:${result.length}`,kind:'rock',resource:'metal',...point,y:surfaceAt(point.x,point.z).height,radius:.94,scale:1,rotation:angle,cityId:city.id};
+      const item=oreAt(point,`ore:${site.id}:${result.length}`,{ownerId:site.ownerId,cityId:site.cityId??null});
+      const target=targetFor(item,{home}),fake={id:`ore-access:${item.id}`,kind:'work-target',...target,depth:-.84,doorOffset:0,rotation:Math.atan2(home.x-target.x,home.z-target.z)};
+      if(!planSettlementPath(world,home,fake,{placements:[...scenery,...buildings,...placements,...result,item],surfaceAt,removedTreeIds:removed,width:.22,maxNodes:settings.routeNodes}))continue;
       result.push(item);
     }
     return result;
+  }
+  function seedOre(games){
+    for(const game of games){const home=game.houses[0],siteId=`owner:${game.ownerId}`;
+      if(!home||oreSites.has(siteId)||foundingBiome(game,game.cities[0])!=='desert')continue;
+      oreSites.add(siteId);const ore=makeOre({id:siteId,x:home.x,z:home.z,ownerId:game.ownerId,cityId:game.cities[0]?.id},home);
+      placements.push(...ore);if(ore.length)placementRevision++;
+    }
+    if(desertsSeeded)return;desertsSeeded=true;
+    // Sparse world deposits make unclaimed desert useful too. Fixed grid keys
+    // survive city formation and rail clearing never triggers replacement.
+    let tested=0;
+    for(const region of world.biomes?.regions??[]){if(region.type!=='desert')continue;
+      const corners=(region.polygons??[]).flatMap(polygon=>polygon[0]),xs=corners.map(p=>p[0]),zs=corners.map(p=>p[1]);
+      if(!corners.length)continue;
+      for(let x=Math.floor(Math.min(...xs)/24);x<=Math.ceil(Math.max(...xs)/24);x++)for(let z=Math.floor(Math.min(...zs)/24);z<=Math.ceil(Math.max(...zs)/24);z++){
+        if(placements.length>=settings.oreNodes||tested++>=1024)return;
+        const id=`ore:desert:${region.id}:${x}:${z}`,point={x:x*24+(hash(`${world.seed}:${id}:x`)-.5)*12,z:z*24+(hash(`${world.seed}:${id}:z`)-.5)*12};
+        if(biomeAt(world,point.x,point.z)!=='desert'||placements.some(item=>distance(item,point)<12)||!emptySite(point,1.05))continue;
+        placements.push(oreAt(point,id));placementRevision++;
+      }
+    }
   }
   function sync(){
     refreshScenery();
     if(layoutRevision===sceneryRevision)return;layoutRevision=sceneryRevision;
     const village=world.gameplay?.farmVillages;
-    const records=[session.player,...(session.bots??[]).map(entry=>entry.game)].flatMap(game=>{
-      const homes=game.houses;return game.cities.map(city=>({...city,ownerId:game.ownerId,homes:homes.filter(home=>(city.houseIds??[]).includes(home.id)||home.cityId===city.id)}));
+    const games=[session.player,...(session.bots??[]).map(entry=>entry.game)];seedOre(games);
+    const records=games.flatMap(game=>{
+      const homes=game.houses;return game.cities.map(city=>({...city,ownerId:game.ownerId,workKind:foundingBiome(game,city)==='desert'?'ore':'tree',homes:homes.filter(home=>(city.houseIds??[]).includes(home.id)||home.cityId===city.id)}));
     }).concat((village?.cities??[]).map(city=>({...city,ownerId:city.ownerId??village.ownerId,neutral:true,homes:(village.houses??[]).filter(home=>home.cityId===city.id||(city.houseIds??[]).includes(home.id))})));
     const key=records.map(city=>`${city.id}:${city.ownerId}:${city.homes.map(home=>home.id).join(',')}`).join('|');
     if(key===layoutKey)return;layoutKey=key;cityRecords=records;const alive=new Set();
     for(const city of records){
-      city.resource=cityResource(world,city,{neutral:city.neutral});
-      if(city.resource==='metal'&&!placements.some(item=>item.cityId===city.id)){const ore=makeOre(city);placements.push(...ore);if(ore.length)placementRevision++;}
+      city.resource=cityResource(world,city,{neutral:city.neutral})==='food'?'food':'resources';if(city.resource==='food')city.workKind='food';
       for(const home of city.homes){
         const id=`worker:${home.id}`;alive.add(id);let worker=workers.get(id);
-        if(worker){worker.cityId=city.id;worker.resource=city.resource;worker.home=home;continue;}
+        if(worker){worker.cityId=city.id;worker.resource=city.resource;worker.workKind=city.workKind;worker.home=home;continue;}
         const door=settlementDoor(world,home),seed=hash(`${world.seed}:${id}`);
-        worker={id,houseId:home.id,ownerId:city.ownerId,cityId:city.id,resource:city.resource,home,...door,y:home.y??0,heading:home.rotation??0,
+        worker={id,houseId:home.id,ownerId:city.ownerId,cityId:city.id,resource:city.resource,workKind:city.workKind,home,...door,y:home.y??0,heading:home.rotation??0,
           speed:settings.speed*(.9+seed*.2),phase:seed*Math.PI*2,idleTime:0,distance:0,moving:false,indoors:dark,
           activity:dark?'indoors':'waiting',wait:seed*2.5,route:[],routeIndex:0,nodeId:null,carrying:false,trip:0,edge:true};
         workers.set(id,worker);visibilityRevision++;
@@ -83,16 +111,15 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   }
   function nodesFor(worker){
     const city=cityRecords.find(city=>city.id===worker.cityId);if(!city)return[];
-    if(worker.resource==='wood')return scenery.filter(item=>isHarvestableWood(item)&&!removed.has(idOf(item))&&distance(item,city)<=settings.searchRadius).map(item=>({id:idOf(item),resource:'wood',source:item,...item}));
-    if(worker.resource==='metal')return placements.filter(item=>item.cityId===city.id&&!session.shared?.isSceneryRemoved?.(item)).map(item=>({...item,source:item}));
+    if(worker.workKind==='tree')return scenery.filter(item=>item.kind==='tree'&&!removed.has(idOf(item))&&distance(item,city)<=settings.searchRadius).map(item=>({...item,id:idOf(item),resource:'resources',workKind:'tree',source:item}));
+    if(worker.workKind==='ore')return placements.filter(item=>distance(item,city)<=settings.searchRadius&&!session.shared?.isSceneryRemoved?.(item)).map(item=>({...item,source:item}));
     if(worker.resource==='food')return(world.gameplay?.farmVillages?.destinations??[]).filter(item=>item.cityId===city.id&&!session.shared?.isSceneryRemoved?.(item.farmId)).map(item=>({...item,resource:'food',gate:true}));
-    const civic=buildings.filter(item=>item.cityId===city.id&&item.kind==='civic');
-    return(civic.length?civic:city.homes.filter(home=>home.id!==worker.houseId)).map(item=>({...item,id:`work:${item.id}`,resource:'gold',building:item}));
+    return[];
   }
   function targetFor(node,worker){
     if(node.building){const b=node.building,p=settlementDoor(world,b,Math.max((b.depth??2.2)/2+.55,1.65));return {...p};}
     if(node.gate)return{x:node.x,z:node.z};
-    const angle=Math.atan2(worker.home.x-node.x,worker.home.z-node.z),offset=(node.resource==='wood'? radius(node)+.38:1.35);
+    const angle=Math.atan2(worker.home.x-node.x,worker.home.z-node.z),offset=(node.workKind==='tree'? radius(node)+.38:1.35);
     return{x:node.x+Math.sin(angle)*offset,z:node.z+Math.cos(angle)*offset};
   }
   function routeTo(worker,node){
@@ -108,14 +135,14 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   }
   function release(worker){if(claims.get(worker.nodeId)===worker.id)claims.delete(worker.nodeId);}
   function choose(worker){
-    const candidates=nodesFor(worker).filter(node=>node.resource!=='wood'||!claims.has(node.id)).sort((a,b)=>distance(worker.home,a)-distance(worker.home,b));
+    const candidates=nodesFor(worker).filter(node=>node.workKind!=='tree'||!claims.has(node.id)).sort((a,b)=>distance(worker.home,a)-distance(worker.home,b));
     // Rotate the first few work sites so every house doesn't stream into the
     // same corner of the same field or crowd a single ore face.
     const shortlist=candidates.slice(0,9),offset=Math.floor(hash(worker.id)*Math.min(3,shortlist.length));
     for(let i=0;i<Math.min(3,shortlist.length);i++){
       const node=shortlist[(i+offset)%shortlist.length],route=routeTo(worker,node);if(!route)continue;
       nodes.set(node.id,node);worker.nodeId=node.id;worker.route=route;worker.routeIndex=1;worker.activity='outbound';worker.indoors=false;worker.carrying=false;
-      if(node.resource==='wood')claims.set(node.id,worker.id);visibilityRevision++;return true;
+      if(node.workKind==='tree')claims.set(node.id,worker.id);visibilityRevision++;return true;
     }
     worker.wait=3;return false;
   }
@@ -161,20 +188,15 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     worker.route=[{x:worker.x,y:worker.y,z:worker.z},...visited.reverse()];worker.routeIndex=1;worker.activity='returning';worker.wait=0;release(worker);worker.reroute=routeBlocked(worker,buildings);worker.rerouteWait=0;
   }
   function arriveHome(worker){
-    if(worker.carrying){worker.trip++;production+=settings.amount;emit({type:'production',id:`${worker.id}:${worker.trip}`,ownerId:worker.ownerId,cityId:worker.cityId,resource:worker.resource,amount:settings.amount,
-      workerId:worker.id,nodeId:worker.nodeId,x:worker.x,y:worker.y,z:worker.z});worker.carrying=false;revision++;}
+    if(worker.carrying){worker.trip++;completedTrips++;worker.carrying=false;revision++;}
     release(worker);worker.nodeId=null;worker.route=[];worker.routeIndex=0;worker.activity=dark?'indoors':'waiting';worker.indoors=dark;worker.wait=settings.restSeconds;visibilityRevision++;
   }
-  function nodeAvailable(worker){const node=nodes.get(worker.nodeId);return !!node&&!session.shared?.isSceneryRemoved?.(node.farmId??node.id)&&!(worker.resource==='wood'&&removed.has(node.id));}
+  function nodeAvailable(worker){const node=nodes.get(worker.nodeId);return !!node&&!session.shared?.isSceneryRemoved?.(node.farmId??node.id)&&!(worker.workKind==='tree'&&removed.has(node.id));}
   function finishWork(worker){
     const node=nodes.get(worker.nodeId);
     if(!nodeAvailable(worker)){goHome(worker);return;}
-    if(worker.resource==='wood'){
-      if(!node||removed.has(node.id)){goHome(worker);return;}
-      removed.add(node.id);regrowth.set(node.id,time+settings.treeRegrowSeconds);markTrees();emit({type:'tree-remove',id:node.id,treeId:node.id,direction:{x:node.x-worker.x,z:node.z-worker.z}});
-    }
     worker.carrying=true;emit({type:'gathered',id:`${worker.id}:${worker.trip+1}:gathered`,ownerId:worker.ownerId,cityId:worker.cityId,workerId:worker.id,nodeId:worker.nodeId,
-      resource:worker.resource,amount:settings.amount,x:worker.x,y:worker.y,z:worker.z});goHome(worker);
+      resource:worker.resource,workKind:worker.workKind,cosmetic:true,amount:settings.amount,x:worker.x,y:worker.y,z:worker.z});goHome(worker);
   }
   function trackTree(tree){if(!isHarvestableWood(tree))return false;const id=idOf(tree);sources.set(id,tree);if(removed.has(id)&&!regrowth.has(id)&&!session.shared?.isSceneryRemoved?.(id))regrowth.set(id,time+settings.treeRegrowSeconds);return true;}
   function updateRegrowth(){
@@ -217,7 +239,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   }
   sync();
   return{update,sync,workers,get residents(){return workers;},get nodes(){return [...nodes.values()];},trackTree,get placements(){return placements.filter(item=>!session.shared?.isSceneryRemoved?.(item));},get placementRevision(){return placementRevision;},get revision(){return revision;},get visibilityRevision(){return visibilityRevision;},get elapsed(){return time;},
-    get stats(){return{workers:workers.size,residents:workers.size,indoors:[...workers.values()].filter(worker=>worker.indoors).length,production,routeSearches,regrowing:regrowth.size};},
+    get stats(){return{workers:workers.size,residents:workers.size,indoors:[...workers.values()].filter(worker=>worker.indoors).length,completedTrips,production:0,routeSearches,regrowing:regrowth.size};},
     snapshot(){return [...workers.values()].map(({home,route,...worker})=>({...worker,route:route.map(point=>({...point}))}));},
-    drainEvents(){return events.splice(0);},dispose(){workers.clear();nodes.clear();events.length=0;regrowth.clear();claims.clear();sources.clear();routeCache.clear();placements=[];}};
+    drainEvents(){return events.splice(0);},dispose(){workers.clear();nodes.clear();events.length=0;regrowth.clear();claims.clear();sources.clear();routeCache.clear();oreSites.clear();placements=[];}};
 }

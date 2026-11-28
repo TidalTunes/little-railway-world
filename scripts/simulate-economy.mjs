@@ -1,14 +1,13 @@
 import {fileURLToPath} from 'node:url';
 import {createSettlementEconomy} from '../src/settlement-economy.js';
 import {createSettlementRailways} from '../src/settlement-railways.js';
-import {createResourceWork} from '../src/resource-work.js';
 
 /** Bounded CPU experiments for the new rules. Already-formed six-home towns
- * use actual directed track planning, physical NPC work, station stops,
- * purchases and loop transport. No renderer, passive production or fake cargo. */
+ * use actual directed track planning, population production, station stops,
+ * purchases and loop transport. No renderer or worker-path dependency. */
 export function simulateStrategy({strategy='food-loop',scenario='near',seconds=900,seed='loop-benchmark-7'}={}){
   const size={near:1,distant:1.55}[scenario];if(!size)throw new TypeError('Unknown scenario');
-  const itinerary={'food-loop':['home','farm','home'],'metal-loop':['home','mine','home'],'mixed-loop':['home','mine','farm','home']}[strategy];
+  const itinerary={'food-loop':['home','farm','home'],'resources-loop':['home','mine','home'],'mixed-loop':['home','mine','farm','home']}[strategy];
   if(!itinerary)throw new TypeError('Unknown strategy');
   const records=[{id:'home',ownerId:'teal',x:0,z:0,biome:'forest'},
     {id:'farm',ownerId:'gray',x:65*size,z:20*size,biome:'farmland'},
@@ -46,30 +45,27 @@ export function simulateStrategy({strategy='food-loop',scenario='near',seconds=9
   const selected=economy.loops('home').find(loop=>loop.cityIds.length===new Set(itinerary).size);
   if(!selected)throw new Error('No complete physical loop in benchmark');
   const purchase=economy.buyTrain('home',selected.id,'teal');if(!purchase.ok)throw new Error(purchase.reason??purchase.code);
-  const work=createResourceWork(world,{session,surfaceAt:()=>({type:'ground',height:0}),getPlacements:()=>trees.filter(tree=>!cleared.has(tree.id))});
-  const timeline=[],production={wood:0,metal:0,food:0,gold:0};let firstDelivery=null;
+  const timeline=[],populationProduction={resources:0,food:0,gold:0};let firstDelivery=null;
   const dt=.25;
   for(let frame=0;frame<seconds/dt;frame++){
     const elapsed=frame*dt;
-    work.update(dt,{dayPhase:Math.floor(elapsed/300)%2?'night':'day'});
-    for(const event of work.drainEvents())if(event.type==='production'){
-      const result=economy.creditProduction(event.ownerId,event.resource,event.amount,event.id);
-      if(!result.ok)throw new Error(`Rejected physical work: ${result.code}`);production[event.resource]+=event.amount;
-    }
     economy.update(dt);
-    for(const event of economy.drainEvents())if(event.type==='delivery'&&event.ownerId==='teal')firstDelivery??=elapsed+dt;
+    for(const event of economy.drainEvents())if(event.ownerId==='teal'){
+      if(event.type==='delivery')firstDelivery??=elapsed+dt;
+      if(event.type==='production')populationProduction[event.resource]+=event.amount;
+    }
     if((frame+1)%(300/dt)===0)timeline.push({minute:(elapsed+dt)/60,...economy.resourcesAt('teal'),laps:economy.snapshot().stats.laps});
   }
-  const state=economy.snapshot(),wallet=economy.resourcesAt('teal');work.dispose();
+  const state=economy.snapshot(),wallet=economy.resourcesAt('teal');
   return {scenario,strategy,cityCount:selected.cityIds.length,length:Math.round(selected.length),...costs,trainCost:purchase.cost,
-    gold:wallet.gold,wood:wallet.wood,metal:wallet.metal,food:wallet.food,laps:state.stats.laps,firstDelivery,
-    workerReturns:state.stats.productionEvents,workerProduction:production,delivered:state.stats.delivered,timeline};
+    gold:wallet.gold,resources:wallet.resources,food:wallet.food,laps:state.stats.laps,firstDelivery,
+    populationProduction,delivered:state.stats.delivered,timeline};
 }
 export function runEconomyBenchmarks({seconds=900}={}){
-  return ['near','distant'].flatMap(scenario=>['food-loop','metal-loop','mixed-loop'].map(strategy=>simulateStrategy({strategy,scenario,seconds})));
+  return ['near','distant'].flatMap(scenario=>['food-loop','resources-loop','mixed-loop'].map(strategy=>simulateStrategy({strategy,scenario,seconds})));
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const results=runEconomyBenchmarks({seconds:process.argv.includes('--long')?1800:900});
   if(process.argv.includes('--json'))process.stdout.write(`${JSON.stringify(results,null,2)}\n`);
-  else console.table(results.map(({scenario,strategy,cityCount,length,playerRails,trainCost,gold,wood,metal,food,laps,firstDelivery})=>({scenario,strategy,cityCount,length,playerRails,trainCost,gold,wood,metal,food,laps,firstDelivery})));
+  else console.table(results.map(({scenario,strategy,cityCount,length,playerRails,trainCost,gold,resources,food,laps,firstDelivery})=>({scenario,strategy,cityCount,length,playerRails,trainCost,gold,resources,food,laps,firstDelivery})));
 }

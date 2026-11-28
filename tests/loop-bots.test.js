@@ -16,7 +16,7 @@ function fixture({gold=60,houses=6,cost=10,planRoute}={}){
     build(from,to,options){calls.push('build');assert.equal(options.ownerId,'blue');assert.equal(options.requireCached,true);
       if(!game.spendGold(cost).ok)return {ok:false,code:'not-enough-gold'};connections.push({from,to});this.revision++;return {ok:true,cost};},
   };
-  const economy={trains,city(id){return id==='farm'?{...farm,resource:'food'}:{...city,resource:'metal',loops:connections.length===2?[{id:'loop',cost:20,length:50}]:[]};},
+  const economy={trains,city(id){return id==='farm'?{...farm,resource:'food'}:{...city,resource:'resources',loops:connections.length===2?[{id:'loop',cost:20,length:50}]:[]};},
     buyTrain(cityId,loopId,ownerId){calls.push('train');assert.equal(cityId,'own');assert.equal(loopId,'loop');assert.equal(ownerId,'blue');
       if(!game.spendGold(20).ok)return {ok:false};trains.push({id:'train',ownerId});return {ok:true};},
   };

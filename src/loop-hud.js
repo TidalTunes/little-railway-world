@@ -1,8 +1,8 @@
 import {loopHudState,loopResourceLabel} from './loop-hud-state.js';
 import {createLoopHudAnchor} from './loop-hud-anchor.js';
+import {resourceIcon} from './resource-icons.js';
 const write=(node,value)=>{if(node.textContent!==String(value))node.textContent=value;};
-const icons={wood:'<path d="m12 3-6 8h3l-4 6h5v4h4v-4h5l-4-6h3Z"/>',metal:'<path d="m5 16 3-10 9-2 4 10-6 7H8Z"/><path d="m8 6 7 8 6 0m-6 0-7 7"/>',food:'<path d="M12 21V7m0 6c-5 0-7-3-7-6 5 0 7 3 7 6Zm0 4c5 0 7-3 7-6-5 0-7 3-7 6Zm0-10c-3-3-3-5 0-6 3 1 3 3 0 6Z"/>',gold:'<circle cx="12" cy="12" r="8"/><path d="M12 7v10M9 9h5l-4 6h5"/>',train:'<rect x="5" y="3" width="14" height="16" rx="3"/><path d="M5 11h14M8 6h8M8 22l2-3m6 3-2-3M8 15h1m6 0h1"/>'};
-const icon=resource=>`<svg viewBox="0 0 24 24" aria-hidden="true">${icons[resource]??icons.gold}</svg>`;
+const icon=resource=>resource==='train'?'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="16" rx="3"/><path d="M5 11h14M8 6h8M8 22l2-3m6 3-2-3M8 15h1m6 0h1"/></svg>':resourceIcon(resource==='wood'||resource==='metal'?'resources':resource);
 
 /** The only purchase action sits directly above the explicitly selected rail.
  * Its button and Enter shortcut share the same visible/affordable guard. */

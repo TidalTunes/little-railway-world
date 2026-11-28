@@ -9,6 +9,12 @@ import {rigidSurfacePoseMatrix,surfaceDistance} from './world-surface.js';
 import {settlementDoor} from './settlement-paths.js';
 
 export const RESIDENT_LIMITS=Object.freeze({visible:192,detailRadius:95,walkingRadius:48,doorInset:.24,selectionInterval:.25,routineRadius:24,indoorOffset:.2,doorstepHeight:.14,routeBudget:3,routeNodes:900,routeLength:160});
+/** Shared by the right arm and its tool, so a pick/axe stays in the hand. */
+export function residentWorkSwing(resident,reducedMotion=false){
+  if(resident.activity!=='working')return 0;
+  if(reducedMotion)return -.55;
+  return resident.workKind==='ore'?-.7+Math.sin(resident.idleTime*4.8)*.55:-.52+Math.sin(resident.idleTime*4.2)*.27;
+}
 const epsilon=1e-5,clamp=(value,a,b)=>Math.max(a,Math.min(b,value));
 const distance=(a,b)=>Math.hypot(b.x-a.x,b.z-a.z);
 const spatialDistance=(a,b)=>Math.hypot(b.x-a.x,b.y-a.y,b.z-a.z);
@@ -392,7 +398,7 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
         const swing=stride*side;
         part.position.set(side*.055,.32-Math.cos(swing)*.16,-Math.sin(swing)*.16);part.rotation.set(swing,0,0);part.scale.set(.075,.32,.10);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
-        const greeting=!reducedMotion&&resident.activity==='working'?-.48+Math.sin(resident.idleTime*4.2+side)*.18:!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
+        const greeting=resident.activity==='working'?(side===1?residentWorkSwing(resident,reducedMotion):-.12):!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
         const armSwing=-swing*.65+greeting;
         part.position.set(side*.143,.53-Math.cos(armSwing)*.105,-Math.sin(armSwing)*.105);part.rotation.set(armSwing,0,side*-.035);part.scale.set(.052,.21,.075);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);

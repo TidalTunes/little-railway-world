@@ -1,4 +1,5 @@
 import {isHarvestableWood} from './harvestable-wood.js';
+import {isMineableOre} from './harvestable-ore.js';
 import * as THREE from 'three';
 import {createSettlementEconomy} from './settlement-economy.js';
 import {createEconomicBots} from './economic-bots.js';
@@ -283,13 +284,15 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       streets=[...detail.cityStreets,...session.paths,...villagePaths];
     }
   }
-  function findTree(player){
+  function findHarvestTarget(player){
     let selected=null,best=Infinity;
     const fx=Math.sin(player.heading),fz=Math.cos(player.heading);
     for(const item of scenery){
-      if(!isHarvestableWood(item)||game.isTreeRemoved(item))continue;
+      const ore=loopMode&&isMineableOre(item);
+      if(!ore&&(!isHarvestableWood(item)||game.isTreeRemoved(item))||session.shared.isSceneryRemoved(item))continue;
       const dx=item.x-player.position.x,dz=item.z-player.position.z,distance=Math.hypot(dx,dz);
-      if(distance>SETTLEMENT.chopReach||distance<1e-6)continue;
+      if(distance>(ore?SETTLEMENT.mineReach:SETTLEMENT.chopReach)||distance<1e-6
+        ||ore&&Math.abs(player.position.y-(item.y??0))>1.2)continue;
       const facing=(dx*fx+dz*fz)/distance;
       if(facing<.30)continue;
       const score=distance-facing*.5;if(score<best){best=score;selected=item;}
@@ -395,9 +398,9 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       return input;
     },
     onSwing(){
-      const player=getPlayer();synchronize();const tree=findTree(player);
+      const player=getPlayer();synchronize();const tree=findHarvestTarget(player);
       pendingHit=tree?{tree,time:.22}:null;
-      if(!tree)notify('Step closer and face a tree');
+      if(!tree)notify(loopMode?'Face a nearby tree or ore deposit':'Face a nearby tree');
     },
     cancelBuild(){selectTool('axe');},
     update(dt,{walking:walkingNow,transitioning:transitionNow,camera:activeCamera,mapBlend=0,walkingWeight=Number(walkingNow),focus,viewportHeight=800,zoom=1,dayState,night=0,uiDt=dt}={}){
@@ -408,8 +411,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       synchronize();
       resourceWork?.update(dt,{night,dayPhase:dayState?.phase});
       for(const event of resourceWork?.drainEvents()??[]){
-        if(event.type==='production')economy.creditProduction(event.ownerId,event.resource,event.amount,event.id,event);
-        else if(event.type==='gathered'&&event.ownerId===game.ownerId)resourceGains?.emit(event);
+        if(event.type==='gathered'&&event.ownerId===game.ownerId)resourceGains?.emit(event);
         else if(event.type==='tree-remove'){if(reducedMotion?.matches||!detail.fellTree(event.treeId,{direction:event.direction}))detail.removeTree(event.treeId);}
         else if(event.type==='tree-regrow')detail.restoreTree?.(event.treeId);
       }
@@ -441,13 +443,18 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         if(pendingHit.time<=0){
           const tree=pendingHit.tree;pendingHit=null;
           // Recheck reach at impact, not just when the swing was requested.
-          if(walking&&surfaceDistance(world,tree,player.position)<=SETTLEMENT.chopReach&&!game.isTreeRemoved(tree)){
-            const result=game.chop(tree,{player:player.position});
-            if(result.ok){resourceWork?.trackTree(tree);detail.fellTree(result.treeId,{direction:{x:tree.x-player.position.x,z:tree.z-player.position.z}});notify(`+${result.logs} ${loopMode?'wood':economy?'timber':'logs'}`);synchronize();develop(player);}
+          const ore=isMineableOre(tree),reach=ore?SETTLEMENT.mineReach:SETTLEMENT.chopReach;
+          if(walking&&surfaceDistance(world,tree,player.position)<=reach&&!game.isTreeRemoved(tree)){
+            const result=ore?game.mine(tree,{player:player.position}):game.chop(tree,{player:player.position});
+            if(result.ok){
+              if(!ore){resourceWork?.trackTree(tree);detail.fellTree(result.treeId,{direction:{x:tree.x-player.position.x,z:tree.z-player.position.z}});}
+              if(!loopMode)notify(`+${result.logs} ${economy?'timber':'logs'}`);
+              synchronize();if(!ore)develop(player);
+            }
           }
         }
       }
-      targetTree=ready&&walking&&!transitioning&&tool==='axe'?findTree(player):null;
+      targetTree=ready&&walking&&!transitioning&&tool==='axe'?findHarvestTarget(player):null;
       if(ready&&walking&&tool==='house'&&!transitioning){
         const pose=candidate(player),buildContext=context(player,pose);
         const nearbyActors=bots.positions.filter(point=>surfaceDistance(world,point,pose)<4)
@@ -509,11 +516,11 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         loopHud?.update({camera,viewport:canvas.getBoundingClientRect(),anchor:selectedCircuitAnchor,transitioning,city:!walking?economyView.cities.find(city=>city.id===inspectedCity):null,ownCity,cities:economyView.cities,selectedLoopId:selectedCircuit,candidateIds:circuitCandidates,trains:liveTrains,
           houses:snapshot.houses.length,resources,walking,tool,night,feedback:messageTime>0?message:'',delivered:economyView.stats.laps});
         Object.assign(canvas.dataset,{selectedCircuit:selectedCircuit??'',hoverCircuit:hoverCircuit??'',circuitCandidates:String(circuitCandidates.length),resourcePopups:String(resourceGains?.visibleCount??0)});
-        Object.assign(canvas.dataset,{wood:String(resources.wood??resources.timber),metal:String(resources.metal??0),food:String(resources.food??0),production:String(resourceWork?.stats.production??0),economyTime:String(Math.floor(economy.elapsed)),deliveries:String(economyView.stats.deliveries),
+        Object.assign(canvas.dataset,{resources:String(resources.resources??resources.timber),food:String(resources.food??0),production:String(economyView.stats.produced?.resources??0),economyTime:String(Math.floor(economy.elapsed)),deliveries:String(economyView.stats.deliveries),
           freightTrains:String(tradeArt.stats.active??0),localTools:String(resources.tools),localGrain:String(resources.grain),economyCity:city?.id??'',industry:city?.industry??''});
       }
-      hud.update({logs:economy?resources.timber:snapshot.logs,economic:loopMode?'loops':!!economy,buildCost:game.constructionCost,resources,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
-        canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree,message,railway:railwayHud??{minHomes:loopMode?6:3,hasCity:game.cities.some(city=>!loopMode||city.level>=2),cost:economy?8:5}});
+      hud.update({logs:economy?resources.resources??resources.timber:snapshot.logs,economic:loopMode?'loops':!!economy,buildCost:game.constructionCost,resources,gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
+        canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree&&!isMineableOre(targetTree),targetOre:isMineableOre(targetTree),message,railway:railwayHud??{minHomes:loopMode?6:3,hasCity:game.cities.some(city=>!loopMode||city.level>=2),cost:economy?8:5}});
       Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),gold:String(snapshot.gold),incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects.visibleCount),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),construction:String(art.construction.count),constructionDust:String(art.construction.dustCount),residentsIndoors:String(residents.stats.indoors??0),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(resourceWork?.stats.workers??residents.stats?.residents??residents.stats?.count??0),
@@ -523,7 +530,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         railSource:railSource??'',railTarget:railTarget??'',railHover:railHover??'',railHandles:String(railPreview?.handles?.length??0),railEditing:String(!!railDrag),railPlanning:String(railPlanning),railValid:String(!!railPreview?.valid),railReason:railPreview?.code??'',
         botLevels:bots.entries.map(entry=>entry.snapshot.cities[0]?.level??0).join(','),botStates:bots.entries.map(entry=>entry.bot.state).join(','),
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
-        buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:targetTree?.id??''});
+        buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:!isMineableOre(targetTree)?targetTree?.id??'':'',targetOre:isMineableOre(targetTree)?targetTree.id:''});
     },
     dispose(){disposed=true;releaseRailDrag();releaseRailPress();railPreviewFlow.dispose();railPlanner.dispose();botRailPlanner?.dispose();for(const remove of listeners)remove();hud.dispose();economyHud?.dispose();loopHud?.dispose();resourceGains?.dispose();circuitArt?.dispose();resourceWorkArt?.dispose();resourceWork?.dispose();economicBots?.dispose();tradeArt?.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
   };

@@ -113,11 +113,62 @@ test('worker and stale-world failures do not claim that placement is impossible'
 });
 
 
-test('loop construction and railway guidance use wood and the six-home station milestone',()=>{
-  const state=settlementHudConstruction({economic:'loops',logs:5,buildCost:{timber:8,tools:0},resources:{wood:5,metal:20,food:10,gold:60}});
-  assert.equal(state.costLabel,'8 wood');assert.equal(state.shortage,'3 more wood');assert.equal(state.affordable,false);
-  assert.equal(settlementHudConstruction({economic:'loops',logs:8,buildCost:{wood:8}}).affordable,true);
+test('loop construction and railway guidance use resources and the six-home station milestone',()=>{
+  const state=settlementHudConstruction({economic:'loops',logs:99,buildCost:{resources:8},resources:{resources:5,food:10,gold:60}});
+  assert.equal(state.costLabel,'8 resources');assert.equal(state.shortage,'3 more resources');assert.equal(state.affordable,false);
+  assert.equal(settlementHudConstruction({economic:'loops',logs:0,resources:{resources:8},buildCost:{resources:8}}).affordable,true);
   assert.equal(settlementHudRailway({minHomes:6,hasCity:false}).status,'Station at 6 homes');
   const reverse=settlementHudRailway({stage:'preview',hasCity:true,siteValid:true,canBuild:true,canReverse:true,reversed:true,sourceLabel:'Village',targetLabel:'Your city',cost:11},{gold:60});
   assert.equal(reverse.selection,'Village → Your city');assert.equal(reverse.canReverse,true);assert.equal(reverse.reversed,true);assert.equal(reverse.canBuild,true);
+});
+
+// A narrow DOM fixture exercises live economy and tool changes, not only the
+// construction copy helpers. The HUD still uses its actual production markup.
+function hudDocument(){
+  class Element{
+    constructor(tag,doc){this.tagName=tag;this.ownerDocument=doc;this.children=[];this.parentElement=null;this.dataset={};this.attributes={};this.listeners=new Map();this.hidden=false;this.disabled=false;this.style={setProperty(name,value){this[name]=value;}};this._text='';this._html='';}
+    append(...elements){for(const element of elements){element.parentElement=this;this.children.push(element);}}
+    remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);}
+    setAttribute(name,value){this.attributes[name]=value;if(name.startsWith('data-'))this.dataset[name.slice(5)]=value;if(name==='hidden')this.hidden=true;}
+    getAttribute(name){return this.attributes[name];}
+    set textContent(value){this._text=String(value);this.children=[];}
+    get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
+    set innerHTML(html){
+      this._html=html;this.children=[];this._text='';const stack=[this];
+      for(const match of html.matchAll(/<\/?([\w-]+)\b([^>]*?)>|([^<]+)/g)){
+        if(match[3]){stack.at(-1)._text+=match[3];continue;}
+        if(match[0].startsWith('</')){if(stack.length>1)stack.pop();continue;}
+        const element=this.ownerDocument.createElement(match[1]);
+        for(const attr of match[2].matchAll(/([\w-]+)(?:="([^"]*)")?/g))element.setAttribute(attr[1],attr[2]??'');
+        stack.at(-1).append(element);if(!match[0].endsWith('/>'))stack.push(element);
+      }
+    }
+    get innerHTML(){return this._html;}
+    querySelectorAll(selector){const key=selector.match(/^\[([^\]]+)\]$/)?.[1];assert.ok(key);const result=[];for(const child of this.children){if(Object.hasOwn(child.attributes,key))result.push(child);result.push(...child.querySelectorAll(selector));}return result;}
+    querySelector(selector){return this.querySelectorAll(selector)[0]??null;}
+    addEventListener(name,fn){if(!this.listeners.has(name))this.listeners.set(name,new Set());this.listeners.get(name).add(fn);}
+    removeEventListener(name,fn){this.listeners.get(name)?.delete(fn);}
+  }
+  const doc={createElement:tag=>new Element(tag,doc)};doc.body=doc.createElement('body');return doc;
+}
+
+test('the live ledger combines materials, mining changes the action, and legacy worlds retain logs and timber',async()=>{
+  const {createSettlementHud}=await import('../src/settlement-hud.js'),previous=globalThis.document,doc=hudDocument();globalThis.document=doc;
+  const hud=createSettlementHud({parent:doc.body});
+  try{
+    const nodes=Object.fromEntries(hud.root.querySelectorAll('[data-hud]').map(node=>[node.dataset.hud,node]));
+    const buttons=Object.fromEntries(hud.root.querySelectorAll('[data-action]').map(node=>[node.dataset.action,node]));
+    hud.update({economic:'loops',resources:{resources:21,food:7,gold:8},logs:99,gold:8,buildCost:{resources:8},cityHouses:29,targetOre:true});
+    assert.equal(nodes['timber-label'].textContent,'Resources');assert.equal(nodes.logs.textContent,'21');assert.equal(nodes.food.textContent,'7');
+    assert.equal(nodes['metal-stock'],undefined,'there is only one materials compartment');
+    assert.equal(nodes['wood-stock'].dataset.resource,'resources');assert.equal(nodes['city-progress'].textContent,'29');
+    assert.match(nodes['stock-symbol'].innerHTML,/data-material="wood"/);assert.match(nodes['stock-symbol'].innerHTML,/data-material="ore"/);
+    assert.equal(nodes['cost-symbol'].innerHTML,nodes['stock-symbol'].innerHTML);assert.equal(nodes['house-cost'].parentElement.getAttribute('aria-label'),'8 resources');
+    assert.equal(buttons.axe.querySelector('[data-action-label]').textContent,'Mine');assert.match(buttons.axe.getAttribute('aria-label'),/Mine nearby ore/);
+    assert.equal(hud.root.dataset.target,'true');
+    hud.update({targetOre:false,targetTree:false});assert.equal(buttons.axe.querySelector('[data-action-label]').textContent,'Chop');assert.match(buttons.axe.getAttribute('aria-label'),/Chop trees or mine ore/);assert.equal(hud.root.dataset.target,'false');
+    hud.update({economic:false,logs:5,buildCost:{timber:10}});assert.equal(nodes['timber-label'].textContent,'Logs');assert.equal(nodes.logs.textContent,'5');assert.equal(nodes['food-stock'].hidden,true);
+    assert.doesNotMatch(nodes['stock-symbol'].innerHTML,/data-material="ore"/);assert.equal(nodes['house-cost'].parentElement.getAttribute('aria-label'),'10 logs');
+    hud.update({economic:true,logs:8,resources:{tools:1},buildCost:{timber:8,tools:2}});assert.equal(nodes['timber-label'].textContent,'Timber');assert.equal(hud.root.dataset.affordable,'false');assert.match(buttons.house.getAttribute('aria-label'),/Need 1 more tool/);
+  }finally{hud.dispose();if(previous===undefined)delete globalThis.document;else globalThis.document=previous;}
 });

@@ -1,4 +1,5 @@
 import {isHarvestableWood,woodSourceId} from './harvestable-wood.js';
+import {isMineableOre} from './harvestable-ore.js';
 import {worldSurface} from './world-model.js';
 import {surfaceDistance,surfaceDisplacement,surfaceOffset} from './world-surface.js';
 import {farmFootprintsOverlap} from './farm-footprints.js';
@@ -6,7 +7,7 @@ import {settlementHouseRotation,settlementCenterFacing,planSettlementPath,houseB
 import {pendingSettlementMilestones,settlementCenter,settlementCityLevel,settlementCivicSites,SETTLEMENT_CIVIC_SEARCH} from './settlement-progression.js';
 
 export const SETTLEMENT=Object.freeze({houseCost:10,houseWidth:2.2,houseDepth:2.2,
-  connectionRange:9,buildReach:7,chopReach:1.1,clearance:.22,maxHeightDifference:.14,
+  connectionRange:9,buildReach:7,chopReach:1.1,mineReach:1.4,clearance:.22,maxHeightDifference:.14,
   playerRadius:.17,terrainSampleSpacing:.36});
 
 const BLOCKING_KINDS=new Set(['house','tree','rock','farm','cactus','landmark','station','apartment','civic','tower']);
@@ -71,13 +72,13 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
 
   // Dispersed early outposts must still be able to form their first depot.
   // Requiring tools before any city exists would make them unobtainable.
-  const constructionCost=()=>({timber:economic?8:SETTLEMENT.houseCost,tools:economic&&!loopEconomy&&establishedCity?2:0});
+  const constructionCost=()=>loopEconomy?{resources:8}:{timber:economic?8:SETTLEMENT.houseCost,tools:economic&&establishedCity?2:0};
   function resourcesAt(point){
-    const resources=economic&&economy&&(loopEconomy||finitePoint(point))?economy.resourcesAt(point):{wood:logs,timber:logs,metal:0,food:0,gold,grain:0,tools:0};
+    const resources=economic&&economy&&(loopEconomy||finitePoint(point))?economy.resourcesAt(point):{resources:logs,timber:logs,food:0,gold,grain:0,tools:0};
     const valid=value=>Number.isSafeInteger(value)&&value>=0?value:0;
     if(loopEconomy){
-      const wood=valid(resources?.wood??resources?.timber);
-      return {wood,timber:wood,metal:valid(resources?.metal),food:valid(resources?.food),gold:valid(resources?.gold??gold),
+      const total=valid(resources?.resources??resources?.timber);
+      return {resources:total,timber:total,food:valid(resources?.food),gold:valid(resources?.gold??gold),
         grain:0,tools:0,cityId:resources?.cityId??null};
     }
     return Object.fromEntries(['timber','grain','tools'].map(key=>[key,valid(resources?.[key])]));
@@ -86,8 +87,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const missing=Object.entries(cost).filter(([key,amount])=>amount>resources[key]).map(([key,amount])=>[key,amount-resources[key]]);
     if(!missing.length)return null;
     if(!economic)return {code:'not-enough-logs',reason:`Collect ${missing[0][1]} more ${missing[0][1]===1?'log':'logs'}`};
-    return {code:missing.some(([key])=>key==='tools')?'not-enough-tools':loopEconomy?'not-enough-wood':'not-enough-timber',
-      reason:`Need ${missing.map(([key,amount])=>`${amount} more ${loopEconomy&&key==='timber'?'wood':key}`).join(' and ')}`};
+    return {code:missing.some(([key])=>key==='tools')?'not-enough-tools':loopEconomy?'not-enough-resources':'not-enough-timber',
+      reason:`Need ${missing.map(([key,amount])=>`${amount} more ${key}`).join(' and ')}`};
   }
   function setEconomy(adapter){
     if(adapter!==null&&(!adapter||typeof adapter.resourcesAt!=='function'||typeof adapter.spendConstruction!=='function'))throw new TypeError('Economy requires resource and construction methods');
@@ -180,7 +181,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const cityId=connected?cityIdFor(neighbours[0].id):null;
     house.cityId=cityId;house.connected=connected;
     const costs=constructionCost(),resources=resourcesAt(pose),shortage=resourceFailure(costs,resources);
-    const base={house,cost:costs.timber,costs,resources,affordable:!shortage,
+    const base={house,cost:costs.resources??costs.timber,costs,resources,affordable:!shortage,
       connected,cityId,cityHouseCount,cityLevel:settlementCityLevel(cityHouseCount),connectionHouseId,distanceToCity,path:null,paths:[],links:[]};
     const invalid=(code,reason)=>({...base,valid:false,siteValid:false,code,reason});
     if(!finitePoint(house)||!Number.isFinite(house.rotation))return invalid('invalid-position','Choose a place for your house');
@@ -294,7 +295,19 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const gained=treeLogYield(world.seed,tree,economic);
     if(!Number.isSafeInteger(logs+gained))return {ok:false,code:'resource-overflow'};
     removed.add(treeId);logs+=gained;revision++;spatialRevision++;
-    return {ok:true,treeId,logs:gained,totalLogs:logs};
+    return {ok:true,treeId,logs:gained,amount:gained,resource:loopEconomy?'resources':'timber',totalLogs:logs};
+  }
+
+  // Ore is a persistent work site. A successful player swing awards one unit
+  // without invalidating scenery, worker routes, or the city's production clock.
+  function mine(ore,{player}={}){
+    if(!loopEconomy||!isMineableOre(ore)||!finitePoint(ore))return {ok:false,code:'not-ore'};
+    if(sceneryRemoved(ore))return {ok:false,code:'deposit-cleared'};
+    if(!finitePoint(player)||surfaceDistance(world,player,ore)>SETTLEMENT.mineReach
+      ||Number.isFinite(player.y)&&Math.abs(player.y-(ore.y??0))>1.2)return {ok:false,code:'out-of-reach'};
+    if(!Number.isSafeInteger(logs+1))return {ok:false,code:'resource-overflow'};
+    logs++;revision++;
+    return {ok:true,oreId:ore.id,resource:'resources',amount:1,totalLogs:logs};
   }
 
   /** Residents never enter this calculation. Only owned homes belonging to a
@@ -333,12 +346,12 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
 
   refreshConnections();
   return {
-    get logs(){return logs;},get gold(){return gold;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get spatialRevision(){return spatialRevision;},get ownerId(){return ownerId;},
+    get logs(){return logs;},get gold(){return gold;},get population(){return homes.length;},get developmentSearching(){return developmentSearching;},get revision(){return revision;},get spatialRevision(){return spatialRevision;},get ownerId(){return ownerId;},
     get economic(){return economic;},get economyMode(){return loopEconomy?'loops':economic?'trade':null;},get constructionCost(){return constructionCost();},
     get houses(){return copy(homes);},get buildings(){return copy(buildings);},get cities(){return copy(cities);},get clusters(){return copy(clusters);},
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
     snapshot(){return {logs,gold,lastIncomeDay,revision,spatialRevision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
-    evaluateBuild,build,chop,develop,settleIncome,spendGold,spendLogs,addLogs,creditGold,setEconomy,resourcesAt,
+    evaluateBuild,build,chop,mine,develop,settleIncome,spendGold,spendLogs,addLogs,creditGold,setEconomy,resourcesAt,
   };
 }

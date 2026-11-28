@@ -1,14 +1,25 @@
 import {Vector3,MathUtils} from 'three';
 import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
+import {resourceIcon} from './resource-icons.js';
 
-const RESOURCES=['wood','metal','food','gold'];
+const RESOURCES=['resources','food','gold'];
 const KINDS=new Set(['pickup','delivery','production','gold','gathered']);
-const ICONS={
-  wood:'<path fill="#a97145" d="m4 8 9-5 8 5v9l-9 5-8-5z"/><path fill="#dcac75" d="m4 8 8 5 9-5-8-5z"/><path fill="#ba8755" d="m12 13 9-5v9l-9 5z"/><path fill="none" stroke="#f5d4a5" stroke-width="1.4" d="m8 6 8 5v9"/>',
-  metal:'<path fill="#8caeb7" d="m5 6 11-2 6 10-7 7-12-3z"/><path fill="#c3d7d8" d="m5 6 11-2-3 10-10 4z"/><path fill="#597d88" d="m13 14 9 0-7 7-12-3z"/>',
-  food:'<path fill="none" stroke="#f3cc70" stroke-width="1.6" stroke-linecap="round" d="M12 21V5"/><path fill="#f3cc70" d="M12 8C7 8 6 5 7 3c4 0 5 2 5 5Zm0 5C7 13 5 10 6 8c4 0 6 2 6 5Zm0 5c-5 0-7-3-6-5 4 0 6 2 6 5Zm0-8c0-5 2-7 5-7 1 3-1 6-5 7Zm0 5c0-5 3-7 6-7 1 3-1 6-6 7Zm0 5c0-5 3-7 6-7 1 3-1 6-6 7Z"/>',
-  gold:'<path fill="#c18c34" d="m8 2 9 1 5 7-2 9-8 4-9-5-1-9z"/><path fill="#f4cd67" d="m8 4 8 1 4 6-2 7-6 3-7-4-1-7z"/><path fill="none" stroke="#9c722e" stroke-width="2" stroke-linecap="round" d="M12 8v9"/>',
-};
+const positive=amount=>Number.isFinite(amount)&&amount>0?amount:0;
+function gainResources(event){
+  const resources={};
+  if(event.resources){
+    // Historical receipts may still contain separate timber and ore amounts.
+    // A canonical balance, when present, is authoritative rather than additive.
+    const stock=event.resources;
+    const materials=Object.hasOwn(stock,'resources')?positive(stock.resources):positive(stock.wood)+positive(stock.metal);
+    if(materials)resources.resources=materials;
+    for(const name of ['food','gold'])if(positive(stock[name]))resources[name]=stock[name];
+  }else{
+    const name=event.resource==='wood'||event.resource==='metal'?'resources':event.resource;
+    if(RESOURCES.includes(name)&&positive(event.amount))resources[name]=event.amount;
+  }
+  return resources;
+}
 
 function quantityLabel(item,amount){return item.kind==='gathered'||amount===1?'':String(amount);}
 function receiptWidth(item){
@@ -26,7 +37,7 @@ export function createResourceGainQueue({maxActive=24,duration=2.8,mergeWindow=.
   const active=[],seen=new Map();let clock=0,serial=0;
   function emit(event){
     if(!event||!Number.isFinite(event.x)||!Number.isFinite(event.z)||event.y!==undefined&&!Number.isFinite(event.y))return null;
-    const resources={};for(const resource of RESOURCES){const amount=event.resources?.[resource]??(event.resource===resource?event.amount:0);if(Number.isFinite(amount)&&amount>0)resources[resource]=amount;}
+    const resources=gainResources(event);
     if(!Object.keys(resources).length)return null;
     const kind=KINDS.has(event.kind)?event.kind:KINDS.has(event.type)?event.type:'production';
     const dedupe=event.id==null?null:`${event.ownerId??''}:${kind}:${event.id}`;
@@ -52,7 +63,7 @@ export function createResourceGainEffects(world,{parent,document:doc=globalThis.
   function slot(index){
     if(pool[index])return pool[index];
     const element=doc.createElement('div'),row=doc.createElement('span');element.className='resource-gain';row.className='resource-gain-values';element.appendChild(row);root.appendChild(element);
-    const values={};for(const resource of RESOURCES){const value=doc.createElement('span'),icon=doc.createElement('span'),amount=doc.createElement('b');value.className='resource-gain-value';value.dataset.resource=resource;icon.className='resource-gain-icon';icon.innerHTML=`<svg viewBox="0 0 24 24" focusable="false">${ICONS[resource]}</svg>`;value.append(icon,amount);row.appendChild(value);values[resource]={value,amount};}
+    const values={};for(const resource of RESOURCES){const value=doc.createElement('span'),icon=doc.createElement('span'),amount=doc.createElement('b');value.className='resource-gain-value';value.dataset.resource=resource;icon.className='resource-gain-icon';icon.innerHTML=resourceIcon(resource);value.append(icon,amount);row.appendChild(value);values[resource]={value,amount};}
     return pool[index]={element,values,serial:null,version:null,width:0};
   }
   return{

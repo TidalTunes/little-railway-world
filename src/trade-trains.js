@@ -9,10 +9,10 @@ import {applySceneStyle} from './scene-style.js';
 import {surfaceFor,rigidSurfacePoseMatrix,surfacePoint} from './world-surface.js';
 
 export const TRADE_TRAIN_LIMITS=Object.freeze({visible:2048,detailCars:8192,spacing:TRAIN_CAR_SPACING});
-const CARGO_COLORS={timber:C.soilLight,grain:C.wheat,metal:C.rail,tools:C.blue};
+const CARGO_COLORS={resources:C.soilLight,timber:C.soilLight,grain:C.wheat,metal:C.rail,tools:C.blue};
 // Old saves retain timber/grain names; both economies share the same pooled
 // log and food geometry rather than creating duplicate alias batches.
-const CARGO_KIND={wood:'timber',food:'grain',metal:'metal',timber:'timber',grain:'grain',tools:'tools'};
+const CARGO_KIND={resources:'resources',wood:'timber',food:'grain',metal:'metal',timber:'timber',grain:'grain',tools:'tools'};
 const finitePose=p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.z)&&Number.isFinite(p.angle);
 
 function wagon(palette){
@@ -29,7 +29,19 @@ function wagon(palette){
 }
 function freight(kind){
   const root=new THREE.Group();
-  if(kind==='timber'){
+  if(kind==='resources'){
+    for(const x of [-.29,.04,.33]){
+      cylinder(root,x,.73,-.44,.165,.165,.84,'soilLight',7).rotation.x=Math.PI/2;
+      for(const z of [-.865,-.015])cylinder(root,x,.73,z,.128,.128,.018,'sand',7).rotation.x=Math.PI/2;
+    }
+    box(root,0,.91,-.44,.82,.055,.08,'timber');
+    for(const x of [-.215,.215])for(const z of [.29,.73]){
+      const ingot=cylinder(root,x,.68,z,.18,.23,.24,'rail',4);ingot.rotation.y=Math.PI/4;ingot.scale.z=1.2;
+    }
+    for(const x of [-.215,.215]){
+      const ingot=cylinder(root,x,.92,.51,.18,.23,.24,'rail',4);ingot.rotation.y=Math.PI/4;ingot.scale.z=1.2;
+    }
+  }else if(kind==='timber'){
     for(const [x,y]of [[-.29,.73],[.04,.73],[.33,.73],[-.15,1.02],[.18,1.02]]){
       cylinder(root,x,y,0,.165,.165,1.80,'soilLight',7).rotation.x=Math.PI/2;
       for(const end of [-1,1])cylinder(root,x,y,end*.906,.128,.128,.018,'sand',7).rotation.x=Math.PI/2;

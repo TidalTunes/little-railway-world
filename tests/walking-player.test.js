@@ -4,6 +4,8 @@ import {Box3,BoxGeometry,Group,Mesh,MeshBasicMaterial,Vector3} from 'three';
 import {createWalkingPlayer,WALKING} from '../src/walking-player.js';
 import {generateWorld,worldSurface,distanceToRoutes} from '../src/world-model.js';
 import {person} from '../src/assets.js';
+import {playerColors} from '../src/player-palette.js';
+import {M} from '../src/palette.js';
 import {SETTLEMENT_MILESTONES} from '../src/settlement-progression.js';
 import {createIslandWorld} from '../src/island-world.js';
 import {surfaceChartCoordinates,surfaceDistance,surfaceNormal,surfacePoint} from '../src/world-surface.js';
@@ -269,4 +271,23 @@ test('third-person yaw remains continuous through repeated full-circle turns',()
     assert.ok(Number.isFinite(player.heading)&&Math.abs(player.heading)<=Math.PI);
   }
   assert.ok(start.angleTo(player.camera.quaternion)<1e-6);assert.deepEqual(player.position,position,'looking around never moves the character');player.dispose();
+});
+
+
+test('the human cap uses owned team paint and releases it without changing shared art',()=>{
+  const owner={id:'blue',color:{l:.63,c:.14,h:250}},world=flat({players:[owner],gameplay:{ownerId:owner.id}});
+  const original=M.redLight.color.clone(),player=createWalkingPlayer(new Group(),world);
+  const cap=player.root.getObjectByName('traveller-cap').material;
+  assert.ok(cap.color.equals(playerColors(owner).body));assert.notEqual(cap,M.redLight);
+  let disposed=0;cap.addEventListener('dispose',()=>disposed++);player.dispose();player.dispose();
+  assert.equal(disposed,1);assert.ok(M.redLight.color.equals(original));
+});
+
+
+test('ore clusters reserve their full footprint without blocking mining reach',()=>{
+  const ore={id:'ore:test',kind:'rock',workKind:'ore',resource:'resources',x:0,y:0,z:3,collisionRadius:1.02,height:1.1,scale:1};
+  const player=createWalkingPlayer(new Group(),flat({placements:[ore]}));player.enter({x:0,z:0});run(player,2,{forward:1});
+  const distance=surfaceDistance(flat(),player.position,ore);
+  assert.ok(distance>=1.02+WALKING.radius-1e-8,'body stops before the visible ore');
+  assert.ok(distance<=1.4,'player can approach close enough to mine');player.dispose();
 });

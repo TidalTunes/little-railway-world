@@ -60,7 +60,7 @@ test('rear-car stops wrapping across home are served in physical forward order w
 
 test('simultaneous station alignments share one pause and each car loads only once',()=>{
   const circuit=loop([0,37.4],40),{economy}=fixture(circuit);economy.buyTrain('city-0','loop','teal');
-  assert.deepEqual(economy.trains[0].stopCarIndices,[0,1]);assert.deepEqual(economy.trains[0].cargo,{wood:10,metal:0,food:10});
+  assert.deepEqual(economy.trains[0].stopCarIndices,[0,1]);assert.deepEqual(economy.trains[0].cargo,{resources:10,food:10});
   economy.update(.75);assert.equal(economy.trains[0].state,'dwell');
   economy.update(.25);assert.equal(economy.trains[0].state,'moving');
   economy.update(8);assert.equal(economy.trains[0].laps,1);

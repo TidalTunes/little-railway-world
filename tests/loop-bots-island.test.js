@@ -47,6 +47,6 @@ test('island loop rivals buy complete directed railway circuits through real phy
   assert.ok(result.stats.laps>0,'a purchased train completes the actual track loop');
   for(const train of result.trains)assert.equal(train.backing,false);
   assert.equal(result.owners.reduce((sum,owner)=>sum+owner.gold,0),initialGold+result.stats.currencyMinted-railwayCost-result.stats.trainSpent);
-  assert.equal(session.player.logs,12);assert.equal(session.player.gold,60,'bots never spend or reward the human wallet');
+  assert.equal(session.player.logs,42,'the starting resident produces 30 resources in fifteen minutes');assert.equal(session.player.gold,60,'bots never spend or reward the human wallet');
   coordinator.dispose();
 });

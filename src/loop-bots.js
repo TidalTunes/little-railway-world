@@ -63,10 +63,10 @@ export function createLoopBots(world,{session,bots,railways,economy,onRailBuild=
     // Do not drain the train budget buying unrelated outward tracks while a
     // paid approach is waiting for its return. Finish that investment first.
     if(incomplete.length)available=incomplete;
-    const resource=cityState?.resource??'gold';
+    const resource=cityState?.resource??'resources';
     const score=other=>{
       const type=economy.city(other.id)?.resource;
-      return (type==='food'?35:type==='wood'&&resource!=='wood'?40:type!==resource?20:0)-distance(city,other)*.1;
+      return (type==='food'?35:type!==resource?20:0)-distance(city,other)*.1;
     };
     available.sort((a,b)=>(a.id===entry.partnerId?-100:0)-(b.id===entry.partnerId?-100:0)||score(b)-score(a)||a.id.localeCompare(b.id));
     for(const partner of available){

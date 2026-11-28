@@ -1,22 +1,26 @@
 import * as THREE from 'three';
-import {createSettlementResidents} from './settlement-residents.js';
+import {createSettlementResidents,residentWorkSwing} from './settlement-residents.js';
 import {applySceneStyle} from './scene-style.js';
 import {rigidSurfacePoseMatrix,surfaceDistance} from './world-surface.js';
 
-/** Productive citizens reuse the bounded two-draw passenger rig. Ore is three
+/** Cosmetic citizens reuse the bounded two-draw passenger rig. Ore is three
  * small shared instanced rock/vein draws; no geometry is generated per frame. */
 export function createResourceWorkArt(parent,world,work){
   const groups=new Map(),oreRoot=new THREE.Group();oreRoot.name='resource-ore-nodes';parent.add(oreRoot);
   const rockMaterial=applySceneStyle(new THREE.MeshStandardMaterial({color:0x7c6962,roughness:1,flatShading:true}));
   const veinMaterial=applySceneStyle(new THREE.MeshStandardMaterial({color:0xd0a174,roughness:.75,metalness:.12,flatShading:true}));
-  const rockGeometry=new THREE.DodecahedronGeometry(1,0),veinGeometry=new THREE.BoxGeometry(1,1,1),capacity=96;
+  const rockGeometry=new THREE.DodecahedronGeometry(1,0),veinGeometry=new THREE.BoxGeometry(1,1,1),capacity=192;
   const rocks=new THREE.InstancedMesh(rockGeometry,rockMaterial,capacity),veins=new THREE.InstancedMesh(veinGeometry,veinMaterial,capacity*2);
   for(const mesh of[rocks,veins]){mesh.count=0;mesh.castShadow=mesh.receiveShadow=true;mesh.frustumCulled=false;oreRoot.add(mesh);}
   const cargoMaterial=applySceneStyle(new THREE.MeshStandardMaterial({color:0xffffff,roughness:1,flatShading:true}));
   const cargoGeometry=new THREE.BoxGeometry(.22,.17,.24),cargo=new THREE.InstancedMesh(cargoGeometry,cargoMaterial,192);
   cargo.name='worker-carried-resources';cargo.count=0;cargo.frustumCulled=false;cargo.castShadow=true;parent.add(cargo);
-  const cargoColors={wood:new THREE.Color(0x9d683b),metal:new THREE.Color(0x91a1a1),food:new THREE.Color(0xc5a65a),gold:new THREE.Color(0xcfae42)};
-  const pose=new THREE.Matrix4(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();let oreSignature='';
+  const cargoColors={tree:new THREE.Color(0x9d683b),ore:new THREE.Color(0x91a1a1),food:new THREE.Color(0xc5a65a)};
+  const toolGeometry=new THREE.BoxGeometry(1,1,1),toolMaterial=applySceneStyle(new THREE.MeshStandardMaterial({color:0xffffff,roughness:.9,flatShading:true}));
+  const tools=new THREE.InstancedMesh(toolGeometry,toolMaterial,192*2);tools.name='worker-hand-tools';tools.count=0;tools.frustumCulled=false;tools.castShadow=true;parent.add(tools);
+  const handleColor=new THREE.Color(0x775331),headColor=new THREE.Color(0x81969a);
+  for(let i=0;i<192;i++){tools.setColorAt(i*2,handleColor);tools.setColorAt(i*2+1,headColor);}
+  const pose=new THREE.Matrix4(),toolPose=new THREE.Matrix4(),toolPivot=new THREE.Object3D(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();let oreSignature='';
   function sync(){
     for(const worker of work.workers.values())if(!groups.has(worker.ownerId)){
       const selected=new Map();
@@ -38,13 +42,18 @@ export function createResourceWorkArt(parent,world,work){
   }
   function update(dt,options={}){
     sync();for(const {art}of groups.values())art.update(dt,options);oreRoot.visible=options.visible!==false&&(options.mapBlend??0)<.98;
-    cargo.visible=oreRoot.visible;let count=0;const radius=(options.walkingWeight??0)>.5?48:95,focus=options.focus??{x:0,z:0};
-    if(cargo.visible)for(const worker of work.workers.values())if(worker.carrying&&!worker.indoors&&count<192&&surfaceDistance(world,focus,worker)<radius){
+    cargo.visible=tools.visible=oreRoot.visible;let count=0,toolCount=0;const radius=(options.walkingWeight??0)>.5?48:95,focus=options.focus??{x:0,z:0};
+    if(cargo.visible)for(const worker of work.workers.values())if(!worker.indoors&&surfaceDistance(world,focus,worker)<radius){
       rigidSurfacePoseMatrix(world,worker.x,worker.y+.012,worker.z,worker.heading,pose);
-      part.position.set(0,.43,.19);part.rotation.set(0,0,0);part.scale.set(1,1,1);part.updateMatrix();matrix.copy(pose).multiply(part.matrix);cargo.setMatrixAt(count,matrix);cargo.setColorAt(count++,cargoColors[worker.resource]);
+      if(worker.carrying&&count<192){part.position.set(0,.43,.19);part.rotation.set(0,0,0);part.scale.set(1,1,1);part.updateMatrix();matrix.copy(pose).multiply(part.matrix);cargo.setMatrixAt(count,matrix);cargo.setColorAt(count++,cargoColors[worker.workKind]??cargoColors.tree);}
+      if(worker.activity==='working'&&['tree','ore'].includes(worker.workKind)&&toolCount<192*2){
+        const swing=residentWorkSwing(worker,options.reducedMotion);toolPivot.position.set(.143,.53-Math.cos(swing)*.21,-Math.sin(swing)*.21);toolPivot.rotation.set(swing,0,-.035);toolPivot.scale.set(1,1,1);toolPivot.updateMatrix();toolPose.copy(pose).multiply(toolPivot.matrix);
+        part.position.set(0,.12,0);part.rotation.set(0,0,0);part.scale.set(.032,.36,.032);part.updateMatrix();matrix.copy(toolPose).multiply(part.matrix);tools.setMatrixAt(toolCount++,matrix);
+        part.position.set(worker.workKind==='ore'?0:.045,.27,0);part.scale.set(worker.workKind==='ore'?.25:.13,worker.workKind==='ore'?.045:.12,.04);part.updateMatrix();matrix.copy(toolPose).multiply(part.matrix);tools.setMatrixAt(toolCount++,matrix);
+      }
     }
-    cargo.count=count;cargo.instanceMatrix.needsUpdate=true;if(cargo.instanceColor)cargo.instanceColor.needsUpdate=true;
+    cargo.count=count;tools.count=toolCount;cargo.instanceMatrix.needsUpdate=tools.instanceMatrix.needsUpdate=true;if(cargo.instanceColor)cargo.instanceColor.needsUpdate=true;
   }
-  return{update,get placements(){return work.placements;},get stats(){return{visible:[...groups.values()].reduce((sum,{art})=>sum+art.stats.visible,0),draws:[...groups.values()].reduce((sum,{art})=>sum+art.stats.draws,0)+(rocks.count?2:0)+(cargo.count?1:0)};},
-    dispose(){for(const{art}of groups.values())art.dispose();groups.clear();oreRoot.removeFromParent();cargo.removeFromParent();cargo.dispose();cargoGeometry.dispose();cargoMaterial.dispose();rocks.dispose();veins.dispose();rockGeometry.dispose();veinGeometry.dispose();rockMaterial.dispose();veinMaterial.dispose();}};
+  return{update,get placements(){return work.placements;},get stats(){return{visible:[...groups.values()].reduce((sum,{art})=>sum+art.stats.visible,0),draws:[...groups.values()].reduce((sum,{art})=>sum+art.stats.draws,0)+(rocks.count?2:0)+(cargo.count?1:0)+(tools.count?1:0)};},
+    dispose(){for(const{art}of groups.values())art.dispose();groups.clear();oreRoot.removeFromParent();cargo.removeFromParent();tools.removeFromParent();tools.dispose();toolGeometry.dispose();toolMaterial.dispose();cargo.dispose();cargoGeometry.dispose();cargoMaterial.dispose();rocks.dispose();veins.dispose();rockGeometry.dispose();veinGeometry.dispose();rockMaterial.dispose();veinMaterial.dispose();}};
 }

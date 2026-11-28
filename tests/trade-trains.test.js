@@ -155,3 +155,17 @@ test('the steam engine has a joined boiler, compact cab and raised chimney insid
   const geometries=new Set();root.traverse(node=>{if(node.geometry?.type!=='BoxGeometry')geometries.add(node.geometry);});
   for(const geometry of geometries)geometry?.dispose();
 });
+
+
+test('unified Resources freight combines timber and ore in one reusable load',t=>{
+  const {art}=fixture(t);
+  art.update([train(1,{resource:'resources',cargo:{resources:10},amount:10})],{mapBlend:.5});
+  const load=art.root.getObjectByName('trade-cargo:resources');assert.equal(load.count,1);
+  assert.equal(art.root.getObjectByName('trade-cargo:timber').count,0);
+  assert.equal(art.root.getObjectByName('trade-cargo:metal').count,0);
+  const bounds=new THREE.Box3().setFromBufferAttribute(load.geometry.attributes.position);
+  assert.ok(bounds.min.y>=.55&&bounds.max.y<1.2);assert.ok(bounds.min.z> -1.02&&bounds.max.z<1.02);
+  const geometry=load.geometry,buffer=load.instanceMatrix.array;
+  art.update([train(1,{resource:'resources',cargo:{resources:20},amount:20})]);
+  assert.equal(load.geometry,geometry);assert.equal(load.instanceMatrix.array,buffer);
+});

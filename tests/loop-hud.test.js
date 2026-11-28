@@ -35,9 +35,9 @@ function documentFixture(){
   const document={createElement(tag){return new Element(tag,document);}};document.body=document.createElement('body');return document;
 }
 
-const loop={id:'forest-farm',cost:20,cityIds:['home','farm'],stops:[{cityId:'home',resource:'wood'},{cityId:'farm',resource:'food'}]};
+const loop={id:'forest-farm',cost:20,cityIds:['home','farm'],stops:[{cityId:'home',resource:'resources'},{cityId:'farm',resource:'food'}]};
 const alternate={...loop,id:'forest-mine',cost:30};
-const city={id:'home',ownerId:'teal',resource:'wood',level:2,houseCount:6,x:0,y:.6,z:0,loops:[loop,alternate]};
+const city={id:'home',ownerId:'teal',resource:'resources',level:2,houseCount:6,x:0,y:.6,z:0,loops:[loop,alternate]};
 const viewport={width:800,height:600};
 function cameraFixture(){const camera=new PerspectiveCamera(50,4/3,.1,1000);camera.position.set(0,30,40);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);return camera;}
 function fixture(){
