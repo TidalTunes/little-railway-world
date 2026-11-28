@@ -53,7 +53,7 @@ test('daylight publishes the same direction in direct and stepped time while ret
   const reference=direct.light.direction;
   direct.light.update(.016,0,300);
   assert.equal(direct.light.direction,reference,'direction is reused instead of allocated per frame');
-  assert.equal(direct.sun.intensity,0);assert.ok(direct.sky.intensity>=.7);assert.ok(direct.fill.intensity>=.3);
+  assert.equal(direct.sun.intensity,0);assert.ok(direct.sky.intensity>=.2);assert.ok(direct.fill.intensity>=.09);
   direct.light.update(.016,0,450);assert.ok(direct.sun.intensity>.5);
 });
 

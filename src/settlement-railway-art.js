@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import {station,person} from './assets.js';
+import {station} from './assets.js';
 import {buildRailways} from './railway.js';
 import {consolidate} from './geometry.js';
 import {bakeMaterialColors} from './color-batches.js';
@@ -323,7 +323,6 @@ export function createSettlementRailwayArt(parent,mapParent,world){
     for(const item of stations){
       if(!palettes.has(item.ownerId))palettes.set(item.ownerId,createPlayerPalette(players.get(item.ownerId)));
       const palette=palettes.get(item.ownerId),building=station(network,{palette});
-      person(building,{x:.65,y:.21,z:.83,color:palette.body,rotation:Math.PI});person(building,{x:2.22,y:.21,z:.83,color:palette.accent,variant:1});
       rigidSurfacePoseMatrix(world,item.x,item.y??0,item.z,item.rotation??0,pose);building.applyMatrix4(pose);
       const stationPoints=[{x:item.x-Math.cos(item.rotation??0)*2.8,z:item.z+Math.sin(item.rotation??0)*2.8},{x:item.x+Math.cos(item.rotation??0)*2.8,z:item.z-Math.sin(item.rotation??0)*2.8}];
       mapStrip(stationPoints,1.1,.77,mapRim);mapStrip(stationPoints,.45,.78,mapInk);

@@ -11,19 +11,20 @@ function assertConserved(row,{openingGold=RULES.startGold}={}){
   }
   assert.equal(accounting.gold.initial,openingGold+RULES.startGold);
   assert.equal(accounting.gold.wallets+accounting.gold.escrow,accounting.gold.initial,'coins only move between wallets and reserved train fares');
-  assert.equal(trade.paid,(trade.pickups.resources+trade.pickups.food)*RULES.pickupGold,'only successful finite pickups pay suppliers');
+  assert.equal(trade.paid,(trade.withdrawn.resources+trade.withdrawn.food)/RULES.pickupStock*RULES.pickupGold,'only successful finite pickups pay suppliers');
   assert.equal(Object.values(trade.paymentByOwner).reduce((sum,amount)=>sum+amount,0),trade.paid);
   assert.equal(trade.reserved-trade.paid-trade.refunded,trade.escrowGold);
   assert.equal(trade.reserved,trade.departures*(row.cityCount-1)*RULES.pickupGold,'each departure reserves one fare per non-home destination');
   assert.equal(trade.refunded,trade.emptyVisits*RULES.pickupGold,'an empty stop returns its reserved fare');
   for(const resource of ['resources','food'])assert.equal(trade.pickups[resource],row.delivered[resource]+trade.aboard[resource],'picked goods are either aboard or actually delivered');
+  for(const resource of ['resources','food']){assert.equal(trade.pickups[resource],trade.withdrawn[resource]+trade.minted[resource]);assert.equal(trade.minted[resource],trade.withdrawn[resource]);}
   assert.equal(trade.pickedByCity.home,undefined,'the locomotive never loads its own home city');
   assert.equal(row.resources,RULES.startResources-row.playerRails-row.trainCost+row.populationProduction.resources+row.delivered.resources);
   assert.equal(row.food,RULES.startFood+row.delivered.food);
   assert.equal(row.gold,openingGold-trade.paid-trade.escrowGold);
   const farm=row.suppliers.find(city=>city.id==='farm'),mine=row.suppliers.find(city=>city.id==='mine');
-  assert.equal(farm.food,accounting.food.produced-(trade.pickedByCity.farm??0),'village harvests remain in that finite village stock until picked up');
-  assert.equal(mine.resources,RULES.startResources-row.otherRails+row.populationProduction.resources-(trade.pickedByCity.mine??0),'imported Resources are removed from the supplier wallet');
+  assert.equal(farm.food,accounting.food.produced-(trade.withdrawnByCity.farm??0),'village harvests remain in that finite village stock until picked up');
+  assert.equal(mine.resources,RULES.startResources-row.otherRails+row.populationProduction.resources-(trade.withdrawnByCity.mine??0),'imported Resources are removed from the supplier wallet');
   assert.equal(farm.gold,trade.paymentByOwner.gray??0);
   assert.equal(mine.gold,RULES.startGold+(trade.paymentByOwner.coral??0));
 }
@@ -75,7 +76,7 @@ test('a depleted buyer coin reserve destroys the train after delivery while empt
   const row=simulateStrategy({strategy:'food-loop',seconds:300,buyerGold:2});
   assertConserved(row,{openingGold:2});
   assert.equal(row.trade.refunded,1,'the empty first visit refunds its one reserved coin');
-  assert.equal(row.trade.paid,2);assert.equal(row.delivered.food,2);assert.equal(row.gold,0);
+  assert.equal(row.trade.paid,2);assert.equal(row.delivered.food,4);assert.equal(row.gold,0);
   assert.equal(row.trade.escrowGold,0);assert.equal(row.trainState,'destroyed');assert.equal(row.trainsLost,1);
   assert.equal(row.trade.departures,3,'a refunded empty lap does not consume the budget for a productive departure');
   assert.equal(row.populationProduction.resources,30,'local production continues after the train is lost');

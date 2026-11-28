@@ -3,7 +3,8 @@ export const LOOP_ECONOMY_RULES=Object.freeze({
   startResources:40,startFood:12,startGold:50,houseResources:8,houseFood:2,
   productionSeconds:60,daySeconds:300,nightSeconds:300,
   trackUnitLength:48,trackResourcesPerUnit:2,trainBase:20,trainPerCar:0,
-  pickup:1,pickupGold:1,speed:5,dwell:1,acceleration:6,deceleration:6,trafficStep:1/30,
+  pickup:2,pickupStock:1,pickupGold:1,speed:5,dwell:1,acceleration:6,deceleration:6,trafficStep:1/30,
+  chopResources:1,miningSeconds:1.2,
 });
 
 export function loopTrackCost(distance){

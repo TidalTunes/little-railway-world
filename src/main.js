@@ -17,6 +17,7 @@ import {createSurfaceShell} from './surface-shell.js';
 import {createDaylight,styleUniforms} from './scene-style.js';
 import {createDayCalendar} from './day-cycle.js';
 import {createNightSky} from './night-sky.js';
+import {createLocalLighting} from './local-lighting.js';
 import {createWalkingPlayer} from './walking-player.js';
 import {createWalkingDetail} from './walking-detail.js';
 import {createWalkingInput} from './walking-input.js';
@@ -53,7 +54,7 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;sc
 
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
-let settlement;
+let settlement,localLighting;
 function refreshCanvasCursor(){
   const mode=settlement?.building?'build':walkingMode&&canvas.dataset.pointerLocked!=='false'?'hidden':'overview';
   if(canvas.dataset.cursor!==mode)canvas.dataset.cursor=mode;
@@ -255,7 +256,7 @@ async function loadWorld(input={}){
     characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
     scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
     settlement?.dispose();settlement=null;refreshCanvasCursor();
-    walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();clockHands?.dispose();
+    walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();clockHands?.dispose();localLighting?.dispose();
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
     model=next;worldRoot=root;railway=nextRailway;trains=railway.trains;detail=nextDetail;
@@ -264,12 +265,14 @@ async function loadWorld(input={}){
     if(model.gameplay)settlement=createSettlementController({canvas,world:model,parent:root,mapParent:mapWorld.root,markerParent:scene,markerMapParent:mapScene,detail,getPlayer:()=>walker,
       onView:()=>{if(walkingMode)leaveWalking();else{enterWalking();walkingInput.requestLook();}},onClaimPointer:()=>view.claimPointer(),reducedMotion});
     walker=createWalkingPlayer(root,model,{getCollisionPlacements:()=>settlement?settlement.getCollisionPlacements():detail.getCollisionPlacements(),
+      getCollisionTrains:()=>settlement?.getCollisionTrains()??[],getCollisionLines:()=>settlement?.railwayLines??model.lines,
       getTerrainMeshes:()=>settlement?settlement.getTerrainMeshes():detail.getTerrainMeshes(),isReadyAt:(x,z)=>detail.hasCoverageAt({x,z},1)});
     walker.resize(innerWidth/innerHeight);
     walkSpawn=walker.prepareSpawn(model.gameplay?.spawn??model.cities[0]??controls.target);
     walkingDetail=createWalkingDetail(root,model);walkingBuffersReady=false;
     characterMarker=createCharacterMarker(scene,mapScene,model);
     clockHands=createClockHands(root,model);
+    localLighting=createLocalLighting(scene,model);
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
@@ -343,7 +346,7 @@ function frame(now){
     const ambientPaused=loopGameplay()?reducedMotion.matches||simulationPaused:paused;
     if(!ambientPaused)time+=dt;
     const dayState=calendarState((now-(daylightStartedAt??now))/1000);
-    daylight.update(dt,time,dayState.elapsedSeconds);nightSky.update();scene.fog.color.copy(scene.background);
+    daylight.update(dt,time,dayState.elapsedSeconds);scene.fog.color.copy(scene.background);
     let stamp=performance.now();
     railway.update(ambientPaused?0:dt);
     trafficCpu=performance.now()-stamp;stamp=performance.now();
@@ -397,6 +400,8 @@ function frame(now){
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
     const renderFocus=groundLayer?walker.renderPosition:view.renderTarget;
+    localLighting.update(dt,{focus:renderFocus,placements:settlement?.placements??detail.placements,
+      revision:settlement?.placementRevision??detail.placementRevision,night:daylight.night,mapBlend:blend});
     clockHands.update(daylight.clockTime,{focus:renderFocus,placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       visible:blend<.999,reducedMotion:reducedMotion.matches});
     detail.updateVisibility(activeCamera,{dt,reveal:shaderReady&&blend<.999,reducedMotion:reducedMotion.matches||entryFrame});
@@ -411,6 +416,7 @@ function frame(now){
     if(life)life.root.visible=blend<.999;
     walkingSunDirection.subVectors(sun.position,sun.target.position).normalize();
     walkingSky.update(activeCamera,{visible:walkingWeight>.001,strength:walkingWeight,night:daylight.night,sunDirection:walkingSunDirection,horizonColor:scene.background});
+    nightSky.update(activeCamera,{walking:walkingWeight>.001});
     mapWorld.update(trains,{visible:blend>.001,camera,viewportHeight:innerHeight,poseBuffer:railway.poseBuffer,dt,reducedMotion:reducedMotion.matches});
     characterMarker.update({position:walker.renderPosition,heading:walker.facingHeading,initialized:walker.initialized,camera:activeCamera,mapBlend:blend,
       walking:walkingMode,walkingWeight,viewportHeight:innerHeight});
@@ -421,6 +427,7 @@ function frame(now){
     canvas.dataset.cameraTransition=String(characterTransition.active);canvas.dataset.walkingWeight=walkingWeight.toFixed(3);
     canvas.dataset.mapBlend=blend.toFixed(3);canvas.dataset.characterVisible=String(walker.initialized&&walker.root.visible);
     canvas.dataset.characterMarker=String(characterMarker.root.visible||characterMarker.mapRoot.visible);
+    canvas.dataset.localLights=String(localLighting.stats.active);
     viewCpu=performance.now()-stamp;stamp=performance.now();
     renderer.info.reset();renderer.shadowMap.enabled=blend<.999;
     compositor.render(scene,mapScene,activeCamera,blend);

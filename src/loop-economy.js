@@ -15,12 +15,12 @@ export function cityResource(world,city,{neutral=false}={}){
 }
 
 /** Player goods are global; gray food belongs to each village. Production is
- * the only automatic source of goods. Trains transfer finite stock and held
- * fares, then deliver their cargo at home; visuals never credit the economy. */
+ * regular source of goods. Trains take finite stock plus one explicit trade
+ * bonus, then deliver their cargo at home; visuals never credit the economy. */
 export function createLoopEconomy(world,{session,railways,networkFactory=createDirectedRailNetwork,trafficFactory=createRailTraffic}={}){
   if(!session?.player||!railways?.snapshot)throw new TypeError('Economy requires a settlement session and railway authority');
   const accounts=new Map(),cities=new Map(),trains=new Map(),production=new Map(),villageStocks=new Map(),events=[],fleet=[];
-  const stats={productionEvents:0,produced:empty(),pickups:empty(),delivered:empty(),deliveries:0,laps:0,goldReserved:0,goldPaid:0,goldRefunded:0,emptyVisits:0,trainsBought:0,trainsLost:0,trainSpent:0,construction:empty()};
+  const stats={productionEvents:0,produced:empty(),withdrawn:empty(),minted:empty(),pickups:empty(),delivered:empty(),deliveries:0,laps:0,goldReserved:0,goldPaid:0,goldRefunded:0,emptyVisits:0,trainsBought:0,trainsLost:0,trainSpent:0,construction:empty()};
   let fleetDirty=false,time=0,simulationTick=0,revision=0,spatialKey=null,railRevision=null,network=null,nextTrain=1,nextEvent=1,nextTick=LOOP_ECONOMY.productionSeconds;
   const traffic=trafficFactory({sample:(train,distance,out)=>train.network.sample(train.loop,train.origin+distance,out),spacing:TRAIN_CAR_SPACING,deceleration:LOOP_ECONOMY.deceleration});
   const games=()=>[session.player,...(session.bots??[]).map(entry=>entry.game)];
@@ -149,14 +149,14 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
     }
     for(const request of requests){
       request.frequency*=Math.min(1,(budgets.get(request.train.ownerId)??0)/Math.max(EPS,ownerDemand.get(request.train.ownerId)??0));
-      demand.set(request.car.cityId,(demand.get(request.car.cityId)??0)+request.frequency*LOOP_ECONOMY.pickup);
+      demand.set(request.car.cityId,(demand.get(request.car.cityId)??0)+request.frequency*LOOP_ECONOMY.pickupStock);
     }
     for(const {train,car,frequency}of requests){
       const city=cities.get(car.cityId),source=production.get(city.neutral?`village:${city.id}`:`owner:${city.ownerId}`);
       const supply=cityStock(city)[city.resource]+(clock().daytime?source?.population??0:0);
       const amount=frequency*Math.min(1,supply/Math.max(EPS,demand.get(city.id)??0));
       if(train.ownerId===ownerId){result[city.resource]+=amount*LOOP_ECONOMY.pickup;result.gold-=amount*LOOP_ECONOMY.pickupGold;}
-      if(city.ownerId===ownerId){result[city.resource]-=amount*LOOP_ECONOMY.pickup;result.gold+=amount*LOOP_ECONOMY.pickupGold;}
+      if(city.ownerId===ownerId){result[city.resource]-=amount*LOOP_ECONOMY.pickupStock;result.gold+=amount*LOOP_ECONOMY.pickupGold;}
     }
     return result;
   }
@@ -201,7 +201,7 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
   function citySnapshot(city){
     syncNetwork();const loops=city.level>=2?network.loops(city.id).map(loopInfo):[];
     const population=production.get(city.neutral?`village:${city.id}`:`owner:${city.ownerId}`)?.population??0;
-    return {...city,stock:copy(cityStock(city)),foodStock:cityStock(city).food,population,productionRate:clock().daytime?population/60:0,rates:ratesFor(city.ownerId),loops,trainCost:loops[0]?.cost??null,hasStation:city.level>=2,
+    return {...city,stock:copy(cityStock(city)),foodStock:cityStock(city).food,resourceStock:cityStock(city).resources,population,productionRate:clock().daytime?population/60:0,rates:ratesFor(city.ownerId),loops,trainCost:loops[0]?.cost??null,hasStation:city.level>=2,
       trains:[...trains.values()].filter(train=>train.homeCityId===city.id).length};
   }
   function buyTrain(cityId,loopId,ownerId){
@@ -239,16 +239,17 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
     for(const index of indices){
       const car=train.cars[index];if(car.cityId===train.homeCityId)continue;
       const city=cities.get(car.cityId),fare=car.reservedGold;
-      const available=city&&cityStock(city)[city.resource]>=LOOP_ECONOMY.pickup;
+      const available=city&&cityStock(city)[city.resource]>=LOOP_ECONOMY.pickupStock;
       const canPay=city&&fare===LOOP_ECONOMY.pickupGold&&whole((balance(city.ownerId)?.gold??NaN)+fare);
-      if(!available||!canPay||!debitCity(city,city.resource,LOOP_ECONOMY.pickup)){
+      if(!available||!canPay||!debitCity(city,city.resource,LOOP_ECONOMY.pickupStock)){
         refund(train,car);stats.emptyVisits++;emit({type:'empty-station',trainId:train.id,ownerId:train.ownerId,cityId:car.cityId,...stationLocation(train,car)});continue;
       }
-      if(!credit(city.ownerId,'gold',fare)){creditCity(city,city.resource,LOOP_ECONOMY.pickup);refund(train,car);continue;}
+      if(!credit(city.ownerId,'gold',fare)){creditCity(city,city.resource,LOOP_ECONOMY.pickupStock);refund(train,car);continue;}
       train.escrow-=fare;car.reservedGold=0;stats.goldPaid+=fare;
       car.resource=city.resource;car.amount=LOOP_ECONOMY.pickup;train.cargo[city.resource]+=car.amount;stats.pickups[city.resource]+=car.amount;
+      stats.withdrawn[city.resource]+=LOOP_ECONOMY.pickupStock;stats.minted[city.resource]+=car.amount-LOOP_ECONOMY.pickupStock;
       emit({type:'pickup',trainId:train.id,ownerId:train.ownerId,cityId:car.cityId,cityOwnerId:city.ownerId,resource:city.resource,
-        amount:car.amount,resources:gains(city.resource,car.amount),...stationLocation(train,car)});
+        amount:car.amount,stockTaken:LOOP_ECONOMY.pickupStock,minted:car.amount-LOOP_ECONOMY.pickupStock,resources:gains(city.resource,car.amount),...stationLocation(train,car)});
       emit({type:'station-payment',trainId:train.id,ownerId:city.ownerId,payerId:train.ownerId,cityId:car.cityId,resource:'gold',amount:fare,
         resources:gains('gold',fare),...stationLocation(train,car)});revision++;
     }

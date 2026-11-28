@@ -6,7 +6,7 @@ import {worldSurface} from './world-model.js';
 import {settlementDoor,planSettlementPath} from './settlement-paths.js';
 import {settlementTreeId} from './settlement-game.js';
 
-export const RESOURCE_WORK=Object.freeze({speed:1.12,workSeconds:3.8,restSeconds:3,amount:1,treeRegrowSeconds:95,searchRadius:38,routeInterval:.12,routeNodes:420,oreNodes:64});
+export const RESOURCE_WORK=Object.freeze({speed:1.02,workSeconds:3.8,restSeconds:3,amount:1,treeRegrowSeconds:95,searchRadius:38,routeInterval:.12,routeNodes:420,oreNodes:64,indoorOffset:.2,doorstepHeight:.14,strideLength:.62});
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z),wrap=value=>Math.atan2(Math.sin(value),Math.cos(value));
 const hash=value=>{let n=2166136261;for(const c of String(value))n=Math.imul(n^c.charCodeAt(0),16777619);return(n>>>0)/4294967296;};
 const idOf=item=>isHarvestableWood(item)?settlementTreeId(item):item.id??`${item.kind}:${item.x}:${item.z}`;
@@ -22,7 +22,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   if(!session?.player)throw new TypeError('Resource work requires a settlement session');
   const settings={...RESOURCE_WORK,...tuning},workers=new Map(),nodes=new Map(),events=[],regrowth=new Map(),claims=new Map(),sources=new Map(),routeCache=new Map(),oreSites=new Set();
   let time=0,revision=0,placementRevision=0,visibilityRevision=0,layoutKey='',layoutRevision=-1,sceneryRevision=-1,removedKey='',dark=false,nextRoute=0,planningCursor=0,completedTrips=0,routeSearches=0,desertsSeeded=false;
-  let scenery=[],buildings=[],paths=[],cityRecords=[],placements=[];
+  let scenery=[],buildings=[],paths=[],cityRecords=[],placements=[],routeObstaclesCache=null,oreVisibilityKey='',membershipRevision=0;
   let knownBlockers=new Set(),blockersInitialized=false;
   const removed=session.shared?.removedTreeIds??new Set();
   const emit=event=>events.push({...event,time});
@@ -35,7 +35,9 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
       if(!session.shared?.isSceneryRemoved?.(item))scenery.push(item);
     }
     buildings=[...session.buildings??[],...village?.houses??[],...village?.buildings??[]];
-    paths=[...session.shared?.getPaths?.()??session.paths??[],...village?.paths??[]];routeCache.clear();
+    paths=[...session.shared?.getPaths?.()??session.paths??[],...village?.paths??[]];routeCache.clear();routeObstaclesCache=null;
+    const visibleOre=placements.filter(item=>!session.shared?.isSceneryRemoved?.(item)).map(item=>item.id).join('|');
+    if(visibleOre!==oreVisibilityKey){oreVisibilityKey=visibleOre;placementRevision++;}
     const fresh=buildings.filter(item=>!knownBlockers.has(idOf(item)));
     if(blockersInitialized&&fresh.length)for(const worker of workers.values())if(['outbound','returning'].includes(worker.activity)&&routeBlocked(worker,fresh)){worker.reroute=true;worker.rerouteWait=0;}
     knownBlockers=new Set(buildings.map(idOf));blockersInitialized=true;
@@ -67,7 +69,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     for(const game of games){const home=game.houses[0],siteId=`owner:${game.ownerId}`;
       if(!home||oreSites.has(siteId)||foundingBiome(game,game.cities[0])!=='desert')continue;
       oreSites.add(siteId);const ore=makeOre({id:siteId,x:home.x,z:home.z,ownerId:game.ownerId,cityId:game.cities[0]?.id},home);
-      placements.push(...ore);if(ore.length)placementRevision++;
+      placements.push(...ore);if(ore.length){placementRevision++;routeObstaclesCache=null;}
     }
     if(desertsSeeded)return;desertsSeeded=true;
     // Sparse world deposits make unclaimed desert useful too. Fixed grid keys
@@ -80,7 +82,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
         if(placements.length>=settings.oreNodes||tested++>=1024)return;
         const id=`ore:desert:${region.id}:${x}:${z}`,point={x:x*24+(hash(`${world.seed}:${id}:x`)-.5)*12,z:z*24+(hash(`${world.seed}:${id}:z`)-.5)*12};
         if(biomeAt(world,point.x,point.z)!=='desert'||placements.some(item=>distance(item,point)<12)||!emptySite(point,1.05))continue;
-        placements.push(oreAt(point,id));placementRevision++;
+        placements.push(oreAt(point,id));placementRevision++;routeObstaclesCache=null;
       }
     }
   }
@@ -99,15 +101,16 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
       for(const home of city.homes){
         const id=`worker:${home.id}`;alive.add(id);let worker=workers.get(id);
         if(worker){worker.cityId=city.id;worker.resource=city.resource;worker.workKind=city.workKind;worker.home=home;continue;}
-        const door=settlementDoor(world,home),seed=hash(`${world.seed}:${id}`);
-        worker={id,houseId:home.id,ownerId:city.ownerId,cityId:city.id,resource:city.resource,workKind:city.workKind,home,...door,y:home.y??0,heading:home.rotation??0,
+        const door=settlementDoor(world,home,dark?settings.indoorOffset:undefined),seed=hash(`${world.seed}:${id}`);
+        worker={id,houseId:home.id,ownerId:city.ownerId,cityId:city.id,resource:city.resource,workKind:city.workKind,home,...door,y:(home.y??0)+(dark?settings.doorstepHeight:0),heading:home.rotation??0,
           speed:settings.speed*(.9+seed*.2),phase:seed*Math.PI*2,idleTime:0,distance:0,moving:false,indoors:dark,
-          activity:dark?'indoors':'waiting',wait:seed*2.5,route:[],routeIndex:0,nodeId:null,carrying:false,trip:0,edge:true};
+          activity:dark?'indoors':'waiting',wait:seed*2.5,route:[],routeIndex:0,nodeId:null,carrying:false,trip:0,edge:true,
+          workTime:0,workCycle:1.25+seed*.2,lookHeading:home.rotation??0};
         workers.set(id,worker);visibilityRevision++;
       }
     }
-    for(const [id,worker]of workers)if(!alive.has(id)){claims.delete(worker.nodeId);workers.delete(id);visibilityRevision++;}
-    revision++;
+    for(const [id,worker]of workers)if(!alive.has(id)){release(worker);workers.delete(id);visibilityRevision++;}
+    revision++;membershipRevision++;
   }
   function nodesFor(worker){
     const city=cityRecords.find(city=>city.id===worker.cityId);if(!city)return[];
@@ -119,8 +122,16 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   function targetFor(node,worker){
     if(node.building){const b=node.building,p=settlementDoor(world,b,Math.max((b.depth??2.2)/2+.55,1.65));return {...p};}
     if(node.gate)return{x:node.x,z:node.z};
-    const angle=Math.atan2(worker.home.x-node.x,worker.home.z-node.z),offset=(node.workKind==='tree'? radius(node)+.38:1.35);
+    const angle=Math.atan2(worker.home.x-node.x,worker.home.z-node.z),offset=(node.workKind==='tree'?.38+Math.min(.12,(node.scale??1)*.1):1.35);
     return{x:node.x+Math.sin(angle)*offset,z:node.z+Math.cos(angle)*offset};
+  }
+  function routeObstacles(){
+    // Citizens can walk beneath a canopy. Cache the small trunk footprints
+    // once per layout revision, without changing world/player collision data.
+    if(!routeObstaclesCache)routeObstaclesCache=[...scenery,...buildings,...placements]
+      .filter(item=>!(isHarvestableWood(item)&&removed.has(idOf(item)))&&!session.shared?.isSceneryRemoved?.(item))
+      .map(item=>item.kind==='tree'?{...item,radius:.14*(item.scale??1)}:item);
+    return routeObstaclesCache;
   }
   function routeTo(worker,node){
     const target=targetFor(node,worker),cacheKey=`${worker.houseId}:${node.id}:${sceneryRevision}`;
@@ -129,20 +140,19 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     // A tiny non-solid destination has its doorway at the work point. The
     // ordinary path planner checks the complete route, not a straight shortcut.
     const fake={id:`work-target:${node.id}`,kind:'work-target',...target,depth:-.84,doorOffset:0,rotation:Math.atan2(worker.home.x-target.x,worker.home.z-target.z)};
-    const obstacles=[...scenery,...buildings,...placements].filter(item=>!(isHarvestableWood(item)&&removed.has(idOf(item))));
-    const route=planSettlementPath(world,worker.home,fake,{placements:obstacles,surfaceAt,removedTreeIds:removed,width:.22,maxNodes:settings.routeNodes});
+    const route=planSettlementPath(world,worker.home,fake,{placements:routeObstacles(),surfaceAt,removedTreeIds:removed,width:.22,maxNodes:settings.routeNodes});
     routeCache.set(cacheKey,route?.points??null);return route?.points??null;
   }
   function release(worker){if(claims.get(worker.nodeId)===worker.id)claims.delete(worker.nodeId);}
   function choose(worker){
-    const candidates=nodesFor(worker).filter(node=>node.workKind!=='tree'||!claims.has(node.id)).sort((a,b)=>distance(worker.home,a)-distance(worker.home,b));
+    const candidates=nodesFor(worker).filter(node=>!claims.has(node.id)).sort((a,b)=>distance(worker.home,a)-distance(worker.home,b));
     // Rotate the first few work sites so every house doesn't stream into the
     // same corner of the same field or crowd a single ore face.
-    const shortlist=candidates.slice(0,9),offset=Math.floor(hash(worker.id)*Math.min(3,shortlist.length));
+    const shortlist=candidates.slice(0,9),offset=Math.floor(hash(`${worker.id}:${worker.trip}:site`)*Math.min(3,shortlist.length));
     for(let i=0;i<Math.min(3,shortlist.length);i++){
       const node=shortlist[(i+offset)%shortlist.length],route=routeTo(worker,node);if(!route)continue;
       nodes.set(node.id,node);worker.nodeId=node.id;worker.route=route;worker.routeIndex=1;worker.activity='outbound';worker.indoors=false;worker.carrying=false;
-      if(node.workKind==='tree')claims.set(node.id,worker.id);visibilityRevision++;return true;
+      claims.set(node.id,worker.id);visibilityRevision++;return true;
     }
     worker.wait=3;return false;
   }
@@ -169,7 +179,7 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     const to=returning?worker.home:{id:`work-target:${node.id}`,kind:'work-target',...target,depth:-.84,doorOffset:0,rotation:heading+Math.PI};
     // One queued replan owns a fixed total node budget. No worker performs a
     // full collision scan every animation frame after construction changes.
-    const obstacles=[...scenery,...buildings,...placements].filter(item=>!(isHarvestableWood(item)&&removed.has(idOf(item)))&&!session.shared?.isSceneryRemoved?.(item));
+    const obstacles=routeObstacles();
     let plan=null;
     for(const offset of [0,Math.PI/2,-Math.PI/2,Math.PI]){
       const from={id:`worker-origin:${worker.id}`,kind:'work-target',x:worker.x,z:worker.z,depth:-.84,doorOffset:0,rotation:heading+offset};
@@ -189,14 +199,26 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
   }
   function arriveHome(worker){
     if(worker.carrying){worker.trip++;completedTrips++;worker.carrying=false;revision++;}
-    release(worker);worker.nodeId=null;worker.route=[];worker.routeIndex=0;worker.activity=dark?'indoors':'waiting';worker.indoors=dark;worker.wait=settings.restSeconds;visibilityRevision++;
+    release(worker);worker.nodeId=null;worker.route=[];worker.routeIndex=0;worker.lookHeading=worker.home.rotation??0;
+    worker.activity='waiting';worker.wait=settings.restSeconds*(.85+hash(`${worker.id}:${worker.trip}:rest`)*.8);
+    if(dark)beginPassage(worker,'entering');visibilityRevision++;
+  }
+  function beginPassage(worker,activity){
+    const entering=activity==='entering',target=settlementDoor(world,worker.home,entering?settings.indoorOffset:undefined);
+    worker.activity=activity;worker.indoors=false;worker.wait=0;worker.reroute=false;
+    worker.route=[{x:worker.x,y:worker.y,z:worker.z},{...target,y:(worker.home.y??0)+(entering?settings.doorstepHeight:.015)}];worker.routeIndex=1;visibilityRevision++;
+  }
+  function finishPassage(worker){
+    const entering=worker.activity==='entering';worker.indoors=entering;worker.activity=entering?'indoors':'waiting';worker.route=[];worker.routeIndex=0;
+    worker.wait=entering?0:.35+hash(`${worker.id}:door`)*.7;worker.lookHeading=worker.home.rotation??0;visibilityRevision++;
   }
   function nodeAvailable(worker){const node=nodes.get(worker.nodeId);return !!node&&!session.shared?.isSceneryRemoved?.(node.farmId??node.id)&&!(worker.workKind==='tree'&&removed.has(node.id));}
   function finishWork(worker){
     const node=nodes.get(worker.nodeId);
     if(!nodeAvailable(worker)){goHome(worker);return;}
     worker.carrying=true;emit({type:'gathered',id:`${worker.id}:${worker.trip+1}:gathered`,ownerId:worker.ownerId,cityId:worker.cityId,workerId:worker.id,nodeId:worker.nodeId,
-      resource:worker.resource,workKind:worker.workKind,cosmetic:true,amount:settings.amount,x:worker.x,y:worker.y,z:worker.z});goHome(worker);
+      resource:worker.resource,workKind:worker.workKind,cosmetic:true,amount:settings.amount,x:worker.x,y:worker.y,z:worker.z});
+    worker.activity='packing';worker.wait=.65+hash(`${worker.id}:${worker.trip}:pack`)*.55;
   }
   function trackTree(tree){if(!isHarvestableWood(tree))return false;const id=idOf(tree);sources.set(id,tree);if(removed.has(id)&&!regrowth.has(id)&&!session.shared?.isSceneryRemoved?.(id))regrowth.set(id,time+settings.treeRegrowSeconds);return true;}
   function updateRegrowth(){
@@ -214,31 +236,51 @@ export function createResourceWork(world,{session,getPlacements=()=>[],surfaceAt
     if(!Number.isFinite(dt)||dt<=0)return;sync();time+=dt;
     const nextDark=dayPhase?dayPhase==='night':night>(dark?.35:.65);
     if(nextDark!==dark){dark=nextDark;for(const worker of workers.values()){
-      if(dark&&['outbound','working'].includes(worker.activity))goHome(worker);
-      else if(dark&&worker.activity==='waiting'){worker.activity='indoors';worker.indoors=true;visibilityRevision++;}
-      else if(!dark&&worker.indoors){worker.activity='waiting';worker.indoors=false;worker.wait=hash(worker.id)*3;visibilityRevision++;}
+      if(dark&&['outbound','inspecting','working','packing'].includes(worker.activity))goHome(worker);
+      else if(dark&&['waiting','leaving'].includes(worker.activity))beginPassage(worker,'entering');
+      else if(!dark&&worker.indoors)worker.wait=.4+hash(`${worker.id}:dawn`)*4;
     }}
     updateRegrowth();
     if(time>=nextRoute){nextRoute=time+settings.routeInterval;const list=[...workers.values()];for(let i=0;i<list.length;i++){
       const index=(planningCursor+i)%list.length,worker=list[index];if(worker.reroute&&worker.rerouteWait<=0){reroute(worker);planningCursor=(index+1)%list.length;break;}if(!dark&&worker.activity==='waiting'&&worker.wait<=0){choose(worker);planningCursor=(index+1)%list.length;break;}
     }}
     for(const worker of workers.values()){
-      worker.idleTime+=dt;worker.moving=false;if(worker.indoors)continue;if(worker.reroute){worker.rerouteWait=Math.max(0,(worker.rerouteWait??0)-dt);continue;}
-      if(worker.activity==='waiting'){worker.wait=Math.max(0,worker.wait-dt);continue;}
-      if(['working','outbound'].includes(worker.activity)&&!nodeAvailable(worker))goHome(worker);
-      if(worker.activity==='working'){worker.wait-=dt;if(worker.wait<=0)finishWork(worker);continue;}
+      worker.idleTime+=dt;worker.moving=false;
+      if(worker.indoors){if(!dark){worker.wait=Math.max(0,worker.wait-dt);if(worker.wait<=0)beginPassage(worker,'leaving');}continue;}
+      if(worker.reroute){worker.rerouteWait=Math.max(0,(worker.rerouteWait??0)-dt);continue;}
+      if(worker.activity==='waiting'){
+        worker.wait=Math.max(0,worker.wait-dt);worker.lookHeading=(worker.home.rotation??0)+Math.sin(worker.idleTime*.55+worker.phase)*.22;
+        worker.heading+=wrap(worker.lookHeading-worker.heading)*(1-Math.exp(-dt*5));continue;
+      }
+      if(['inspecting','working','outbound'].includes(worker.activity)&&!nodeAvailable(worker))goHome(worker);
+      if(['inspecting','working','packing'].includes(worker.activity)){
+        worker.heading+=wrap(worker.lookHeading-worker.heading)*(1-Math.exp(-dt*7));worker.wait-=dt;
+        if(worker.activity==='working')worker.workTime+=dt;
+        if(worker.wait<=0){
+          if(worker.activity==='inspecting'){
+            worker.activity='working';worker.workTime=0;
+            const cycles=Math.max(1,Math.round(settings.workSeconds/worker.workCycle)+(hash(`${worker.id}:${worker.trip}:work`)>.7?1:0));worker.wait=cycles*worker.workCycle;
+          }else if(worker.activity==='working')finishWork(worker);else goHome(worker);
+        }
+        continue;
+      }
       let remaining=worker.speed*dt;
       while(remaining>1e-7&&worker.routeIndex<worker.route.length){const target=worker.route[worker.routeIndex],span=distance(worker,target),advance=Math.min(span,remaining);
         if(span<1e-7){worker.routeIndex++;continue;}
-        worker.heading+=wrap(Math.atan2(target.x-worker.x,target.z-worker.z)-worker.heading)*Math.min(1,dt*10);
-        const t=advance/span;worker.x+=(target.x-worker.x)*t;worker.z+=(target.z-worker.z)*t;worker.y=surfaceAt(worker.x,worker.z).height+.015;
-        worker.moving=true;worker.distance+=advance;worker.phase+=advance*Math.PI*2/.43;remaining-=advance;if(advance>=span-1e-7)worker.routeIndex++;
+        worker.heading+=wrap(Math.atan2(target.x-worker.x,target.z-worker.z)-worker.heading)*(1-Math.exp(-dt*9));
+        const t=advance/span;worker.x+=(target.x-worker.x)*t;worker.z+=(target.z-worker.z)*t;
+        worker.y=['entering','leaving'].includes(worker.activity)?worker.y+(target.y-worker.y)*t:surfaceAt(worker.x,worker.z).height+.015;
+        worker.moving=true;worker.distance+=advance;worker.phase+=advance*Math.PI*2/settings.strideLength;remaining-=advance;if(advance>=span-1e-7)worker.routeIndex++;
       }
-      if(worker.routeIndex>=worker.route.length){if(worker.activity==='outbound'){worker.activity='working';worker.wait=settings.workSeconds;const node=nodes.get(worker.nodeId);if(node)worker.heading=Math.atan2((node.lookX??node.x)-worker.x,(node.lookZ??node.z)-worker.z);}else if(worker.activity==='returning')arriveHome(worker);}
+      if(worker.routeIndex>=worker.route.length){
+        if(worker.activity==='outbound'){worker.activity='inspecting';worker.wait=.6+hash(`${worker.id}:${worker.trip}:inspect`)*.7;const node=nodes.get(worker.nodeId);if(node)worker.lookHeading=Math.atan2((node.lookX??node.x)-worker.x,(node.lookZ??node.z)-worker.z);}
+        else if(worker.activity==='returning')arriveHome(worker);
+        else if(['entering','leaving'].includes(worker.activity))finishPassage(worker);
+      }
     }
   }
   sync();
-  return{update,sync,workers,get residents(){return workers;},get nodes(){return [...nodes.values()];},trackTree,get placements(){return placements.filter(item=>!session.shared?.isSceneryRemoved?.(item));},get placementRevision(){return placementRevision;},get revision(){return revision;},get visibilityRevision(){return visibilityRevision;},get elapsed(){return time;},
+  return{update,sync,workers,get residents(){return workers;},get nodes(){return [...nodes.values()];},trackTree,get placements(){return placements.filter(item=>!session.shared?.isSceneryRemoved?.(item));},get placementRevision(){return placementRevision;},get membershipRevision(){return membershipRevision;},get revision(){return revision;},get visibilityRevision(){return visibilityRevision;},get elapsed(){return time;},
     get stats(){return{workers:workers.size,residents:workers.size,indoors:[...workers.values()].filter(worker=>worker.indoors).length,completedTrips,production:0,routeSearches,regrowing:regrowth.size};},
     snapshot(){return [...workers.values()].map(({home,route,...worker})=>({...worker,route:route.map(point=>({...point}))}));},
     drainEvents(){return events.splice(0);},dispose(){workers.clear();nodes.clear();events.length=0;regrowth.clear();claims.clear();sources.clear();routeCache.clear();oreSites.clear();placements=[];}};

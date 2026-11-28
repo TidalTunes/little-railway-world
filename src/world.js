@@ -2,7 +2,7 @@ import { group, cylinder, ico, consolidate } from './geometry.js';
 import {Float32BufferAttribute} from 'three';
 import { buildTerrain, buildMountains } from './geography.js';
 import { buildRailways } from './railway.js';
-import { house, station, tree, landmark, apartment, civic, plaza, tower, farmPatch, sheep, person, cactus } from './assets.js';
+import { house, station, tree, landmark, apartment, civic, plaza, tower, farmPatch, sheep, cactus } from './assets.js';
 import {naturePatch} from './nature-assets.js';
 import { createPlayerPalette } from './player-palette.js';
 import {extractRigidSurfaceAssets} from './rigid-surface-assets.js';
@@ -50,10 +50,7 @@ export function buildWorld(parent,world,{terrain=true,rigidAssets=null,animatedL
     });
   }
   world.stations.forEach((p,i)=>{
-    const palette=paletteFor(p),s=station(root,{...p,color:WALLS[i%WALLS.length],palette});
-    // These passengers occupy the clear front strip of the reserved platform.
-    person(s,{x:.65,y:.21,z:.83,color:palette?.body??'redLight',rotation:Math.PI});
-    person(s,{x:2.22,y:.21,z:.83,color:palette?.accent??'teal',variant:1});
+    const palette=paletteFor(p);station(root,{...p,color:WALLS[i%WALLS.length],palette});
   });
   if(mutablePlacements)root.traverse(node=>{if(node.isMesh&&!node.geometry.attributes.sceneryIndex){
     node.geometry=node.geometry.clone();node.geometry.setAttribute('sceneryIndex',new Float32BufferAttribute(new Float32Array(node.geometry.attributes.position.count),1));

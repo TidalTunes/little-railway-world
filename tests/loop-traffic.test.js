@@ -79,11 +79,12 @@ function assertConserved(economy,initial){
   const escrow=trains.reduce((sum,train)=>sum+train.escrowGold,0);
   assert.equal(owners.reduce((sum,owner)=>sum+owner.gold,0)+escrow,initial.gold,'all coins are in a wallet or reserved for a trip');
   assert.equal(stats.goldReserved-stats.goldPaid-stats.goldRefunded,escrow);
-  assert.equal(stats.goldPaid,(stats.pickups.resources+stats.pickups.food)*RULES.pickupGold);
+  assert.equal(stats.goldPaid,(stats.withdrawn.resources+stats.withdrawn.food)/RULES.pickupStock*RULES.pickupGold);
   for(const resource of ['resources','food']){
     const aboard=trains.reduce((sum,train)=>sum+train.cargo[resource],0),wallets=owners.reduce((sum,owner)=>sum+owner[resource],0);
     const spent=stats.construction[resource]+(resource==='resources'?stats.trainSpent:0);
-    assert.equal(wallets+aboard+spent,initial[resource]+stats.produced[resource],`traffic cannot duplicate or lose ${resource}`);
+    assert.equal(wallets+aboard+spent,initial[resource]+stats.produced[resource]+stats.minted[resource],`traffic cannot duplicate or lose ${resource}`);
+    assert.equal(stats.pickups[resource],stats.withdrawn[resource]+stats.minted[resource]);
     assert.equal(stats.pickups[resource],stats.delivered[resource]+aboard);
   }
   return snapshot;

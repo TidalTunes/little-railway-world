@@ -77,7 +77,7 @@ test('purchase button and Enter action share explicit selection and affordabilit
     hud.update({...props,selectedLoopId:null});assert.equal(hud.root.hidden,false);assert.equal(nodes.route.hidden,true);assert.equal(nodes.city.hidden,false);assert.equal(hud.buySelected(),false);
     hud.update({...props,resources:{resources:19}});assert.equal(hud.selectedLoopId,loop.id);assert.equal(nodes.buy.disabled,true);assert.equal(nodes.shortfall.hidden,false);assert.equal(nodes.shortfall.textContent,'1 more resources');
     assert.equal(hud.buySelected(),false);nodes.buy.dispatch('click');assert.equal(buys.length,0);
-    hud.update(props);assert.equal(nodes.buy.disabled,false);assert.equal(nodes.shortfall.hidden,true);assert.equal(nodes.cost.textContent,'20');assert.equal(nodes.buy.getAttribute('aria-label'),'Add train · 20 resources. Picks up 1 available Resources or Food per destination and delivers it home. Reserves 1 Gold per lap at departure. Empty stops refund their fare. A train without enough Gold at departure is destroyed.');
+    hud.update(props);assert.equal(nodes.buy.disabled,false);assert.equal(nodes.shortfall.hidden,true);assert.equal(nodes.cost.textContent,'20');assert.equal(nodes.buy.getAttribute('aria-label'),'Add train · 20 resources. Takes 1 Resource or Food per stocked destination; brings 2 home. Reserves 1 Gold per lap at departure. Empty stops refund their fare. A train without enough Gold at departure is destroyed.');
     assert.equal(hud.buySelected(),true);nodes.buy.dispatch('click');assert.deepEqual(buys,[[city.id,loop.id],[city.id,loop.id]]);
     hud.update({...props,selectedLoopId:'removed'});assert.equal(hud.selectedLoopId,null);assert.equal(hud.buySelected(),false);
     const foreign={...city,ownerId:'coral'};hud.update({...props,city:foreign,ownCity:foreign});assert.equal(hud.buySelected(),false);assert.equal(nodes.buy.disabled,true);
@@ -124,7 +124,7 @@ test('route details show finite pickups, flat purchase price and reserved Gold w
   const {hud,nodes,props}=fixture();
   try{
     hud.update(props);assert.doesNotMatch(nodes.buy.title,/bonus|earn|upkeep|debt|per cargo car/i);
-    assert.match(nodes.buy.title,/20 resources/);assert.match(nodes.buy.title,/Picks up 1 available Resources or Food per destination/);
+    assert.match(nodes.buy.title,/20 resources/);assert.match(nodes.buy.title,/Takes 1 Resource or Food per stocked destination; brings 2 home/);
     assert.match(nodes.fare.title,/Reserves 1 Gold per lap/);assert.equal(nodes.departure.textContent,'1 / lap');assert.equal(nodes.status.hidden,true);
     hud.update({...props,selectedLoopId:null});assert.equal(nodes.operation.hidden,true);assert.equal(nodes.city.textContent.trim(),'Resources');
     hud.update({...props,selectedLoopId:null,city:{...city,neutral:true,resource:'food',ownerId:'gray',stock:{food:13}}});assert.match(nodes.city.textContent,/Food.*13/);assert.match(nodes.city.innerHTML,/13 Food available/);

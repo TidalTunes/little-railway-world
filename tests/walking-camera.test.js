@@ -33,13 +33,16 @@ test('steady running has no render-step stalls or world pitch jitter at mismatch
   }
 });
 
-test('small real railway steps preserve exact physical support without pitching the camera',()=>{
+test('continuous railway support removes sleeper bobbing without pitching the camera',()=>{
   const world=flat(),railway=new Group(),line={points:[
     {x:0,y:.42,z:-20,tangent:{x:0,z:1},angle:0},{x:0,y:.42,z:20,tangent:{x:0,z:1},angle:0}],
     distances:[0,40],length:40,bridges:[],tunnels:[]};
   buildRailways(railway,{...world,lines:[line]});railway.updateMatrixWorld(true);
   const meshes=[];railway.traverse(mesh=>{if(mesh.isMesh)meshes.push(mesh);});
-  const player=createWalkingPlayer(new Group(),world,{getTerrainMeshes:()=>meshes});player.enter({x:0,z:-10});
+  let lines=[];const player=createWalkingPlayer(new Group(),world,{getTerrainMeshes:()=>meshes,getCollisionLines:()=>lines});
+  player.enter({x:-3,z:-10},Math.PI/2);lines=[line];
+  for(let frame=0;frame<65;frame++)player.update(1/60,{forward:1});
+  player.update(0,{lookX:-Math.PI/2});
   const direction=new Vector3(),initialDirection=player.camera.getWorldDirection(new Vector3());
   let lastHeight=player.position.y,lastCameraHeight=player.camera.position.y,maxPhysicalStep=0,maxCameraStep=0;
   for(let frame=0;frame<240;frame++){
@@ -52,7 +55,8 @@ test('small real railway steps preserve exact physical support without pitching 
     }
     lastHeight=player.position.y;lastCameraHeight=player.camera.position.y;
   }
-  assert.ok(maxPhysicalStep>.095,'feet still use the real .10-unit sleeper geometry');
+  assert.ok(Math.abs(player.position.y-.455)<1e-8,'feet rest on the rail-height envelope');
+  assert.ok(maxPhysicalStep<1e-8,'sleepers never enter the movement support queries');
   assert.ok(maxCameraStep<.025,'the camera absorbs short steps instead of snapping vertically with the feet');
   player.dispose();for(const geometry of new Set(meshes.map(mesh=>mesh.geometry)))geometry.dispose();
 });

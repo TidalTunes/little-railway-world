@@ -12,8 +12,15 @@ export const RESIDENT_LIMITS=Object.freeze({visible:192,detailRadius:95,walkingR
 /** Shared by the right arm and its tool, so a pick/axe stays in the hand. */
 export function residentWorkSwing(resident,reducedMotion=false){
   if(resident.activity!=='working')return 0;
-  if(reducedMotion)return -.55;
-  return resident.workKind==='ore'?-.7+Math.sin(resident.idleTime*4.8)*.55:-.52+Math.sin(resident.idleTime*4.2)*.27;
+  if(reducedMotion)return -.35;
+  const cycle=resident.workCycle??1.3,time=resident.workTime??resident.idleTime??0,t=((time%cycle)+cycle)%cycle/cycle;
+  const ease=value=>value*value*(3-2*value),lift=resident.workKind==='ore'?-.95:resident.workKind==='food'?-.48:-.75;
+  // A readable lift, one short stroke, then a quiet beat. Every cycle begins
+  // and ends at rest instead of endlessly waving a tool like a pendulum.
+  if(t<.24)return 0;
+  if(t<.58)return lift*ease((t-.24)/.34);
+  if(t<.76)return lift+(-.12-lift)*ease((t-.58)/.18);
+  return -.12*(1-ease((t-.76)/.24));
 }
 const epsilon=1e-5,clamp=(value,a,b)=>Math.max(a,Math.min(b,value));
 const distance=(a,b)=>Math.hypot(b.x-a.x,b.z-a.z);
@@ -373,7 +380,7 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
   for(const mesh of [body,limbs]){mesh.count=0;mesh.frustumCulled=false;mesh.castShadow=mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);root.add(mesh);}
   for(let index=0;index<RESIDENT_LIMITS.visible*4;index++)limbs.setColorAt(index,index%2?palette.body.color:M.metal.color);
   const simulation=externalSimulation??createSettlementResidentSimulation(world),pose=new THREE.Matrix4(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();
-  const selected=[],candidates=[];let selectionAge=Infinity,previousFocus=null,previousRadius=0,rendered=0,visibilityRevision=-1;
+  const selected=[],candidates=[],gaitWeights=new Map();let selectionAge=Infinity,previousFocus=null,previousRadius=0,rendered=0,visibilityRevision=-1;
   function select(focus,radius){candidates.length=0;
     for(const resident of simulation.residents.values())if(resident.edge&&!resident.indoors){const d=surfaceDistance(world,focus,resident);if(d<radius)candidates.push({resident,d});}
     candidates.sort((a,b)=>a.d-b.d);selected.length=0;
@@ -391,15 +398,19 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
     for(const resident of selected){
       if(resident.indoors||unavailableHomes?.has?.(resident.houseId))continue;
       rigidSurfacePoseMatrix(world,resident.x,resident.y+.012,resident.z,resident.heading,pose);body.setMatrixAt(index++,pose);
-      const stride=resident.moving&&!reducedMotion?Math.sin(resident.phase)*.31:0;
+      const previous=gaitWeights.get(resident.id)??0,target=resident.moving?1:0;
+      const weight=reducedMotion?0:previous+(target-previous)*(1-Math.exp(-Math.max(0,dt)*12));
+      if(!gaitWeights.has(resident.id)&&gaitWeights.size>=RESIDENT_LIMITS.visible*2)gaitWeights.delete(gaitWeights.keys().next().value);
+      gaitWeights.set(resident.id,weight);
+      const stride=Math.sin(resident.phase)*.27*weight;
       for(const side of [-1,1]){
         // Pivot each straight leg at the hip; the ankle stays attached and the
         // small pendulum motion has no exaggerated knee lift or body bounce.
         const swing=stride*side;
         part.position.set(side*.055,.32-Math.cos(swing)*.16,-Math.sin(swing)*.16);part.rotation.set(swing,0,0);part.scale.set(.075,.32,.10);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
-        const greeting=resident.activity==='working'?(side===1?residentWorkSwing(resident,reducedMotion):-.12):!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
-        const armSwing=-swing*.65+greeting;
+        const greeting=resident.activity==='working'?(side===1||resident.workKind==='food'?residentWorkSwing(resident,reducedMotion):-.12):!reducedMotion&&resident.activity==='chatting'&&side===1?-.28+Math.sin(resident.idleTime*2.2)*.08:0;
+        const armSwing=resident.carrying?-.72:-swing*.65+greeting;
         part.position.set(side*.143,.53-Math.cos(armSwing)*.105,-Math.sin(armSwing)*.105);part.rotation.set(armSwing,0,side*-.035);part.scale.set(.052,.21,.075);part.updateMatrix();
         matrix.copy(pose).multiply(part.matrix);limbs.setMatrixAt(limbIndex++,matrix);
       }
@@ -409,6 +420,6 @@ export function createSettlementResidents(parent,world,{ownerId=world.gameplay?.
   return {root,body,limbs,sync,update,snapshot:()=>simulation.snapshot(),
     get stats(){return {residents:simulation.residents.size,visible:rendered,edges:simulation.graph?.edges.size??0,revision:simulation.revision,draws:rendered?2:0,...simulation.stats};},
     dispose(){if(!externalSimulation)simulation.dispose();root.removeFromParent();body.dispose();limbs.dispose();body.geometry.dispose();limbs.geometry.dispose();
-      for(const material of template.userData.ownedMaterials??[])material.dispose();limbMaterial.dispose();Object.values(palette).forEach(material=>material.dispose());selected.length=candidates.length=0;},
+      for(const material of template.userData.ownedMaterials??[])material.dispose();limbMaterial.dispose();Object.values(palette).forEach(material=>material.dispose());selected.length=candidates.length=0;gaitWeights.clear();},
   };
 }

@@ -231,8 +231,8 @@ test('finite-economy trains enter the rendered fleet only after admission and ho
   until(states=>states[1].active);assert.equal(art.stats.visible,2);assert.equal(art.stats.detailCars,4);assert.equal(art.stats.mapInstances,2);assert.equal(art.trains[0],firstRecord);
   const records=[...art.trains];economy.drainEvents();
   const stopped=until(states=>states[0].state==='dwell'&&states[0].stopCityId==='farm')[0];
-  const pickups=economy.drainEvents().filter(event=>event.type==='pickup');assert.equal(pickups.length,1);assert.equal(pickups[0].amount,1);
-  assert.equal(stopped.cars[0].amount,0);assert.equal(stopped.cars[1].amount,1);assert.equal(stopped.speed,0);
+  const pickups=economy.drainEvents().filter(event=>event.type==='pickup');assert.equal(pickups.length,1);assert.equal(pickups[0].amount,2);assert.equal(pickups[0].stockTaken,1);assert.equal(pickups[0].minted,1);
+  assert.equal(stopped.cars[0].amount,0);assert.equal(stopped.cars[1].amount,2);assert.equal(stopped.speed,0);
   assert.equal(art.root.getObjectByName('trade-cargo:grain').count,1);assert.equal(art.stats.visible,2,'an admitted train stays visible while loading');
   assert.ok(Math.abs(firstRecord.parts[1].position.x+10)<1e-7);assert.ok(Math.abs(firstRecord.parts[1].position.z)<1e-7);
   const parked=firstRecord.parts.map(part=>part.position.clone());economy.update(.5);art.update(economy.trains,{mapBlend:.5});
@@ -240,7 +240,7 @@ test('finite-economy trains enter the rendered fleet only after admission and ho
   until(states=>states[0].state==='moving'&&states[0].distance>stopped.distance+.1);
   assert.ok(firstRecord.parts[1].position.distanceTo(parked[1])>.05);assert.deepEqual(art.trains,records);
   until(states=>states.every(state=>state.laps>=1));
-  const states=economy.trains;assert.equal(game.food+economy.resourcesAt('gray').food+states.reduce((sum,state)=>sum+state.cargo.food,0),22,'rendering never creates cargo');
+  const states=economy.trains;assert.equal(game.food+economy.resourcesAt('gray').food+states.reduce((sum,state)=>sum+state.cargo.food,0),22+economy.snapshot().stats.minted.food,'only the explicit loading bonus creates cargo; rendering never does');
   assert.equal(game.gold+economy.resourcesAt('gray').gold+states.reduce((sum,state)=>sum+state.escrowGold,0),50,'Gold remains in wallets or held fares');
   for(const [mesh,buffer]of buffers)assert.equal(mesh.instanceMatrix.array,buffer,'station stops reuse all existing GPU buffers');
 });

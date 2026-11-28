@@ -53,7 +53,7 @@ export function simulateStrategy({strategy='food-loop',scenario='near',seconds=9
   const selected=economy.loops('home').find(loop=>loop.cityIds.length===new Set(itinerary).size);
   if(!selected)throw new Error('No complete physical loop in benchmark');
   const purchase=economy.buyTrain('home',selected.id,'teal');if(!purchase.ok)throw new Error(purchase.reason??purchase.code);
-  const timeline=[],populationProduction={resources:0,food:0},paymentByOwner={},pickedByCity={};let firstDelivery=null,firstLap=null,emptyLaps=0,departures=0;
+  const timeline=[],populationProduction={resources:0,food:0},paymentByOwner={},pickedByCity={},withdrawnByCity={};let firstDelivery=null,firstLap=null,emptyLaps=0,departures=0;
   const dt=.25;
   for(let elapsed=0;elapsed<seconds;){
     const step=Math.min(dt,seconds-elapsed);economy.update(step);elapsed+=step;
@@ -65,7 +65,7 @@ export function simulateStrategy({strategy='food-loop',scenario='near',seconds=9
         if(event.resources.resources+event.resources.food>0)firstDelivery??=event.time;else emptyLaps++;
       }
       if(event.type==='departure')departures++;
-      if(event.type==='pickup')pickedByCity[event.cityId]=(pickedByCity[event.cityId]??0)+event.amount;
+      if(event.type==='pickup'){pickedByCity[event.cityId]=(pickedByCity[event.cityId]??0)+event.amount;withdrawnByCity[event.cityId]=(withdrawnByCity[event.cityId]??0)+event.stockTaken;}
       if(event.type==='production')populationProduction[event.resource]+=event.gross??event.amount;
     }
     if(elapsed%300===0){const state=economy.snapshot(),wallet=economy.resourcesAt('teal');timeline.push({minute:elapsed/60,resources:wallet.resources,food:wallet.food,gold:wallet.gold,
@@ -78,7 +78,7 @@ export function simulateStrategy({strategy='food-loop',scenario='near',seconds=9
   const accounting={};
   for(const resource of['resources','food']){
     const wallets=state.owners.reduce((sum,owner)=>sum+owner[resource],0),spent=resource==='resources'?costs.playerRails+costs.otherRails+state.stats.trainSpent:0;
-    accounting[resource]={initial:initial[resource],produced:state.stats.produced[resource],spent,wallets,cargo:aboard[resource],error:wallets+aboard[resource]-initial[resource]-state.stats.produced[resource]+spent};
+    accounting[resource]={initial:initial[resource],produced:state.stats.produced[resource],minted:state.stats.minted[resource],spent,wallets,cargo:aboard[resource],error:wallets+aboard[resource]-initial[resource]-state.stats.produced[resource]-state.stats.minted[resource]+spent};
   }
   const goldWallets=state.owners.reduce((sum,owner)=>sum+owner.gold,0);
   accounting.gold={initial:initial.gold,wallets:goldWallets,escrow:escrowGold,error:goldWallets+escrowGold-initial.gold};
@@ -87,7 +87,7 @@ export function simulateStrategy({strategy='food-loop',scenario='near',seconds=9
     trainState:state.trains[0]?.state??(state.stats.trainsLost?'destroyed':null),trainsLost:state.stats.trainsLost??0,
     populationProduction,delivered:state.stats.delivered,accounting,
     trade:{departures,paid:state.stats.goldPaid,reserved:state.stats.goldReserved,refunded:state.stats.goldRefunded,emptyVisits:state.stats.emptyVisits,emptyLaps,
-      escrowGold,aboard,pickups:state.stats.pickups,paymentByOwner,pickedByCity},
+      escrowGold,aboard,pickups:state.stats.pickups,withdrawn:state.stats.withdrawn,minted:state.stats.minted,paymentByOwner,pickedByCity,withdrawnByCity},
     suppliers:state.cities.filter(city=>city.id!=='home').map(city=>({id:city.id,ownerId:city.ownerId,resources:city.stock.resources,food:city.stock.food,gold:state.owners.find(owner=>owner.ownerId===city.ownerId).gold})),timeline};
 }
 export function runEconomyBenchmarks({seconds=900}={}){

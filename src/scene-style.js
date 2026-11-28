@@ -35,7 +35,7 @@ export function applySceneStyle(material,{kind=material.userData.sceneStyle??'as
     }else if(kind==='window'||kind==='lamp'){
       // A few darker panes keep the towns from becoming uniform light grids.
       finish=`float paneVariation = 0.72 + 0.28 * sin(dot(paintedPosition, vec3(1.7, 0.1, 2.3)));
-        outgoingLight += vec3(1.5, 0.68, 0.16) * worldNight * paneVariation;`;
+        outgoingLight += vec3(0.85, 0.39, 0.12) * worldNight * paneVariation;`;
     }else if(kind==='water'||kind==='surf'){
       finish=`float rippleFootprint = length(fwidth(paintedPosition));
         float rippleVisibility = 1.0 - smoothstep(0.8, 4.0, rippleFootprint);
@@ -69,7 +69,7 @@ export function applySceneStyle(material,{kind=material.userData.sceneStyle??'as
 
 export function createDaylight({scene,mapScene,sky,sun,fill,renderer}){
   const cycle=dayCycleAt(0),solar=solarLightAt(0),direction=new THREE.Vector3(solar.x,solar.y,solar.z);
-  const dayBackground=new THREE.Color(0xb8d5d9),nightBackground=new THREE.Color(0x081626);
+  const dayBackground=new THREE.Color(0xb8d5d9),nightBackground=new THREE.Color(0x050d1a);
   const daySky=new THREE.Color(0xc5e6ef),nightSky=new THREE.Color(0x6786b7);
   const dayGround=new THREE.Color(0x6d806c),nightGround=new THREE.Color(0x243c5e);
   const daySun=new THREE.Color(0xffe2ac),nightSun=new THREE.Color(0xb7d6ff);
@@ -81,10 +81,10 @@ export function createDaylight({scene,mapScene,sky,sun,fill,renderer}){
     styleUniforms.night.value=night;styleUniforms.time.value=time;
     background.copy(dayBackground).lerp(nightBackground,night);
     sky.color.copy(daySky).lerp(nightSky,night);sky.groundColor.copy(dayGround).lerp(nightGround,night);
-    sky.intensity=THREE.MathUtils.lerp(1.55,.70,night);
-    sun.color.copy(daySun).lerp(nightSun,night);sun.intensity=THREE.MathUtils.lerp(3.0,.90,night)*solar.strength;
-    fill.color.copy(dayFill).lerp(nightFill,night);fill.intensity=THREE.MathUtils.lerp(.54,.30,night);
-    renderer.toneMappingExposure=THREE.MathUtils.lerp(1.03,.90,night);
+    sky.intensity=THREE.MathUtils.lerp(1.55,.22,night);
+    sun.color.copy(daySun).lerp(nightSun,night);sun.intensity=THREE.MathUtils.lerp(3.0,.58,night)*solar.strength;
+    fill.color.copy(dayFill).lerp(nightFill,night);fill.intensity=THREE.MathUtils.lerp(.54,.10,night);
+    renderer.toneMappingExposure=THREE.MathUtils.lerp(1.03,.94,night);
     return night;
   }
   update(0,0);

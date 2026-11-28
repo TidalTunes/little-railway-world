@@ -150,10 +150,66 @@ test('cutting and mining tools stay bounded, animate cosmetically, and respect r
   const{world,session}=fixture('metal'),work=createResourceWork(world,{session,surfaceAt:ground}),root=new Group(),art=createResourceWorkArt(root,world,work),worker=[...work.workers.values()][0];
   worker.activity='working';worker.workKind='ore';worker.moving=false;worker.indoors=false;
   art.update(.1,{focus:worker});const tools=root.getObjectByName('worker-hand-tools'),a=new Matrix4(),b=new Matrix4();assert.equal(tools.count,2);tools.getMatrixAt(0,a);
-  worker.idleTime+=.3;art.update(.1,{focus:worker});tools.getMatrixAt(0,b);assert.notDeepEqual(a.elements,b.elements);
-  art.update(.1,{focus:worker,reducedMotion:true});tools.getMatrixAt(0,a);worker.idleTime+=.3;art.update(.1,{focus:worker,reducedMotion:true});tools.getMatrixAt(0,b);assert.deepEqual(a.elements,b.elements);
+  worker.workTime+=.65;art.update(.1,{focus:worker});tools.getMatrixAt(0,b);assert.notDeepEqual(a.elements,b.elements);
+  art.update(.1,{focus:worker,reducedMotion:true});tools.getMatrixAt(0,a);worker.workTime+=.3;art.update(.1,{focus:worker,reducedMotion:true});tools.getMatrixAt(0,b);assert.deepEqual(a.elements,b.elements);
   worker.workKind='tree';art.update(.1,{focus:worker});assert.equal(tools.count,2);worker.workKind='food';art.update(.1,{focus:worker});assert.equal(tools.count,0);
   art.update(.1,{mapBlend:1});assert.equal(tools.visible,false);assert.equal(work.stats.production,0);art.dispose();work.dispose();assert.equal(root.children.length,0);
+});
+
+test('work visits include a grounded inspection, deliberate strokes and packing without crowding a site',()=>{
+  for(const biome of ['wood','metal']){
+    const{world,session,trees}=fixture(biome),work=createResourceWork(world,{session,surfaceAt:ground}),stages=new Set(),treeSnapshot=structuredClone(trees);
+    for(let frame=0;frame<1600;frame++){
+      work.update(.05);const occupied=new Set();
+      for(const worker of work.workers.values()){
+        stages.add(worker.activity);
+        if(['outbound','inspecting','working','packing'].includes(worker.activity)){
+          assert.ok(!occupied.has(worker.nodeId),'a node has only one active visitor');occupied.add(worker.nodeId);
+        }
+        if(['inspecting','working','packing'].includes(worker.activity)){
+          if(worker.activity!=='inspecting')assert.equal(worker.moving,false);assert.equal(worker.y,.015);
+          if(worker.workKind==='tree'){
+            const tree=trees.find(item=>item.id===worker.nodeId),span=Math.hypot(worker.x-tree.x,worker.z-tree.z);
+            assert.ok(span>.3&&span<.6,'the axe reaches a trunk without the body penetrating it');
+          }
+          if(worker.activity==='packing')assert.equal(worker.carrying,true);
+        }
+      }
+      assert.ok(work.drainEvents().every(event=>event.type==='gathered'&&event.cosmetic));
+    }
+    for(const stage of ['inspecting','working','packing','returning','waiting'])assert.ok(stages.has(stage),`${biome} visitor uses ${stage}`);
+    assert.deepEqual(trees,treeSnapshot);assert.equal(work.stats.production,0);assert.equal(session.shared.removedTreeIds.size,0);work.dispose();
+  }
+});
+
+test('workers physically cross their own door at dusk and leave in staggered daylight departures',()=>{
+  const{world,session}=fixture(),work=createResourceWork(world,{session,surfaceAt:ground}),seen=new Set();
+  for(let frame=0;frame<80;frame++){
+    const before=work.snapshot();work.update(.05,{dayPhase:'night'});
+    for(const[index,worker]of [...work.workers.values()].entries()){
+      seen.add(worker.activity);assert.ok(Math.hypot(worker.x-before[index].x,worker.z-before[index].z)<=worker.speed*.05+1e-6);
+      if(worker.activity==='entering'){assert.equal(worker.indoors,false);assert.ok(worker.y>=0&&worker.y<=.14);}
+    }
+  }
+  assert.ok(seen.has('entering'));assert.ok([...work.workers.values()].every(worker=>worker.indoors));
+  for(const worker of work.workers.values()){assert.ok(Math.abs(worker.x-worker.home.x)<1e-6);assert.ok(Math.abs(worker.z-worker.home.z-.2)<1e-6);assert.ok(Math.abs(worker.y-.14)<1e-6);}
+  const departureTimes=new Map();
+  for(let frame=0;frame<160;frame++){
+    const before=work.snapshot();work.update(.05,{dayPhase:'day'});
+    for(const[index,worker]of [...work.workers.values()].entries()){
+      assert.ok(Math.hypot(worker.x-before[index].x,worker.z-before[index].z)<=worker.speed*.05+1e-6);
+      if(worker.activity==='leaving'&&!departureTimes.has(worker.id))departureTimes.set(worker.id,frame);
+    }
+  }
+  assert.equal(departureTimes.size,3);assert.ok(new Set(departureTimes.values()).size>1);assert.equal(work.stats.production,0);work.dispose();
+});
+
+test('static ore art and owner grouping retain their revisions across ordinary animation frames',()=>{
+  const{world,session}=fixture('metal'),work=createResourceWork(world,{session,surfaceAt:ground}),root=new Group(),art=createResourceWorkArt(root,world,work);
+  art.update(.05,{focus:{x:0,z:0}});const rocks=root.getObjectByName('resource-ore-nodes').children[0],buffer=rocks.instanceMatrix.array,version=rocks.instanceMatrix.version,membership=work.membershipRevision;
+  for(let frame=0;frame<100;frame++){work.update(.05);art.update(.05,{focus:{x:0,z:0}});}
+  assert.equal(rocks.instanceMatrix.array,buffer);assert.equal(rocks.instanceMatrix.version,version,'static ore is not uploaded with each animation frame');assert.equal(work.membershipRevision,membership);
+  art.dispose();work.dispose();
 });
 
 test('manually cut cactus regrows at its own source and blocked rail clearings stay cleared',()=>{

@@ -35,6 +35,11 @@ function until(economy,condition,{limit=60,step=STEP}={}){
 }
 const foodTotal=economy=>economy.resourcesAt('teal').food+economy.resourcesAt('gray').food+economy.trains.reduce((sum,train)=>sum+train.cargo.food,0);
 const goldTotal=economy=>economy.resourcesAt('teal').gold+(economy.resourcesAt('gray').gold??0)+economy.trains.reduce((sum,train)=>sum+train.escrowGold,0);
+function assertFoodAccounting(economy,initial){
+  const {stats}=economy.snapshot();
+  close(foodTotal(economy),initial+stats.produced.food+stats.minted.food);
+  assert.equal(stats.pickups.food,stats.withdrawn.food+stats.minted.food);
+}
 
 test('one city corresponds to one car, duplicate station visits are removed, and the home engine never loads cargo',()=>{
   const circuit=loop();circuit.stops.push({...circuit.stops[1],distance:25});circuit.cityIds.push('city-1');
@@ -54,23 +59,23 @@ test('the city-assigned car and pickup align at the station, then the entire tra
   assert.equal(train.speed,0);assert.equal(event.cityId,'city-1');close(train.dwellRemaining,1);
   close(train.carPoses[1].x,station.x);close(train.carPoses[1].z,station.z);close(event.x,station.x);close(event.z,station.z);assert.equal(event.carIndex,1);
   assert.ok(Math.hypot(train.carPoses[0].x-station.x,train.carPoses[0].z-station.z)>2.5);
-  assert.deepEqual(train.cars.map(car=>car.amount),[0,1,0]);assert.equal(economy.city('city-1').stock.food,9);
+  assert.deepEqual(train.cars.map(car=>car.amount),[0,2,0]);assert.equal(event.stockTaken,1);assert.equal(event.minted,1);assert.equal(economy.city('city-1').stock.food,9);
   const arrived=economy.elapsed;economy.update(.9);assert.equal(economy.trains[0].state,'dwell');assert.deepEqual(economy.trains[0].carPoses,train.carPoses);
   until(economy,trains=>trains[0].state==='moving',{limit:1});close(economy.elapsed-arrived,1,STEP+1e-7);
   const departed=economy.trains[0];assert.deepEqual(departed.carPoses,train.carPoses,'departure starts from the aligned platform');
   until(economy,trains=>trains[0].distance>departed.distance+.05,{limit:1});assert.ok(economy.trains[0].speed>0);assert.ok(economy.trains[0].speed<LOOP_ECONOMY.speed,'the train accelerates away');
-  close(foodTotal(economy),32);close(goldTotal(economy),50);
+  assertFoodAccounting(economy,32);close(goldTotal(economy),50);
 });
 
 test('rear-car stops wrapping across home are served in forward order and only remote goods are delivered',()=>{
   const circuit=loop([0,20,39],40),{economy,sample}=fixture(circuit);economy.buyTrain('city-0','loop','teal');
   const plan=createCircuitConsist(circuit,'city-0');close(plan.stops[0].distance,4.2);assert.deepEqual(plan.stops[0].carIndices,[2]);
   const [train]=until(economy,trains=>trains[0].state==='dwell');const station=sample(circuit,39);
-  assert.equal(train.stopCityId,'city-2');assert.equal(train.cars[2].amount,1);close(train.carPoses[2].x,station.x);close(train.carPoses[2].z,station.z);
+  assert.equal(train.stopCityId,'city-2');assert.equal(train.cars[2].amount,2);close(train.carPoses[2].x,station.x);close(train.carPoses[2].z,station.z);
   until(economy,trains=>trains[0].laps===1);
-  assert.equal(economy.trains[0].state,'dwell');assert.equal(economy.resourcesAt('teal').food,14);
+  assert.equal(economy.trains[0].state,'dwell');assert.equal(economy.resourcesAt('teal').food,16);
   const pickups=economy.drainEvents().filter(event=>event.type==='pickup');assert.deepEqual(pickups.map(event=>event.cityId),['city-2','city-1']);
-  assert.ok(economy.trains[0].cars.every(car=>car.amount===0));close(foodTotal(economy),32);close(goldTotal(economy),50);
+  assert.ok(economy.trains[0].cars.every(car=>car.amount===0));assertFoodAccounting(economy,32);close(goldTotal(economy),50);
 });
 
 test('simultaneous home and trailing-car alignments load once at the real return and share one stop',()=>{
@@ -80,7 +85,7 @@ test('simultaneous home and trailing-car alignments load once at the real return
   const [train]=until(economy,trains=>trains[0].laps===1);assert.equal(train.state,'dwell');assert.equal(train.stopCityId,'city-0');close(train.dwellRemaining,1);
   const events=economy.drainEvents(),pickups=events.filter(event=>event.type==='pickup'),deliveries=events.filter(event=>event.type==='delivery');
   assert.equal(pickups.length,1);assert.equal(pickups[0].cityId,'city-1');assert.equal(deliveries.length,1);close(pickups[0].time,deliveries[0].time);
-  assert.equal(economy.resourcesAt('teal').food,13);close(foodTotal(economy),22);close(goldTotal(economy),50);
+  assert.equal(economy.resourcesAt('teal').food,14);assertFoodAccounting(economy,22);close(goldTotal(economy),50);
 });
 
 test('car poses remain continuous through deceleration, station dwell, departure and home wrap',()=>{
@@ -116,7 +121,7 @@ test('new trains queue until the whole earlier consist clears their spawn and go
   assert.equal(queued.escrowGold,0);assert.ok(queued.cars.every(car=>car.amount===0));assert.equal(economy.resourcesAt('teal').gold,48);
   const admitted=until(economy,trains=>trains[1].active);assert.ok(admitted[0].simulationDistance>TRAIN_CAR_SPACING*2,'the first train tail clears the home platform before admission');
   assert.equal(admitted[1].state,'moving');assert.equal(admitted[1].escrowGold,2);
-  until(economy,trains=>trains.every(train=>train.laps>=1));close(foodTotal(economy),32);close(goldTotal(economy),50);
+  until(economy,trains=>trains.every(train=>train.laps>=1));assertFoodAccounting(economy,32);close(goldTotal(economy),50);
   assert.equal(economy.snapshot().stats.trainSpent,40);
 });
 
@@ -124,5 +129,5 @@ test('car-specific stops, finite transfers and queue admission are independent o
   const a=fixture(),b=fixture();for(const item of[a,b]){item.economy.buyTrain('city-0','loop','teal');item.economy.buyTrain('city-0','loop','teal');}
   a.economy.update(75);for(let step=0;step<600;step++)b.economy.update(.125);
   assert.deepEqual(a.economy.snapshot(),b.economy.snapshot());assert.deepEqual(a.economy.drainEvents(),b.economy.drainEvents());
-  assert.ok(a.economy.trains.every(train=>train.laps>0));const produced=a.economy.snapshot().stats.produced.food;close(foodTotal(a.economy),32+produced);close(goldTotal(a.economy),50);
+  assert.ok(a.economy.trains.every(train=>train.laps>0));assertFoodAccounting(a.economy,32);close(goldTotal(a.economy),50);
 });

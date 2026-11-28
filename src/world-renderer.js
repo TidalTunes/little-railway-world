@@ -28,7 +28,7 @@ export function createWorldRenderer(parent,world,{requestChunk,size=192,maxChunk
   const trees=world.gameplay?createMutableTrees(world,{onChange(){residentDirty=true;placementRevision++;lifeSignature='';}}):null;
   const scenery=world.gameplay?createMutableScenery(world,{onChange(){residentDirty=true;placementRevision++;lifeSignature='';}}):null;
   let railwayLines=[];
-  const solidKinds=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
+  const solidKinds=new Set(['house','apartment','civic','tower','landmark','station','plaza','tree','rock','cactus']);
   const nonSolidStyles=new Set(['water','surf','window','lamp']);
   const maxHeight=Math.max(35,...world.mountains.map(m=>m.height));
   const features=[...world.cities,...world.mountains.filter(m=>!m.range),...world.stations];

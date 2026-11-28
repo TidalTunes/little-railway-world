@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import {createCityLevelMarkers,cityMarkerPopulation,cityMarkerFoodStock} from '../src/city-level-markers.js';
+import {createCityLevelMarkers,cityMarkerPopulation,cityMarkerFoodStock,cityMarkerStock} from '../src/city-level-markers.js';
 import {playerColors} from '../src/player-palette.js';
 
 function fixture(){
@@ -128,5 +128,23 @@ test('village food stores appear above the unchanged centered plate and update o
     assert.equal(cityMarkerFoodStock({...village,stock:undefined,foodStock:7}),7);
     assert.equal(cityMarkerFoodStock({neutral:false,resource:'resources',stock:{food:7}}),null);
     assert.equal(cityMarkerFoodStock({...village,stock:{food:NaN}}),null);
+  }finally{markers.dispose();}
+});
+
+
+test('player Resource stock uses the same larger overhead amount and separate atlas content as Food',()=>{
+  const {scene,markers,camera,glyphs,strokes}=fixture();
+  const owned={id:'home',x:0,z:0,level:2,houseCount:6,resource:'resources',stock:{resources:27,food:9}};
+  const village={id:'farm',x:4,z:0,level:2,houseCount:6,neutral:true,stock:{food:27}};
+  try{
+    markers.sync([owned,village]);markers.update({camera});assert.equal(markers.stats.atlasCells,2);
+    assert.deepEqual(strokes.map(x=>x.label),['27','27']);
+    assert.equal(glyphs[2].font,'700 32px system-ui, sans-serif');assert.equal(glyphs[5].font,glyphs[2].font);
+    assert.notEqual(glyphs[2].color,glyphs[5].color);assert.ok(glyphs[2].y<glyphs[1].y);
+    const texture=scene.children[0].material.map,version=texture.version;
+    markers.sync([{...owned,stock:{resources:26,food:9}},village]);assert.ok(texture.version>version);assert.equal(glyphs.at(-4).label,'26');
+    assert.deepEqual(cityMarkerStock({...owned,stock:{resources:0}}),{resource:'resources',amount:0});
+    assert.deepEqual(cityMarkerStock({...owned,stock:undefined,resourceStock:7}),{resource:'resources',amount:7});
+    assert.equal(cityMarkerStock({...owned,stock:{resources:NaN}}),null);
   }finally{markers.dispose();}
 });

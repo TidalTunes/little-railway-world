@@ -6,11 +6,11 @@ import {PERSON_HEIGHT,PERSON_RADIUS} from './person-scale.js';
 import {worldSurface,pointSegmentDistance} from './world-model.js';
 import {polylineTree} from './spatial-index.js';
 import {surfaceQuerySegments} from './surface-query.js';
+import {walkingPlacementShapes,walkingTrainShapes,walkingContact,walkingSlabHeight,walkingRailSegments,walkingRailHeight,walkingRayDistance} from './walking-collision.js';
 import {surfacePoint,surfaceNormal,surfaceFrame,surfaceOffset,surfaceDisplacement,surfaceDistance,surfaceHeading,surfaceChartRadius,chartHeadingForSurface,rigidSurfacePoseMatrix} from './world-surface.js';
 
 export const WALKING=Object.freeze({height:PERSON_HEIGHT,radius:PERSON_RADIUS,speed:2.65,sprintSpeed:4.6,jumpSpeed:4.05,gravity:11.5,
   stepHeight:.32,maxSlope:.78,cameraDistance:2.85,cameraHeight:.50,spawnRailClearance:4.5,fov:54,near:.045,far:140});
-const solids=new Set(['house','apartment','civic','tower','landmark','station','tree','rock','cactus']);
 const tau=Math.PI*2,clamp=THREE.MathUtils.clamp;
 const physicsStep=1/120;
 const swingDuration=TRAVELLER_SWING_DURATION;
@@ -18,7 +18,7 @@ const wrap=angle=>Math.atan2(Math.sin(angle),Math.cos(angle));
 
 /** Render-space rays and physical surface offsets agree with the shared world
  * meshes, including at high latitudes. No input listeners or renderer owned. */
-export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>world.placements??[],getTerrainMeshes=()=>[],isReadyAt=()=>true}={}){
+export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>world.placements??[],getTerrainMeshes=()=>[],getCollisionTrains=()=>[],getCollisionLines=()=>world.lines??[],isReadyAt=()=>true}={}){
   const root=new THREE.Group();root.name='walking-player';root.visible=false;parent.add(root);
   const owner=world.players?.find(player=>player.id===world.gameplay?.ownerId);
   const cap=owner?applySceneStyle(new THREE.MeshStandardMaterial({name:'player-hat',color:playerColors(owner).body,roughness:1,flatShading:true})):null;
@@ -27,11 +27,12 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   const position={x:0,y:0,z:0},previousPosition={x:0,y:0,z:0},renderPosition={x:0,y:0,z:0},velocity={x:0,y:0,z:0},matrix=new THREE.Matrix4(),frame=new THREE.Matrix4(),shadowTilt=new THREE.Matrix4().makeRotationX(-Math.PI/2);
   const up=new THREE.Vector3(),groundPoint=new THREE.Vector3(),target=new THREE.Vector3(),desired=new THREE.Vector3(),direction=new THREE.Vector3();
   const forwardVector=new THREE.Vector3(),rightVector=new THREE.Vector3(),ray=new THREE.Raycaster(),hits=[];ray.firstHitOnly=true;
-  const collisionDelta={},stepPoint={},samplePoint={},renderOrigin={},renderDelta={},groundTarget=new THREE.Vector3();
-  const routeTree=polylineTree(world.lines??[]),railA={},railB={};
+  const contact={},slide={},escape={},stepPoint={},samplePoint={},renderOrigin={},renderDelta={},groundTarget=new THREE.Vector3();
+  let collisionLines=getCollisionLines()??[],routeTree=polylineTree(collisionLines),railSegments=[],railFocus={x:Infinity,z:Infinity};
+  const railA={},railB={};
   const meshCenter=new THREE.Vector3(),meshSphere=new THREE.Sphere();
   let active=false,initialized=false,disposed=false,grounded=true,heading=0,orbit=0,pitch=Math.PI/10,jumpDown=false,gait=0,bodyTurn=0,runBlend=0,poseSpeed=0,swingTime=swingDuration,swingDown=false;
-  let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0,previousFloorHeight=0,renderFloorHeight=0;
+  let meshes=[],meshSource=null,meshFocus={x:Infinity,y:0,z:Infinity},obstacles=[],bodies=[],trainBodies=[],source=null,obstacleFocus={x:Infinity,z:Infinity},accumulator=0,floorHeight=0,previousFloorHeight=0,renderFloorHeight=0;
   let cameraElevation=0,cameraArm=WALKING.cameraDistance;
   const stats={steps:0,swings:0,blocked:0,raycasts:0,obstacles:0,meshes:0,meshSelections:0};
 
@@ -44,6 +45,10 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       // this conservative selection stable while moving within its padding.
       meshes=nextMeshes.filter(mesh=>{
         const geometry=mesh.geometry;if(!geometry)return false;
+        // Terrain triangles retain real cliffs/tunnel walls. Styled props use
+        // explicit bodies, never their decoration, as collision geometry.
+        const style=mesh.material?.userData?.sceneStyle;
+        if(style&&style!=='terrain')return false;
         if(mesh.isInstancedMesh&&!mesh.boundingSphere)mesh.computeBoundingSphere();
         if(!geometry.boundingSphere)geometry.computeBoundingSphere();
         meshSphere.copy(mesh.boundingSphere??geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
@@ -55,46 +60,25 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       source=next;obstacleFocus={x:position.x,z:position.z};
       const all=next.concat((world.stations??[]).map(item=>({...item,kind:'station'}))),seen=new Set();
       obstacles=all.filter(p=>{
-        if(!solids.has(p.kind??(p.width&&p.depth?'station':'')))return false;
+        if(!p||!Number.isFinite(p.x)||!Number.isFinite(p.z))return false;
         const key=p.id??p;if(seen.has(key))return false;seen.add(key);
         return surfaceDistance(world,p,position)<26+(p.radius??4);
-      });stats.obstacles=obstacles.length;
+      });bodies=obstacles.flatMap(item=>walkingPlacementShapes(world,item));stats.obstacles=bodies.filter(body=>!body.support).length;
     }
+    const nextLines=getCollisionLines()??[];
+    const changedLines=nextLines!==collisionLines;
+    if(changedLines){collisionLines=nextLines;routeTree=polylineTree(collisionLines);}
+    if(force||changedLines||surfaceDistance(world,position,railFocus)>2){
+      railFocus={x:position.x,z:position.z};
+      railSegments=walkingRailSegments(world,routeTree,position);
+    }
+    trainBodies=walkingTrainShapes(world,getCollisionTrains(),position);
+    stats.trainBodies=trainBodies.length;
   }
 
   function placementBlocked(point,height=position.y){
-    for(const item of obstacles){
-      const kind=item.kind??'station',scale=item.scale??1;
-      if(height>(item.y??0)+(item.height??(kind==='tree'?2.7:kind==='rock'?.6:kind==='cactus'?2.4:8))*scale)continue;
-      surfaceDisplacement(world,item,point,collisionDelta);
-      let radius;
-      if(kind==='tree')radius=.14*scale;
-      else if(kind==='cactus')radius=.31*scale;
-      else if(kind==='rock')radius=(item.collisionRadius??.59)*scale;
-      else if(kind==='landmark')radius=1.35*scale;
-      if(radius!==undefined){if(Math.hypot(collisionDelta.x,collisionDelta.z)<radius+WALKING.radius)return true;continue;}
-      // Small oriented boxes let the player pass under roof overhangs and along
-      // station platforms, instead of colliding with a whole reserved city lot.
-      const angle=surfaceHeading(world,item.x,item.z,item.rotation??0),ca=Math.cos(angle),sa=Math.sin(angle);
-      let x=collisionDelta.x*ca-collisionDelta.z*sa,z=collisionDelta.x*sa+collisionDelta.z*ca;
-      let w=(((item.variant??0)%4)===1?1.62:1.82)*scale,d=(((item.variant??0)%4)===1?1.9:1.72)*scale;
-      if(item.buildingType){
-        if(item.collisionBoxes){
-          for(const box of item.collisionBoxes){
-            if(Math.abs(x-box.x*scale)<box.width*scale/2+WALKING.radius&&Math.abs(z-box.z*scale)<box.depth*scale/2+WALKING.radius)return true;
-          }
-          continue;
-        }
-        w=(item.collisionWidth??item.width)*scale;d=(item.collisionDepth??item.depth)*scale;
-        z-=(item.collisionOffsetZ??0)*scale;
-      }
-      else if(kind==='station'){x+=1.45*scale;z+=.42*scale;w=2.62*scale;d=1.42*scale;}
-      else if(kind==='apartment'){w=2.52*scale;d=2.48*scale;}
-      else if(kind==='civic'){z+=.15*scale;w=3.35*scale;d=2.72*scale;}
-      else if(kind==='tower'){w=2.32*scale;d=2.48*scale;}
-      if(Math.abs(x)<w/2+WALKING.radius&&Math.abs(z)<d/2+WALKING.radius)return true;
-    }
-    return false;
+    return walkingContact(world,bodies,point,height,WALKING.radius,WALKING.height,contact)
+      ??walkingContact(world,trainBodies,point,height,WALKING.radius,WALKING.height,contact);
   }
 
   function cast(origin,rayDirection,maxDistance){
@@ -105,6 +89,9 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
 
   function groundAt(point,previousHeight=undefined){
     const sampled=worldSurface(world,point.x,point.z);
+    const slab=walkingSlabHeight(world,bodies,point,previousHeight,WALKING.stepHeight),rail=walkingRailHeight(world,railSegments,point,previousHeight,WALKING.stepHeight);
+    const support=Math.max(slab??-Infinity,rail??-Infinity);
+    if(Number.isFinite(support))return {height:support,type:'support',slope:1};
     // Cast only around the feet. A downward ray from the sky would snap a
     // person inside a tunnel onto its mountain, or onto a nearby roof.
     if(previousHeight!==undefined&&meshes.length){
@@ -131,7 +118,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     if(spawn){
       for(const [dx,dz]of [[.24,0],[-.24,0],[0,.24],[0,-.24]]){
         surfaceOffset(world,point.x,point.z,dx,dz,samplePoint);
-        const edge=worldSurface(world,samplePoint.x,samplePoint.z);
+        const edge=groundAt(samplePoint);
         if(['outside','ocean','water'].includes(edge.type)||Math.abs(edge.height-ground.height)>.24*WALKING.maxSlope)return null;
       }
     }
@@ -188,7 +175,7 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   function updateCamera(dt=0,snap=false){
     surfaceFrame(world,renderPosition.x,renderPosition.z,frame);const e=frame.elements;
     up.set(e[4],e[5],e[6]);rightVector.set(e[0],e[1],e[2]);forwardVector.set(e[8],e[9],e[10]);
-    // Feet still follow every curb and sleeper. Only the viewing focus eases
+    // Feet follow continuous supports; only the viewing focus eases
     // those small height changes; camera position and aim share that same focus.
     cameraElevation=snap||dt<=0?renderPosition.y:THREE.MathUtils.lerp(cameraElevation,renderPosition.y,1-Math.exp(-14*dt));
     target.copy(surfacePoint(world,renderPosition.x,cameraElevation+WALKING.cameraHeight,renderPosition.z,groundTarget));
@@ -196,7 +183,8 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
     desired.copy(target).addScaledVector(rightVector,-Math.sin(orbit)*horizontal).addScaledVector(forwardVector,-Math.cos(orbit)*horizontal).addScaledVector(up,Math.sin(pitch)*distance);
     direction.subVectors(desired,target);const length=direction.length();direction.divideScalar(length);
     const hit=cast(target,direction,length+.14);
-    const allowed=hit?Math.max(.32,hit.distance-.18):length;
+    const obstruction=Math.min(hit?.distance??length,walkingRayDistance(bodies,target,direction,length),walkingRayDistance(trainBodies,target,direction,length));
+    const allowed=Math.max(.32,obstruction<length?obstruction-.18:length);
     // Only the obstruction arm changes length. Damping a camera's world
     // position while aiming at an undamped target makes the entire world pitch
     // on every physics step. New obstacles retract immediately; recovery eases.
@@ -241,6 +229,31 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
   function update(dt,input={}){
     if(!active||disposed)return;
     dt=clamp(Number.isFinite(dt)?dt:0,0,.12);refreshScene();
+    // A moving carriage must not engulf a stationary person. Resolve its
+    // simple side envelope once per render frame, before advancing the walk.
+    for(let pass=0;pass<4;pass++){
+      const overlap=walkingContact(world,trainBodies,position,position.y,WALKING.radius,WALKING.height,contact);if(!overlap)break;
+      const body=overlap.body,nx=overlap.x,nz=overlap.z,depth=overlap.depth;
+      let cleared=false;
+      for(let attempt=0;attempt<2&&!cleared;attempt++){
+        let dx=nx*(depth+.002),dz=nz*(depth+.002);
+        if(attempt){
+          // A platform building may occupy the nearest side of the carriage.
+          // Try its opposite flank rather than leaving the person embedded.
+          surfaceDisplacement(world,body.item,position,renderDelta);
+          const localX=renderDelta.x*body.ca-renderDelta.z*body.sa;
+          const offset=-(localX<0?-1:1)*(body.width/2+WALKING.radius+.002)-localX;
+          dx=body.ca*offset;dz=-body.sa*offset;
+        }
+        surfaceOffset(world,position.x,position.z,dx,dz,escape);
+        const floor=groundAt(escape,position.y);
+        if(!isReadyAt(escape.x,escape.z)||['outside','ocean','water'].includes(floor.type)||floor.height>position.y+WALKING.stepHeight
+          ||walkingContact(world,bodies,escape,position.y,WALKING.radius,WALKING.height,slide))continue;
+        position.x=escape.x;position.z=escape.z;previousPosition.x=escape.x;previousPosition.z=escape.z;cleared=true;
+        if(grounded){floorHeight=floor.height;position.y=floor.height+.035;previousPosition.y=position.y;previousFloorHeight=floorHeight;}
+      }
+      if(!cleared)break;
+    }
     orbit=wrap(orbit+(Number.isFinite(input.lookX)?input.lookX:0));
     pitch=clamp(pitch+(Number.isFinite(input.lookY)?input.lookY:0),Math.PI/18,Math.PI*65/180);
     const wantsJump=Boolean(input.jump);if(wantsJump&&!jumpDown&&grounded){velocity.y=WALKING.jumpSpeed;grounded=false;}jumpDown=wantsJump;
@@ -258,12 +271,19 @@ export function createWalkingPlayer(parent,world,{getCollisionPlacements=()=>wor
       const damp=1-Math.exp(-18*step);velocity.x+=(x-velocity.x)*damp;velocity.z+=(z-velocity.z)*damp;
       const dx=velocity.x*step,dz=velocity.z*step;
       if(Math.hypot(dx,dz)>.000001){
-        if(!move(dx,dz,step)){if(Math.abs(dx)>1e-8)move(dx,0,step);if(Math.abs(dz)>1e-8)move(0,dz,step);}
+        if(!move(dx,dz,step)){
+          surfaceOffset(world,position.x,position.z,dx,dz,stepPoint);const collision=placementBlocked(stepPoint);
+          if(collision){
+            const into=Math.min(0,dx*collision.x+dz*collision.z);
+            const sx=dx-into*collision.x,sz=dz-into*collision.z;
+            if(Math.hypot(sx,sz)>1e-8)move(sx,sz,step);
+          }else{if(Math.abs(dx)>1e-8)move(dx,0,step);if(Math.abs(dz)>1e-8)move(0,dz,step);}
+        }
         bodyTurn=Math.atan2(velocity.x,velocity.z);
       }
       if(!grounded){
-        velocity.y-=WALKING.gravity*step;position.y+=velocity.y*step;
-        const floor=groundAt(position,position.y);
+        const previousY=position.y;velocity.y-=WALKING.gravity*step;position.y+=velocity.y*step;
+        const floor=groundAt(position,Math.max(previousY,position.y));
         floorHeight=floor.height;
         if(position.y<=floor.height+.035&&velocity.y<=0){position.y=floor.height+.035;velocity.y=0;grounded=true;}
       }

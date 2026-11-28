@@ -9,12 +9,13 @@ export function cityMarkerPopulation(city){
   return Number.isFinite(value)?Math.max(0,Math.floor(value)):Math.max(0,Math.floor(city?.level??0)*3);
 }
 
-export function cityMarkerFoodStock(city){
-  if(!city?.neutral&&city?.resource!=='food')return null;
-  const value=city.stock?.food??city.foodStock;
-  return Number.isFinite(value)?Math.max(0,Math.floor(value)):null;
+export function cityMarkerStock(city){
+  const resource=city?.neutral||city?.resource==='food'?'food':'resources';
+  const value=city?.stock?.[resource]??(resource==='food'?city?.foodStock:city?.resourceStock);
+  return Number.isFinite(value)?{resource,amount:Math.max(0,Math.floor(value))}:null;
 }
-const cellKey=city=>`${THREE.MathUtils.clamp(Math.floor(city.level),1,5)}:${cityMarkerPopulation(city)}:${cityMarkerFoodStock(city)??''}`;
+export function cityMarkerFoodStock(city){const stock=cityMarkerStock(city);return stock?.resource==='food'?stock.amount:null;}
+const cellKey=city=>{const stock=cityMarkerStock(city);return `${THREE.MathUtils.clamp(Math.floor(city.level),1,5)}:${cityMarkerPopulation(city)}:${stock?.resource??''}:${stock?.amount??''}`;};
 
 /** One cached, content-sized nameplate serves both strategy layers. Narrow
  * populations lose the empty right-hand padding without shrinking the type.
@@ -43,13 +44,14 @@ function statisticsAtlas(owner){
     polygon([[60,39],[72,39],[77,53],[55,53]],'#b8ccc2');
     ctx.textAlign='left';ctx.fillStyle='#f0f0dc';ctx.font='650 30px system-ui, sans-serif';ctx.fillText(population,84,41);
     ctx.restore();
-    if(cell.foodStock!==null){
-      const stock=cell.foodStock>=1000?populationFormat.format(cell.foodStock):String(cell.foodStock);
-      ctx.font='650 28px system-ui, sans-serif';
-      const stockWidth=ctx.measureText(stock).width+29;
+    if(cell.stock!==null){
+      const stock=cell.stock.amount>=1000?populationFormat.format(cell.stock.amount):String(cell.stock.amount);
+      ctx.font='700 32px system-ui, sans-serif';
+      const stockWidth=ctx.measureText(stock).width+36;
       ctx.save();ctx.translate(index%ATLAS_COLUMNS*TILE_WIDTH+(TILE_WIDTH-stockWidth)/2,y+24);
-      // An unboxed wheat-and-stock line sits above the unchanged city plate.
+      // An unboxed resource-and-stock line sits above the unchanged city plate.
       // A narrow dark outline keeps it readable over fields and pale sand.
+      if(cell.stock.resource==='food'){
       polygon([[11,-17],[15,-17],[15,15],[11,15]],'#183c3e');
       polygon([[12,-14],[14,-14],[14,12],[12,12]],'#f3cc70');
       for(const row of [-10,0,10]){
@@ -58,17 +60,28 @@ function statisticsAtlas(owner){
         polygon([[12,row-2],[5,row-5],[4,row-9],[10,row-7]],'#f3cc70');
         polygon([[14,row-2],[21,row-5],[22,row-9],[16,row-7]],'#f3cc70');
       }
-      ctx.textAlign='left';ctx.textBaseline='middle';ctx.lineJoin='round';ctx.lineWidth=4;ctx.strokeStyle='#183c3e';ctx.strokeText(stock,29,0);
-      ctx.fillStyle='#fff1c7';ctx.fillText(stock,29,0);ctx.restore();
+      }else{
+        // The same timber-and-ore silhouette used by the resource ledger.
+        const shifted=points=>points.map(([x,y])=>[x,y-16]);
+        polygon(shifted([[0,9],[16,1],[28,8],[28,12],[32,12],[35,22],[27,32],[12,31],[0,24]]),'#183c3e');
+        polygon(shifted([[2,10],[16,3],[26,9],[26,21],[12,29],[2,23]]),'#98613c');
+        polygon(shifted([[2,10],[16,3],[26,9],[12,17]]),'#d9a66d');
+        polygon(shifted([[2,10],[12,17],[12,29],[2,23]]),'#efc792');
+        polygon(shifted([[18,15],[26,13],[32,22],[26,30],[13,28]]),'#8aabb2');
+        polygon(shifted([[18,15],[26,13],[22,22],[13,28]]),'#d0dfdc');
+        polygon(shifted([[22,22],[32,22],[26,30],[13,28]]),'#547980');
+      }
+      ctx.textAlign='left';ctx.textBaseline='middle';ctx.lineJoin='round';ctx.lineWidth=4;ctx.strokeStyle='#183c3e';ctx.strokeText(stock,36,0);
+      ctx.fillStyle=cell.stock.resource==='food'?'#fff1c7':'#f3dcc0';ctx.fillText(stock,36,0);ctx.restore();
     }
   }
 
   return {texture,grid,
     sync(cities){
       const entries=[],lookup=new Map();
-      for(const city of cities){const level=THREE.MathUtils.clamp(Math.floor(city.level),1,5),population=cityMarkerPopulation(city),foodStock=cityMarkerFoodStock(city),id=cellKey(city);
-        if(!lookup.has(id)){lookup.set(id,entries.length);entries.push({level,population,foodStock});}}
-      const nextKey=entries.map(entry=>`${entry.level}:${entry.population}:${entry.foodStock??''}`).join('|');
+      for(const city of cities){const level=THREE.MathUtils.clamp(Math.floor(city.level),1,5),population=cityMarkerPopulation(city),stock=cityMarkerStock(city),id=cellKey(city);
+        if(!lookup.has(id)){lookup.set(id,entries.length);entries.push({level,population,stock});}}
+      const nextKey=entries.map(entry=>`${entry.level}:${entry.population}:${entry.stock?.resource??''}:${entry.stock?.amount??''}`).join('|');
       if(nextKey!==key){
         key=nextKey;cells=entries.length;const rows=Math.max(1,2**Math.ceil(Math.log2(Math.max(1,Math.ceil(cells/ATLAS_COLUMNS)))));
         // A larger atlas releases the old GPU allocation before reuploading.
@@ -92,7 +105,7 @@ export function createCityLevelMarkers(scene,mapScene,world,{ownerId=world.gamep
         float cityAtlasCell = cityMarkerIndex;
         vMapUv = (vMapUv + vec2(mod(cityAtlasCell, cityAtlasGrid.x), cityAtlasGrid.y - 1.0 - floor(cityAtlasCell / cityAtlasGrid.x))) / cityAtlasGrid;`);
     };
-    material.customProgramCacheKey=()=> 'city-level-population-stock-v5';return material;
+    material.customProgramCacheKey=()=> 'city-level-population-stock-v6';return material;
   }
   const material=markerMaterial();
   let cities=[],slots=[],capacity=0,geometry,overview,map;

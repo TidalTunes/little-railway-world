@@ -59,14 +59,17 @@ test('island loop rivals buy complete directed railway circuits through real phy
   }
   assert.ok(railwayCost>0);assert.ok(result.stats.trainSpent>=loopTrainCost(2));
   assert.ok(result.stats.goldPaid>0,'rivals pay suppliers for actual goods');
-  assert.equal(result.stats.goldPaid,(result.stats.pickups.resources+result.stats.pickups.food)*LOOP_ECONOMY_RULES.pickupGold);
+  assert.equal(result.stats.goldPaid,(result.stats.withdrawn.resources+result.stats.withdrawn.food)/LOOP_ECONOMY_RULES.pickupStock*LOOP_ECONOMY_RULES.pickupGold);
   assert.equal(result.stats.goldReserved-result.stats.goldPaid-result.stats.goldRefunded,escrowGold,'reserved fares are spent, refunded, or remain aboard');
   assert.equal(result.owners.reduce((sum,owner)=>sum+owner.gold,0)+escrowGold,games.length*LOOP_ECONOMY_RULES.startGold,'trading conserves every opening coin across players, villages and trains');
-  for(const resource of ['resources','food'])assert.equal(result.stats.pickups[resource],result.stats.delivered[resource]+aboard[resource],'transport never mints or loses a resource');
+  for(const resource of ['resources','food']){
+    assert.equal(result.stats.pickups[resource],result.stats.delivered[resource]+aboard[resource],'loaded goods are delivered or remain aboard');
+    assert.equal(result.stats.pickups[resource],result.stats.withdrawn[resource]+result.stats.minted[resource],'only the explicit loading bonus creates resources');
+  }
   const villages=result.cities.filter(city=>city.neutral),foodStock=villages.reduce((sum,city)=>sum+city.foodStock,0);
-  assert.equal(foodStock,result.stats.produced.food-result.stats.pickups.food,'each village supplies only food that was actually harvested');
+  assert.equal(foodStock,result.stats.produced.food-result.stats.withdrawn.food,'each village supplies only food that was actually harvested');
   assert.equal(result.owners.filter(owner=>owner.neutral).reduce((sum,owner)=>sum+owner.food,0),foodStock,'neutral wallet summaries do not duplicate village stock');
-  assert.equal(result.owners.reduce((sum,owner)=>sum+owner.food,0)+aboard.food,games.length*LOOP_ECONOMY_RULES.startFood+result.stats.produced.food-result.stats.construction.food,'all Food is in a wallet, aboard, or consumed by construction');
+  assert.equal(result.owners.reduce((sum,owner)=>sum+owner.food,0)+aboard.food,games.length*LOOP_ECONOMY_RULES.startFood+result.stats.produced.food+result.stats.minted.food-result.stats.construction.food,'all Food is in a wallet, aboard, or consumed by construction');
   assert.ok(result.owners.some(owner=>owner.neutral&&owner.gold>0),'farm villages retain the coins paid for their Food');
   for(const owner of result.owners){
     assert.ok(Number.isSafeInteger(owner.gold)&&owner.gold>=0);assert.ok(owner.resources>=0&&owner.food>=0);

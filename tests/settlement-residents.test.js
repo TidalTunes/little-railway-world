@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Group,Vector3,Matrix4,Color} from 'three';
-import {createSettlementResidentSimulation,createSettlementResidents,buildResidentPathGraph,RESIDENT_LIMITS} from '../src/settlement-residents.js';
+import {createSettlementResidentSimulation,createSettlementResidents,buildResidentPathGraph,residentWorkSwing,RESIDENT_LIMITS} from '../src/settlement-residents.js';
 import {PERSON_HEIGHT} from '../src/person-scale.js';
 import {M} from '../src/palette.js';
 import {createSettlementGame} from '../src/settlement-game.js';
@@ -11,6 +11,16 @@ import {generateWorld} from '../src/world-model.js';
 
 const world={seed:'citizens-test',players:[{id:'owner',color:{l:.61,c:.14,h:170}}],gameplay:{ownerId:'owner'}};
 const point=(x,z,y=.015)=>({x,y,z});
+test('simple work strokes rest between actions, join continuously and remain still under reduced motion',()=>{
+  for(const workKind of ['tree','ore','food']){
+    const worker={activity:'working',workKind,workCycle:1.4,workTime:0};
+    assert.equal(residentWorkSwing(worker),0);worker.workTime=.15;assert.equal(residentWorkSwing(worker),0);
+    worker.workTime=.8;assert.ok(residentWorkSwing(worker)<-.3);
+    worker.workTime=1.4-1e-6;const end=residentWorkSwing(worker);worker.workTime=1.4+1e-6;assert.ok(Math.abs(residentWorkSwing(worker)-end)<1e-6);
+    const still=residentWorkSwing(worker,true);worker.workTime=.8;assert.equal(residentWorkSwing(worker,true),still);
+    worker.activity='waiting';assert.equal(residentWorkSwing(worker),0);
+  }
+});
 function town(){
   const houses=[{id:'home-a',x:-5,y:0,z:0,rotation:0},{id:'home-b',x:5,y:0,z:0,rotation:0},{id:'home-c',x:0,y:0,z:5,rotation:Math.PI}];
   const cities=[{id:'city:home-a',houseIds:houses.map(home=>home.id),houseCount:3,level:1}];

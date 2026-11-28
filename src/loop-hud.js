@@ -43,7 +43,7 @@ export function createLoopHud({parent,world,ownerId,onBuyTrain,onCycle,onClose,d
     nodes.route.hidden=!selected;nodes.operation.hidden=!selected;nodes.city.hidden=!!selected;nodes.shortfall.hidden=!selected||!shortfall;
     if(selected){
       nodes.buy.disabled=!canBuy;write(nodes.cost,state.cost);
-      const yieldDescription=`Picks up ${LOOP_ECONOMY_RULES.pickup} available Resources or Food per destination and delivers it home.`;
+      const yieldDescription=`Takes ${LOOP_ECONOMY_RULES.pickupStock} Resource or Food per stocked destination; brings ${LOOP_ECONOMY_RULES.pickup} home.`;
       const fareDescription=`Reserves ${state.departureGold} Gold per lap at departure. Empty stops refund their fare. A train without enough Gold at departure is destroyed.`;
       nodes.buy.setAttribute('aria-label',`Add train · ${state.cost} resources. ${yieldDescription} ${fareDescription}`);nodes.buy.title=`Add train · ${state.cost} resources · Enter. ${yieldDescription} ${fareDescription}`;
       write(nodes.departure,`${state.departureGold} / lap`);nodes.fare.title=fareDescription;nodes.fare.setAttribute('aria-label',fareDescription);

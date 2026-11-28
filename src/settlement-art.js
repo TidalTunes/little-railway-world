@@ -91,7 +91,7 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
 
     }
   }
-  const treeRing=new THREE.Mesh(new THREE.RingGeometry(.26,.32,28),new THREE.MeshBasicMaterial({color:0xffdf96,side:THREE.DoubleSide,depthWrite:false}));
+  const treeRing=new THREE.Mesh(new THREE.RingGeometry(.26,.32,28),new THREE.MeshBasicMaterial({color:0xffdf96,side:THREE.DoubleSide,transparent:true,depthWrite:false}));
   treeRing.rotation.x=-Math.PI/2;treeRing.renderOrder=8;treeRing.visible=false;root.add(treeRing);
   const markerGeometry=new THREE.CircleGeometry(1,5);markerGeometry.rotateX(-Math.PI/2);markerGeometry.rotateY(Math.PI);
   const markerMaterial=new THREE.MeshBasicMaterial({color:playerColors(owner).body,depthWrite:false});
@@ -143,9 +143,9 @@ export function createSettlementArt(parent,mapParent,world,{ownerId=world.gamepl
     construction.finishSync();root.updateMatrixWorld(true);
   }
   return{root,mapRoot,sync,construction,get meshes(){return [...batches,...civicBatches].filter(batch=>batch.count>0&&batch.material.userData.sceneStyle!=='window');},get revision(){return revision;},
-    preview(result,{visible=false,targetTree=null}={}){
+    preview(result,{visible=false,targetTree=null,harvestProgress=1}={}){
       ghost.visible=mapGhost.visible=visible&&!!result?.house;link.visible=mapLink.visible=false;treeRing.visible=!visible&&!!targetTree;
-      if(treeRing.visible){treeRing.position.set(targetTree.x,(targetTree.y??0)+.025,targetTree.z);treeRing.scale.setScalar(Math.max(1,(targetTree.scale??1)*1.15));}
+      if(treeRing.visible){treeRing.position.set(targetTree.x,(targetTree.y??0)+.025,targetTree.z);treeRing.scale.setScalar(Math.max(1,(targetTree.scale??1)*1.15));treeRing.material.opacity=.25+.55*THREE.MathUtils.clamp(harvestProgress,0,1);}
       if(!ghost.visible)return;
       const item=result.house;
       ghost.position.set(item.x,item.y??0,item.z);ghost.rotation.y=item.rotation??0;

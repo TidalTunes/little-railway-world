@@ -70,6 +70,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   let cities=[],clusters=[],economy=null,establishedCity=false;
   let logs=loopEconomy?LOOP.startResources:economic?12:0,food=loopEconomy?LOOP.startFood:0,gold=loopEconomy?LOOP.startGold:economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
+  let miningCooldown=0;
 
   // Dispersed early outposts must still be able to form their first depot.
   // Requiring tools before any city exists would make them unobtainable.
@@ -294,23 +295,31 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const treeId=settlementTreeId(tree);
     if(removed.has(treeId))return {ok:false,code:'already-chopped'};
     if(player&&(!finitePoint(player)||surfaceDistance(world,player,tree)>SETTLEMENT.chopReach))return {ok:false,code:'out-of-reach'};
-    const gained=treeLogYield(world.seed,tree,economic);
+    const gained=loopEconomy?LOOP.chopResources:treeLogYield(world.seed,tree,economic);
     if(!Number.isSafeInteger(logs+gained))return {ok:false,code:'resource-overflow'};
     const credit=creditResources(gained);if(!credit.ok)return {ok:false,code:'resource-overflow'};
     removed.add(treeId);spatialRevision++;
     return {ok:true,treeId,logs:gained,amount:gained,resource:loopEconomy?'resources':'timber',totalLogs:logs};
   }
 
-  // Ore is a persistent work site. A successful player swing awards one unit
+  // Time advances once per simulation frame, never once per click or target.
+  // This per-owner cooldown also survives aim changes and cloned ore records.
+  function updateHarvesting(dt){
+    if(Number.isFinite(dt)&&dt>0)miningCooldown=Math.max(0,miningCooldown-dt);
+  }
+
+  // Ore is persistent: one successful strike per work interval awards one unit
   // without invalidating scenery, worker routes, or the city's production clock.
   function mine(ore,{player}={}){
     if(!loopEconomy||!isMineableOre(ore)||!finitePoint(ore))return {ok:false,code:'not-ore'};
     if(sceneryRemoved(ore))return {ok:false,code:'deposit-cleared'};
     if(!finitePoint(player)||surfaceDistance(world,player,ore)>SETTLEMENT.mineReach
       ||Number.isFinite(player.y)&&Math.abs(player.y-(ore.y??0))>1.2)return {ok:false,code:'out-of-reach'};
+    if(miningCooldown>1e-9)return {ok:false,code:'mining-cooldown',remainingSeconds:miningCooldown,reason:'Mining…'};
     if(!Number.isSafeInteger(logs+1))return {ok:false,code:'resource-overflow'};
     const credit=creditResources(1);if(!credit.ok)return {ok:false,code:'resource-overflow'};
-    return {ok:true,oreId:ore.id,resource:'resources',amount:1,totalLogs:logs};
+    miningCooldown=LOOP.miningSeconds;
+    return {ok:true,oreId:ore.id,resource:'resources',amount:1,totalLogs:logs,cooldown:LOOP.miningSeconds};
   }
 
   /** Residents never enter this calculation. Only owned homes belonging to a
@@ -368,6 +377,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
     snapshot(){return {logs,food,gold,...(!loopEconomy&&{lastIncomeDay}),revision,spatialRevision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
-    evaluateBuild,build,chop,mine,develop,settleIncome,spendGold,spendLogs,addLogs,spendResources,creditResources,spendFood,addFood,creditGold,setEconomy,resourcesAt,
+    get miningCooldown(){return miningCooldown;},get miningProgress(){return 1-miningCooldown/LOOP.miningSeconds;},
+    evaluateBuild,build,chop,mine,updateHarvesting,develop,settleIncome,spendGold,spendLogs,addLogs,spendResources,creditResources,spendFood,addFood,creditGold,setEconomy,resourcesAt,
   };
 }

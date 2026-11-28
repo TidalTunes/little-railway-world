@@ -20,15 +20,18 @@ export function createResourceWorkArt(parent,world,work){
   const tools=new THREE.InstancedMesh(toolGeometry,toolMaterial,192*2);tools.name='worker-hand-tools';tools.count=0;tools.frustumCulled=false;tools.castShadow=true;parent.add(tools);
   const handleColor=new THREE.Color(0x775331),headColor=new THREE.Color(0x81969a);
   for(let i=0;i<192;i++){tools.setColorAt(i*2,handleColor);tools.setColorAt(i*2+1,headColor);}
-  const pose=new THREE.Matrix4(),toolPose=new THREE.Matrix4(),toolPivot=new THREE.Object3D(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();let oreSignature='';
+  const pose=new THREE.Matrix4(),toolPose=new THREE.Matrix4(),toolPivot=new THREE.Object3D(),part=new THREE.Object3D(),matrix=new THREE.Matrix4();let oreRevision=-1,membershipRevision=-1;
   function sync(){
-    for(const worker of work.workers.values())if(!groups.has(worker.ownerId)){
-      const selected=new Map();
-      const simulation={residents:selected,sync(){},snapshot:()=>[...selected.values()],get revision(){return work.revision;},get visibilityRevision(){return work.visibilityRevision;},get stats(){return{indoors:[...selected.values()].filter(worker=>worker.indoors).length};}};
-      const art=createSettlementResidents(parent,world,{ownerId:worker.ownerId,simulation});groups.set(worker.ownerId,{selected,art});
+    if(membershipRevision!==(work.membershipRevision??work.revision)){
+      membershipRevision=work.membershipRevision??work.revision;
+      for(const worker of work.workers.values())if(!groups.has(worker.ownerId)){
+        const selected=new Map();
+        const simulation={residents:selected,sync(){},snapshot:()=>[...selected.values()],get revision(){return work.revision;},get visibilityRevision(){return work.visibilityRevision;},get stats(){return{indoors:[...selected.values()].filter(worker=>worker.indoors).length};}};
+        const art=createSettlementResidents(parent,world,{ownerId:worker.ownerId,simulation});groups.set(worker.ownerId,{selected,art});
+      }
+      for(const {selected}of groups.values())selected.clear();for(const worker of work.workers.values())groups.get(worker.ownerId).selected.set(worker.id,worker);
     }
-    for(const {selected}of groups.values())selected.clear();for(const worker of work.workers.values())groups.get(worker.ownerId).selected.set(worker.id,worker);
-    const signature=work.placements.map(item=>item.id).join('|');if(signature===oreSignature)return;oreSignature=signature;
+    if(oreRevision===work.placementRevision)return;oreRevision=work.placementRevision;
     let index=0,veinIndex=0;
     for(const item of work.placements.slice(0,Math.floor(capacity/3))){
       rigidSurfacePoseMatrix(world,item.x,item.y,item.z,item.rotation,pose);
@@ -47,7 +50,7 @@ export function createResourceWorkArt(parent,world,work){
       rigidSurfacePoseMatrix(world,worker.x,worker.y+.012,worker.z,worker.heading,pose);
       if(worker.carrying&&count<192){part.position.set(0,.43,.19);part.rotation.set(0,0,0);part.scale.set(1,1,1);part.updateMatrix();matrix.copy(pose).multiply(part.matrix);cargo.setMatrixAt(count,matrix);cargo.setColorAt(count++,cargoColors[worker.workKind]??cargoColors.tree);}
       if(worker.activity==='working'&&['tree','ore'].includes(worker.workKind)&&toolCount<192*2){
-        const swing=residentWorkSwing(worker,options.reducedMotion);toolPivot.position.set(.143,.53-Math.cos(swing)*.21,-Math.sin(swing)*.21);toolPivot.rotation.set(swing,0,-.035);toolPivot.scale.set(1,1,1);toolPivot.updateMatrix();toolPose.copy(pose).multiply(toolPivot.matrix);
+        const swing=residentWorkSwing(worker,options.reducedMotion);toolPivot.position.set(.143,.53-Math.cos(swing)*.21,-Math.sin(swing)*.21);toolPivot.rotation.set(swing+1.2,0,-.035);toolPivot.scale.set(1,1,1);toolPivot.updateMatrix();toolPose.copy(pose).multiply(toolPivot.matrix);
         part.position.set(0,.12,0);part.rotation.set(0,0,0);part.scale.set(.032,.36,.032);part.updateMatrix();matrix.copy(toolPose).multiply(part.matrix);tools.setMatrixAt(toolCount++,matrix);
         part.position.set(worker.workKind==='ore'?0:.045,.27,0);part.scale.set(worker.workKind==='ore'?.25:.13,worker.workKind==='ore'?.045:.12,.04);part.updateMatrix();matrix.copy(toolPose).multiply(part.matrix);tools.setMatrixAt(toolCount++,matrix);
       }
