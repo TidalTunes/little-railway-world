@@ -20,6 +20,7 @@ for(const [kind,create,projectile]of variants){
   test(`${kind} is grounded, person-scaled and made from reusable caller-owned paint`,t=>{
     const {art,palette}=fixture(t,create),geometry=new Set(),materials=new Set();let meshes=0;
     art.root.traverse(node=>{if(!node.isMesh)return;meshes++;geometry.add(node.geometry);materials.add(node.material);assert.equal(node.castShadow,true);assert.equal(node.receiveShadow,true);});
+    art.pose({elevation:0}); // Inspect the neutral carriage, before howitzer elevation.
     const bounds=new THREE.Box3().setFromObject(art.root,true),size=bounds.getSize(new THREE.Vector3());
     assert.equal(art.root.userData.kind,kind);assert.equal(art.muzzle.userData.projectile,projectile);
     assert.ok(Math.abs(bounds.min.y)<.002,`${kind} contacts the ground at zero: ${bounds.min.y}`);
@@ -91,4 +92,11 @@ test('artillery shield and carriage remain above the tire crown throughout aim a
     art.pose({aimYaw,attack});art.root.updateMatrixWorld(true);
     assert.ok(new THREE.Box3().setFromObject(shield,true).min.y>.72,'shield never cuts through either wheel');
   }
+});
+
+test('artillery rests as a raised howitzer while explicit zero remains available to bake neutral clips',t=>{
+  const{art}=fixture(t,createArtilleryArt);const resting=muzzlePose(art);
+  assert.ok(resting.direction.y>.5&&resting.point.y>1.7);
+  art.pose({elevation:1.2});assert.ok(muzzlePose(art).direction.y>.9);
+  art.pose({elevation:0});assert.deepEqual(muzzlePose(art).direction.toArray(),[0,0,1]);
 });

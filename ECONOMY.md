@@ -62,7 +62,7 @@ Military purchases consume the same owner-wide Resources and Food used by constr
 | Artillery / 3 | 20 Resources | 12 | 8 | 3.5 s | 24 | 3.8 |
 | Helicopter / 4 | 20 Resources | 18 | 2 | 0.45 s | 15 | 0.65 |
 
-Blast damage falls with distance and never hurts friendly units. Artillery has a three-unit minimum range. Ground-target accuracy is 76%, 97%, 82% and 90% respectively; against helicopters it is 20%, 72%, 8% and 90%. Projectiles resolve after their travel animation, so moving out of a blast can avoid damage. Helicopters hold a five-unit clearance above the terrain and can cross water.
+Blast damage falls with distance and never hurts friendly units. Tanks have a 4.5-unit minimum range and limited gun depression; artillery has a three-unit minimum range. Aiming and chassis turn limits can delay firing beyond the attack interval. Ground-target accuracy is 76%, 97%, 82% and 90% respectively; against helicopters it is 20%, 72%, 8% and 90%. Projectiles resolve after their travel animation, so moving out of a blast can avoid damage. Helicopters hold a five-unit clearance above the terrain and can cross water.
 
 Recruitment checks affordability and a clear random spawn before spending. A failed purchase leaves both balances intact. The spawn band extends seven units beyond the city or outpost footprint. Friendly military units inside their own outer spawn boundary take half damage, including units inside the inner city circle. Combat has no effect on houses, population, production, railways, villagers or the traveller. Only military units are attack targets.
 

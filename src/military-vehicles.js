@@ -129,7 +129,7 @@ export function createTankArt(parent,{palette}={}){
     if(b.disposed)return;
     const motion=clamp(moving,0,1),phase=cyclePhase(time),recoil=recoilAt(attack);
     hull.position.y=Math.sin(phase*2)*.006*motion;hull.position.z=-.025*recoil;
-    hull.rotation.x=.015*recoil;turret.rotation.y=finite(aimYaw);pitch.rotation.x=-clamp(elevation,-.12,.65);barrel.position.z=-.15*recoil;
+    hull.rotation.x=.015*recoil;turret.rotation.y=finite(aimYaw);pitch.rotation.x=-clamp(elevation,-.22,.65);barrel.position.z=-.15*recoil;
     for(const wheel of wheels)wheel.rotation.x=motion>0?phase*2:0;
   }
   pose();return{root,muzzle,pose,dispose:b.dispose};
@@ -180,11 +180,11 @@ export function createArtilleryArt(parent,{palette}={}){
   const muzzle=group('artillery-muzzle',barrel,0,0,1.233);muzzle.userData.projectile='arc';
   round(aim,'artillery-adjustment-wheel','dark',-.36,.04,-.24,.115,.045,'x');
   box(aim,'artillery-crank','trim',-.398,.11,-.24,.033,.035,.12);
-  function pose({time=0,moving=0,attack=0,aimYaw=0,elevation=0}={}){
+  function pose({time=0,moving=0,attack=0,aimYaw=0,elevation=.55}={}){
     if(b.disposed)return;
     const recoil=recoilAt(attack),phase=cyclePhase(time),motion=clamp(moving,0,1);
     carriage.position.z=-.065*recoil;carriage.scale.y=1-.018*recoil;
-    aim.rotation.y=finite(aimYaw);pitch.rotation.x=-clamp(elevation,-.08,1.0);barrel.position.z=-.20*recoil;
+    aim.rotation.y=finite(aimYaw);pitch.rotation.x=-clamp(elevation,-.08,1.3);barrel.position.z=-.20*recoil;
     for(const wheel of wheels)wheel.rotation.x=motion>0?phase:0;
   }
   pose();return{root,muzzle,pose,dispose:b.dispose};

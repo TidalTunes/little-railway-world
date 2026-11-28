@@ -61,7 +61,7 @@ for(const[kind,create,projectile]of variants){
       art.pose(pose);art.root.updateMatrixWorld(true);art.root.traverse(node=>assert.ok(node.matrixWorld.elements.every(Number.isFinite)));assert.deepEqual(transforms(art.root)[0],placement);
     }
     const after=[];art.root.traverse(node=>{if(node.isMesh)after.push(node.geometry);});assert.deepEqual(after,geometries);
-    assert.equal(new Set(art.root.userData.animatedNodes).size,kind==='soldier'?6:4);
+    assert.equal(new Set(art.root.userData.animatedNodes).size,kind==='soldier'?6:7);
     for(const name of art.root.userData.animatedNodes)assert.ok(art.root.getObjectByName(name),`${name} is available to the instanced clip compiler`);
     art.pose({time:.125,moving:1});const cycle=transforms(art.root);art.pose({time:1.125,moving:1});assert.deepEqual(transforms(art.root),cycle,'one-second baked locomotion clips wrap without a seam');
   });
@@ -93,7 +93,18 @@ test('helicopter rotors move while the fuselage keeps a fixed caller-controlled 
   const{art}=fixture(t,createHelicopterArt),body=art.root.getObjectByName('helicopter-body'),rotor=art.root.getObjectByName('helicopter-main-rotor'),tail=art.root.getObjectByName('helicopter-tail-rotor');
   art.root.position.y=1.3;art.pose({time:.1});assert.notEqual(rotor.rotation.y,0);assert.notEqual(tail.rotation.x,0);
   for(let frame=0;frame<120;frame++){
-    art.pose({time:frame/30,moving:1,attack:frame/120});near(art.root.position.y,1.3);assert.equal(body.position.y,0);assert.ok(Math.abs(body.rotation.x)<.06);assert.equal(body.rotation.z,0);
+    art.pose({time:frame/30,moving:1,attack:frame/120});near(art.root.position.y,1.3);assert.equal(body.position.y,.70);assert.ok(Math.abs(body.rotation.x)<.06);assert.equal(body.rotation.z,0);
   }
   const shell=art.root.getObjectByName('helicopter-fuselage');assert.ok(shell.material.length===3,'glass and paint share the same continuous shell');
+});
+
+test('helicopter banks around its fuselage while rocket pods aim independently without leaving their mounts',t=>{
+  const{art}=fixture(t,createHelicopterArt);art.root.position.y=5;
+  art.pose({pitch:.24,roll:-.19});art.root.updateMatrixWorld(true);
+  const mounts=['left','right'].map(side=>art.root.getObjectByName(`helicopter-aim-${side}`)),before=mounts.map(node=>node.getWorldPosition(new THREE.Vector3()));
+  const shell=art.root.getObjectByName('helicopter-shell'),orientation=shell.getWorldQuaternion(new THREE.Quaternion());
+  art.pose({pitch:.24,roll:-.19,aimYaw:.7,elevation:-.8});art.root.updateMatrixWorld(true);
+  assert.equal(art.root.position.y,5);assert.ok(shell.getWorldQuaternion(new THREE.Quaternion()).angleTo(orientation)<1e-8,'weapon aiming does not twist the aircraft');
+  mounts.forEach((node,i)=>assert.ok(node.getWorldPosition(new THREE.Vector3()).distanceTo(before[i])<1e-8,'pod keeps its fixed wing attachment'));
+  assert.ok(muzzlePose(art).direction.y<-.7,'rocket launchers can point down from the fixed flight plane');
 });

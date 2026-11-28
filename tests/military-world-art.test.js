@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {createMilitaryWorldArt} from '../src/military-world-art.js';
 import {militaryColors} from '../src/military-palette.js';
+import {getMilitaryMuzzle,getMilitaryForward} from '../src/military-kinematics.js';
 
 const owner={id:'teal',color:{l:.64,c:.13,h:178}},enemy={id:'coral',color:{l:.65,c:.16,h:29}};
 const world={players:[owner,enemy],gameplay:{ownerId:'teal'}};
@@ -40,7 +41,7 @@ test('idle armies keep GPU buffers stable and moved poses do not rebuild the sha
 
 test('shots and destruction use a single bounded effect simulation with shared map buffers',t=>{
   const{art,camera}=fixture(t,4),units=[unit('a','tank')],simulation={units,membershipRevision:1,spawnZones:zones};
-  const events=Array.from({length:50},(_,i)=>({type:'shot',unitId:'a',ownerId:'teal',kind:'tank',projectile:'shell',from:{x:0,y:1,z:0},to:{x:i*.01,y:0,z:5}}));
+  const events=Array.from({length:50},(_,i)=>({type:'shot',unitId:'a',ownerId:'teal',kind:'tank',projectile:'shell',from:getMilitaryMuzzle(units[0]),to:{x:i*.01,y:0,z:5}}));
   events.push({type:'destroyed',unitId:'b',ownerId:'coral',kind:'tank',position:{x:2,y:0,z:3}});
   art.update(0,{simulation,camera,mapBlend:1,events});assert.equal(art.stats.effects.fired,50);assert.equal(art.stats.effects.projectiles,4);assert.equal(art.stats.effects.recycled.projectiles,46);
   const source=art.root.getObjectByName('military-effects'),map=art.mapRoot.getObjectByName('military-map-effects');
@@ -86,4 +87,25 @@ test('cleanup releases shared resources once and leaves sibling scene content in
   art.update(0,{simulation:{units:[unit('a','tank')],membershipRevision:1,spawnZones:zones},camera});
   const watched=new Map();for(const root of[art.root,art.mapRoot])root.traverse(node=>{for(const value of[node.geometry,node.material,node.customDepthMaterial])if(value&&!watched.has(value)){watched.set(value,0);value.addEventListener('dispose',()=>watched.set(value,watched.get(value)+1));}});
   art.dispose();art.dispose();assert.ok([...watched.values()].every(n=>n===1));assert.deepEqual(parent.children,[sibling]);assert.equal(mapParent.children.length,0);assert.equal(art.stats.disposed,true);
+});
+
+test('aim and banking interpolate, while firing faces the canonical trajectory and retains its duration and arc',t=>{
+  const{art,camera}=fixture(t),units=[unit('a','artillery',{heading:0,aimYaw:0,elevation:.55})],simulation={units,membershipRevision:1,spawnZones:zones};
+  art.update(0,{simulation,camera,walkingWeight:1});
+  const mesh=art.root.getObjectByName('artillery-near'),aim=mesh.geometry.attributes.militaryAim;
+  units[0].heading=.3;units[0].aimYaw=.4;units[0].elevation=.85;units[0].pitch=.06;units[0].roll=-.04;
+  art.update(.016,{simulation,camera,walkingWeight:1});
+  assert.ok(aim.getX(0)>0&&aim.getX(0)<.4);assert.ok(aim.getY(0)>.55&&aim.getY(0)<.85);assert.ok(aim.getZ(0)>0&&aim.getZ(0)<.06);assert.ok(aim.getW(0)<0&&aim.getW(0)>-.04);
+  const from=getMilitaryMuzzle(units[0]),forward=getMilitaryForward(units[0]),to={x:10,y:0,z:8},event={type:'shot',unitId:'a',ownerId:'teal',kind:'artillery',projectile:'arc',from,forward,to,duration:2,arcHeight:6};
+  art.update(0,{simulation,camera,walkingWeight:1,events:[event],night:1,focus:{x:0,y:0,z:0}});
+  const matrix=new THREE.Matrix4();mesh.getMatrixAt(0,matrix);const heading=Math.atan2(matrix.elements[8],matrix.elements[10]);
+  const renderedForward=getMilitaryForward({kind:'artillery',heading,aimYaw:aim.getX(0),elevation:aim.getY(0),pitch:aim.getZ(0),roll:aim.getW(0)});
+  assert.ok(new THREE.Vector3().copy(renderedForward).distanceTo(forward)<1e-6,'aim correction removes frame interpolation error at emission');
+  const shells=art.root.getObjectByName('military-shells');assert.ok(matrixPosition(shells).distanceTo(from)<1e-6,'canonical simulation origin is preserved');
+  assert.equal(art.stats.effects.lights,4);assert.ok(art.stats.effects.activeLights>0);
+  art.update(.5,{simulation,camera,walkingWeight:1});const u=.25,expected=new THREE.Vector3(from.x+(to.x-from.x)*u,from.y+(to.y-from.y)*u+4*6*u*(1-u),from.z+(to.z-from.z)*u);
+  assert.ok(matrixPosition(shells).distanceTo(expected)<1e-6,'effect uses the exact combat duration and parabola, not its preset');
+  art.update(0,{simulation,camera,mapBlend:1,night:1});assert.equal(art.stats.effects.activeLights,0,'map aliases do not leave hidden detail lights running');
+  const glow=art.mapRoot.getObjectByName('military-glows-map');assert.equal(glow.material.blending,THREE.AdditiveBlending);assert.ok(glow.material.opacity<=.25);
+  const shader={vertexShader:THREE.ShaderLib.basic.vertexShader,fragmentShader:THREE.ShaderLib.basic.fragmentShader,uniforms:{}};glow.material.onBeforeCompile(shader);assert.match(shader.fragmentShader,/dot\(vMapGlow,vMapGlow\)/,'map flashes fade toward the edges');
 });

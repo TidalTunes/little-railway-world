@@ -7,6 +7,7 @@ const DURATIONS=Object.freeze({tracer:.3,shell:.7,arc:1.4,rocket:.8});
 const SURFACES=new Set(['grass','sand','water','stone']);
 const CONTACTS=new Set(['footstep','track','rotor']);
 const TRAIL_STEP=.075,TAU=Math.PI*2;
+const HOT=new THREE.Color('#fff3bd'),FLAME=new THREE.Color('#ff9b36'),EMBER=new THREE.Color('#e96c28');
 const noise=n=>{const value=Math.sin(n*127.1+311.7)*43758.5453;return value-Math.floor(value);};
 const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
 const coordinate=value=>Number.isFinite(value)&&Math.abs(value)<=1e7;
@@ -65,19 +66,23 @@ function opacityMaterial(basic=false){
     shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.a *= vEffectOpacity;');
   };
   material.customProgramCacheKey=()=>`military-effect-opacity-v1:${basic?'basic':'lit'}`;
-  applySceneStyle(material);return material;
+  applySceneStyle(material,{kind:basic?'lamp':'asset'});return material;
 }
 
 /** Cosmetic only. Positions are world coordinates with an identity parent.
  * fire/contact enqueue into fixed pools; update(0) can flush a whole burst.
  * No scene queries, collisions, damage, timers, listeners, or animation loop.
  * Recycling a projectile cancels it without manufacturing an impact. */
-export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256,maxMarks=96}={}){
+export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256,maxMarks=96,maxLights=0}={}){
   if(!parent?.isObject3D)throw new TypeError('Effects require a Three.js parent');
   capacity(maxProjectiles,'maxProjectiles',2048);capacity(maxParticles,'maxParticles',16384);capacity(maxMarks,'maxMarks',8192);
+  capacity(maxLights,'maxLights',4);
   const projectiles=pool(maxProjectiles),particles=pool(maxParticles),marks=pool(maxMarks);
   const transientPools=[particles,marks],allPools=[projectiles,particles,marks];
   const root=new THREE.Group();root.name='military-effects';parent.add(root);
+  // Constant shader light count, no shadow maps and no light per projectile.
+  // Keep lamps out of the mesh group shared with the flat map's effect aliases.
+  const lights=Array.from({length:maxLights},()=>{const light=new THREE.PointLight(0xffbe64,0,12,2);light.name='military-flash-light';light.castShadow=false;parent.add(light);return light;});
   let time=0,serial=0,disposed=false,dirty=false,fired=0,impacts=0,contacts=0,rejected=0,lastImpact=null;
   const position=new THREE.Vector3(),direction=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),matrix=new THREE.Matrix4();
   const forward=new THREE.Vector3(0,0,1),up=new THREE.Vector3(0,1,0),color=new THREE.Color(),inputColor=new THREE.Color();
@@ -92,11 +97,22 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
   }
   const shellBatch=batch('shells',projectileGeometry(false),maxProjectiles);
   const rocketBatch=batch('rockets',projectileGeometry(true),maxProjectiles);
-  const lightBatch=batch('flashes',new THREE.BoxGeometry(1,1,1),maxProjectiles+maxParticles,true);
+  const lightBatch=batch('flashes',new THREE.IcosahedronGeometry(1,0),maxProjectiles+maxParticles,true);
+  const glowBatch=batch('glows',new THREE.SphereGeometry(1,12,8),maxProjectiles+maxParticles,true);
+  glowBatch.mesh.material.blending=THREE.AdditiveBlending;
+  const glowBefore=glowBatch.mesh.material.onBeforeCompile,glowKey=glowBatch.mesh.material.customProgramCacheKey();
+  glowBatch.mesh.material.onBeforeCompile=(shader,renderer)=>{
+    glowBefore(shader,renderer);
+    shader.vertexShader='varying vec3 vGlowNormal;\n'+shader.vertexShader;
+    shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nvGlowNormal=normalize(normalMatrix*mat3(instanceMatrix)*normal);');
+    shader.fragmentShader='varying vec3 vGlowNormal;\n'+shader.fragmentShader;
+    shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.a*=pow(abs(normalize(vGlowNormal).z),3.0);');
+  };
+  glowBatch.mesh.material.customProgramCacheKey=()=>`${glowKey}:soft-glow-v1`;
   const particleBatch=batch('particles',new THREE.IcosahedronGeometry(1,0),maxParticles);
   const markBatch=batch('marks',new THREE.CircleGeometry(1,8).rotateX(-Math.PI/2),maxMarks);
   markBatch.mesh.material.polygonOffset=true;markBatch.mesh.material.polygonOffsetFactor=-1;markBatch.mesh.material.polygonOffsetUnits=-1;
-  const batches=[shellBatch,rocketBatch,lightBatch,particleBatch,markBatch];
+  const batches=[shellBatch,rocketBatch,lightBatch,glowBatch,particleBatch,markBatch];
   function acquire(target){
     if(!target.slots.length)return null;
     let slot;
@@ -144,14 +160,17 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     if(disposed)return {ok:false,code:'disposed'};
     if(!input||!Object.hasOwn(DURATIONS,input.kind)||!pointValid(input.from)||!pointValid(input.to))return reject('invalid-projectile');
     const surface=input.surface??'grass';if(!SURFACES.has(surface)||!readColor(input.color,input.kind==='tracer'?C.gold:C.metal))return reject('invalid-appearance');
+    if(input.duration!==undefined&&(!Number.isFinite(input.duration)||input.duration<=0||input.duration>10)
+      ||input.arcHeight!==undefined&&(!Number.isFinite(input.arcHeight)||input.arcHeight<0||input.arcHeight>100)
+      ||input.groundY!==undefined&&!coordinate(input.groundY))return reject('invalid-trajectory');
     const shot=acquire(projectiles);if(!shot)return {ok:false,code:'capacity-zero'};
     const {from,to,kind}=input,distance=Math.hypot(to.x-from.x,to.y-from.y,to.z-from.z);
-    Object.assign(shot,{kind,surface,born:time,duration:DURATIONS[kind],fx:from.x,fy:from.y,fz:from.z,tx:to.x,ty:to.y,tz:to.z,
-      height:kind==='arc'?clamp(distance*.23,1.5,9):0,nextTrail:1,r:inputColor.r,g:inputColor.g,b:inputColor.b});
+    Object.assign(shot,{kind,surface,born:time,duration:input.duration??DURATIONS[kind],fx:from.x,fy:from.y,fz:from.z,tx:to.x,ty:to.y,tz:to.z,
+      height:input.arcHeight??(kind==='arc'?clamp(distance*.35,1.5,12):0),groundY:input.groundY??to.y,nextTrail:1,r:inputColor.r,g:inputColor.g,b:inputColor.b});
     const id=shot.serial;fired++;
-    const strength=kind==='tracer'?.1:.19;
-    particle({x:from.x,y:from.y,z:from.z,life:.09,size:strength,aspect:1.3,tint:C.gold,alpha:.95,mode:'flash',heading:noise(id)*TAU});
-    particle({x:from.x,y:from.y,z:from.z,life:.14,size:strength*.7,tint:C.white,alpha:.75,mode:'flash'});
+    const strength=kind==='tracer'?.14:kind==='arc'?.42:.29;
+    particle({x:from.x,y:from.y,z:from.z,life:.12,size:strength,aspect:1.3,tint:HOT,alpha:1,mode:'flash',heading:noise(id)*TAU});
+    particle({x:from.x,y:from.y,z:from.z,life:.20,size:strength*.9,tint:FLAME,alpha:.85,mode:'flash'});
     return {ok:true,id,duration:shot.duration};
   }
   function impact(shot){
@@ -166,8 +185,15 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
         gravity:water||stone?3:0,size:(water?.045:stone?.06:.15)*( .7+noise(seed+4)*.6)*force,
         aspect:water?2.5:stone?1.3:.8,heading:angle,spin:stone?3:0,tint,alpha:water?.75:stone?.85:.42,mode:water?'splash':stone?'chip':'dust'});
     }
-    if(!water)particle({x:shot.tx,y:shot.ty+.1,z:shot.tz,born:time,life:.08,size:.16*force,tint:C.gold,alpha:.6,mode:'flash'});
-    mark({x:shot.tx,y:shot.ty,z:shot.tz,born:time,life:water?1:3.5,sx:.25*force,sz:.19*force,heading:noise(shot.serial+9)*TAU,
+    if(!water){
+      const explosive=shot.kind!=='tracer';
+      particle({x:shot.tx,y:shot.ty+.15,z:shot.tz,life:explosive?.22:.09,size:explosive?.7*force:.11,tint:HOT,alpha:1,mode:'flash'});
+      if(explosive)for(let i=0;i<5;i++){
+        const angle=noise(shot.serial*13+i)*TAU,speed=.5+noise(shot.serial+i)*1.2;
+        particle({x:shot.tx,y:shot.ty+.15,z:shot.tz,vx:Math.sin(angle)*speed,vy:.9,vz:Math.cos(angle)*speed,life:.45+i*.045,size:.26*force,tint:i%2?FLAME:EMBER,alpha:.8,mode:'fire'});
+      }
+    }
+    if(shot.ty<=shot.groundY+1.5)mark({x:shot.tx,y:shot.groundY,z:shot.tz,born:time,life:water?1:3.5,sx:.25*force,sz:.19*force,heading:noise(shot.serial+9)*TAU,
       alpha:water?.18:stone?.14:.22,tint:water?C.foam:stone?C.rockDark:C.soil,expand:water?3:.12});
     release(projectiles,shot);dirty=true;
   }
@@ -224,7 +250,10 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
         gravity:chip?5:0,size:small?.075:chip?.1:.18,aspect:chip?.65:1,spin:chip?5:0,heading:angle,
         tint:chip?tint:C.rockLight,alpha:chip?.95:.5,mode:chip?'chip':'smoke'});
     }
-    if(!small)particle({x:origin.x,y:origin.y+.6,z:origin.z,life:.18,size:.7,aspect:.7,tint:C.gold,alpha:.85,mode:'flash'});
+    if(!small){
+      particle({x:origin.x,y:origin.y+.6,z:origin.z,life:.26,size:1.15,aspect:.8,tint:HOT,alpha:1,mode:'flash'});
+      for(let i=0;i<7;i++){const angle=noise(id+i*17)*TAU;particle({x:origin.x,y:origin.y+.5,z:origin.z,vx:Math.sin(angle)*1.2,vz:Math.cos(angle)*1.2,vy:.7+i*.1,life:.55+i*.03,size:.36,tint:i%2?FLAME:EMBER,alpha:.85,mode:'fire'});}
+    }
     return {ok:true,id};
   }
   function expire(){
@@ -239,16 +268,17 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
       }
     }
   }
-  function write(target,slot,opacity){
+  function write(target,slot,opacity,tint){
     const index=target.count++;matrix.compose(position,rotation,scale);target.mesh.setMatrixAt(index,matrix);
-    color.setRGB(slot.r,slot.g,slot.b);target.mesh.setColorAt(index,color);target.opacity.setX(index,opacity);
+    if(tint)color.copy(tint);else color.setRGB(slot.r,slot.g,slot.b);target.mesh.setColorAt(index,color);target.opacity.setX(index,opacity);
   }
   function draw(){
     for(const target of batches)target.count=0;
     for(const shot of projectiles.slots)if(shot.active){
       pose(shot,time);rotation.setFromUnitVectors(forward,direction);
-      if(shot.kind==='tracer'){scale.set(.035,.035,.55);write(lightBatch,shot,.95);}
+      if(shot.kind==='tracer'){scale.set(.035,.035,.55);write(lightBatch,shot,.95,HOT);}
       else{scale.setScalar(shot.kind==='rocket'?1.45:shot.kind==='arc'?1.2:1);write(shot.kind==='rocket'?rocketBatch:shellBatch,shot,1);}
+      scale.setScalar(shot.kind==='tracer'?.20:shot.kind==='rocket'?.43:.32);write(glowBatch,shot,.5,HOT);
     }
     for(const slot of particles.slots)if(slot.active){
       const age=time-slot.born,u=clamp(age/slot.life,0,1),fade=(1-u)*(1-u);
@@ -256,7 +286,9 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
       rotation.setFromAxisAngle(up,slot.heading+slot.spin*age);
       const size=slot.size*(slot.mode==='flash'?1+u*.6:slot.mode==='chip'||slot.mode==='splash'?1-u*.25:1+u*1.8);
       scale.set(size,size*slot.aspect,size);
-      write(slot.mode==='flash'?lightBatch:particleBatch,slot,slot.alpha*fade);
+      const luminous=slot.mode==='flash'||slot.mode==='fire';
+      write(luminous?lightBatch:particleBatch,slot,slot.alpha*fade);
+      if(luminous){scale.multiplyScalar(slot.mode==='flash'?3.6:2.4);write(glowBatch,slot,slot.alpha*fade*.55);}
     }
     for(const slot of marks.slots)if(slot.active){
       const u=clamp((time-slot.born)/slot.life,0,1);position.set(slot.x,slot.y,slot.z);rotation.setFromAxisAngle(up,slot.heading);
@@ -268,7 +300,27 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     }
     dirty=false;
   }
-  function update(dt){
+  function updateLights({focus={x:0,z:0},mapBlend=0,reducedMotion=false}={}){
+    if(!lights.length)return;
+    const candidates=[];
+    const choose=(x,y,z,strength,radius)=>{
+      const distance=Math.hypot(x-focus.x,z-focus.z);if(distance>90)return;
+      const score=strength/(4+distance*.2),candidate={x,y,z,strength,radius,score};
+      let i=0;while(i<candidates.length&&candidates[i].score>=score)i++;if(i<lights.length){candidates.splice(i,0,candidate);if(candidates.length>lights.length)candidates.pop();}
+    };
+    if(mapBlend<.99&&!reducedMotion){
+      for(const shot of projectiles.slots)if(shot.active){pose(shot,time);choose(position.x,position.y,position.z,shot.kind==='tracer'?2:7,shot.kind==='tracer'?4:7);}
+      for(const slot of particles.slots)if(slot.active&&(slot.mode==='flash'||slot.mode==='fire')){
+        const age=time-slot.born,fade=(1-clamp(age/slot.life,0,1))**2;
+        choose(slot.x+slot.vx*age,slot.y+slot.vy*age,slot.z+slot.vz*age,slot.size*55*fade,Math.min(15,5+slot.size*7));
+      }
+    }
+    for(let i=0;i<lights.length;i++){
+      const light=lights[i],source=candidates[i];light.intensity=source?source.strength*(1-mapBlend):0;
+      if(source){light.position.set(source.x,source.y+.15,source.z);light.distance=source.radius;}
+    }
+  }
+  function update(dt,options={}){
     if(disposed)return;
     if(Number.isFinite(dt)&&dt>0){
       const end=Number.isFinite(time+dt)?time+dt:Number.MAX_VALUE;
@@ -288,11 +340,13 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
       for(const target of allPools)if(count(target)){dirty=true;break;}
     }
     if(dirty)draw();
+    updateLights(options);
   }
   function clear(){
     if(disposed)return;
     for(const target of allPools)resetPool(target);
     lastImpact=null;dirty=true;draw();
+    for(const light of lights)light.intensity=0;
   }
   function count(target){return target.active;}
   return {root,fire,contact,burst,update,clear,
@@ -300,12 +354,13 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
       const active={projectiles:count(projectiles),particles:count(particles),marks:count(marks)};let drawCalls=0;
       for(const target of batches)if(target.mesh.visible&&target.mesh.count)drawCalls++;
       return {...active,active:active.projectiles+active.particles+active.marks,capacity:{projectiles:maxProjectiles,particles:maxParticles,marks:maxMarks},
-        drawCalls,batches:batches.length,fired,impacts,contacts,rejected,recycled:{projectiles:projectiles.recycled,particles:particles.recycled,marks:marks.recycled},
+        drawCalls,batches:batches.length,lights:lights.length,activeLights:lights.filter(light=>light.intensity>.01).length,fired,impacts,contacts,rejected,recycled:{projectiles:projectiles.recycled,particles:particles.recycled,marks:marks.recycled},
         time,disposed,lastImpact:lastImpact?{...lastImpact}:null};
     },
     dispose(){
       if(disposed)return;clear();disposed=true;root.removeFromParent();
       for(const {mesh}of batches){mesh.dispose();mesh.geometry.dispose();mesh.material.dispose();}
+      for(const light of lights){light.removeFromParent();light.dispose();}
     },
   };
 }

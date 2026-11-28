@@ -3,6 +3,8 @@ import {createMilitaryBatch} from './military-batch.js';
 import {createMilitaryEffects} from './military-effects.js';
 import {MILITARY_KINDS,MILITARY_ART} from './military-assets.js';
 import {militaryColors} from './military-palette.js';
+import {MILITARY_WEAPONS,getMilitaryLocalDirection} from './military-kinematics.js';
+import {worldSurface} from './world-model.js';
 
 const UP=new THREE.Vector3(0,1,0),IDENTITY=new THREE.Quaternion();
 const WHITE=new THREE.Color('#f5f1d7'),INK=new THREE.Color('#102d35'),SHIELD=new THREE.Color('#a6e6dc');
@@ -44,7 +46,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
   if(!Number.isSafeInteger(capacity)||capacity<1||capacity>8192)throw new RangeError('Military capacity must be 1–8192');
   const root=new THREE.Group(),mapRoot=new THREE.Group();root.name='military-world';mapRoot.name='military-map';parent.add(root);mapParent.add(mapRoot);
   const batch=createMilitaryBatch(root,{capacity});
-  const effects=createMilitaryEffects(root,{maxProjectiles:Math.min(capacity,256),maxParticles:Math.min(capacity*6,1536),maxMarks:Math.min(capacity,256)});
+  const effects=createMilitaryEffects(root,{maxProjectiles:Math.min(capacity,256),maxParticles:Math.min(capacity*6,1536),maxMarks:Math.min(capacity,256),maxLights:4});
   const ownedGeometry=new Set(),ownedMaterial=new Set(),ownedMeshes=[];
   const geometry=g=>(ownedGeometry.add(g),g),material=m=>(ownedMaterial.add(m),m);
   const create=(p,n,g,m,order)=>{const mesh=instances(p,n,g,capacity,m,order);ownedMeshes.push(mesh);return mesh;};
@@ -73,16 +75,17 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
   // belongs to the detailed effects and is uploaded once per frame.
   const mapEffects=new THREE.Group();mapEffects.name='military-map-effects';mapRoot.add(mapEffects);
   const effectAliases=effects.root.children.map(source=>{
-    const m=material(basic(`${source.name}-map`));
+    const glow=source.name==='military-glows',m=material(basic(`${source.name}-map`,{opacity:glow?.25:1}));
+    m.blending=source.material.blending;
     m.onBeforeCompile=shader=>{
-      shader.vertexShader='attribute float effectOpacity; varying float vEffectOpacity;\n'+shader.vertexShader;
-      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nvEffectOpacity=effectOpacity;');
+      shader.vertexShader='attribute float effectOpacity; varying float vEffectOpacity; varying vec2 vMapGlow;\n'+shader.vertexShader;
+      shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nvEffectOpacity=effectOpacity;vMapGlow=position.xz;');
       shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>',`vec4 mvPosition=instanceMatrix*vec4(transformed,1.0);
         mvPosition.y=.95;mvPosition=modelViewMatrix*mvPosition;gl_Position=projectionMatrix*mvPosition;`);
-      shader.fragmentShader='varying float vEffectOpacity;\n'+shader.fragmentShader;
-      shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.a*=vEffectOpacity;');
+      shader.fragmentShader='varying float vEffectOpacity; varying vec2 vMapGlow;\n'+shader.fragmentShader;
+      shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`#include <color_fragment>\ndiffuseColor.a*=vEffectOpacity;${glow?'diffuseColor.a*=pow(max(0.0,1.0-dot(vMapGlow,vMapGlow)),2.0);':''}`);
     };
-    m.customProgramCacheKey=()=> 'military-map-effects-v1';
+    m.customProgramCacheKey=()=> `military-map-effects-v2:${glow}`;
     const mesh=new THREE.InstancedMesh(source.geometry,m,source.instanceMatrix.count);mesh.name=`${source.name}-map`;
     mesh.instanceMatrix=source.instanceMatrix;mesh.instanceColor=source.instanceColor;mesh.frustumCulled=false;mesh.renderOrder=25;mesh.count=0;mesh.visible=false;mapEffects.add(mesh);
     ownedMeshes.push(mesh);return{source,mesh};
@@ -91,7 +94,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
   let zoneKey='',zoneGeometries=[],zoneMaterials=[],zoneCount=0;
   const poses=new Map(),renderUnits=[],teamColors=new Map(),owners=new Map((world.players??[]).map(player=>[player.id,player]));
   const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),size=new THREE.Vector3(),quaternion=new THREE.Quaternion();
-  const rootInverse=new THREE.Matrix4(),mapInverse=new THREE.Matrix4(),muzzle=new THREE.Vector3();
+  const rootInverse=new THREE.Matrix4(),mapInverse=new THREE.Matrix4();
   const projected=new THREE.Vector3(),view=new THREE.Vector3(),cameraUp=new THREE.Vector3(),cameraRight=new THREE.Vector3(),color=new THREE.Color();
   let revision=null,lastUnits=null,clock=0,disposed=false,drawn=0,healthCount=0,shieldCount=0,selectedCount=0,contactAt=0;
   const colorFor=unit=>{const key=unit.ownerId??unit.team??'teal';if(!teamColors.has(key))teamColors.set(key,militaryColors(owners.get(unit.ownerId)??unit.team??'teal'));return teamColors.get(key);};
@@ -100,7 +103,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     if(revision!==next||lastUnits!==units){
       const previous=new Map(poses);renderUnits.length=0;poses.clear();
       for(let i=0;i<Math.min(units.length,capacity);i++){
-        const unit=units[i],record=previous.get(unit.id)??{...unit,team:owners.get(unit.ownerId)??unit.team??'teal',phase:phase(unit.id)};
+        const unit=units[i],record=previous.get(unit.id)??{...unit,aimYaw:unit.aimYaw??0,elevation:unit.elevation??MILITARY_WEAPONS[unit.kind].restElevation,pitch:unit.pitch??0,roll:unit.roll??0,team:owners.get(unit.ownerId)??unit.team??'teal',phase:phase(unit.id)};
         record.source=unit;poses.set(unit.id,record);renderUnits.push(record);
       }
       batch.setUnits(renderUnits);
@@ -109,13 +112,16 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     const alpha=1-Math.exp(-22*dt);
     for(const pose of renderUnits){
       const unit=pose.source,dx=unit.x-pose.x,dy=unit.y-pose.y,dz=unit.z-pose.z,turn=angleDelta(unit.heading??0,pose.heading??0);
-      const moved=dx*dx+dy*dy+dz*dz>1e-10||Math.abs(turn)>1e-5||pose.moving!==unit.moving;
+      const aim=angleDelta(unit.aimYaw??0,pose.aimYaw),elevation=(unit.elevation??MILITARY_WEAPONS[unit.kind].restElevation)-pose.elevation,pitch=(unit.pitch??0)-pose.pitch,roll=(unit.roll??0)-pose.roll;
+      const moved=dx*dx+dy*dy+dz*dz>1e-10||Math.abs(turn)>1e-5||Math.abs(aim)>1e-5||Math.abs(elevation)>1e-5||Math.abs(pitch)>1e-5||Math.abs(roll)>1e-5||pose.moving!==unit.moving;
       if(moved&&(dt>0||dx*dx+dy*dy+dz*dz>16)){
         const snap=dx*dx+dy*dy+dz*dz>16,blend=snap?1:alpha;
         pose.x+=dx*blend;pose.y+=dy*blend;pose.z+=dz*blend;pose.heading=(pose.heading??0)+turn*blend;pose.moving=unit.moving;
+        pose.aimYaw+=aim*blend;pose.elevation+=elevation*blend;pose.pitch+=pitch*blend;pose.roll+=roll*blend;
         // Settle exactly rather than indefinitely uploading imperceptible tails.
         if(Math.abs(unit.x-pose.x)<1e-5)pose.x=unit.x;if(Math.abs(unit.y-pose.y)<1e-5)pose.y=unit.y;if(Math.abs(unit.z-pose.z)<1e-5)pose.z=unit.z;
         if(Math.abs(angleDelta(unit.heading??0,pose.heading))<1e-5)pose.heading=unit.heading??0;
+        for(const key of['aimYaw','elevation','pitch','roll']){const target=unit[key]??(key==='elevation'?MILITARY_WEAPONS[unit.kind].restElevation:0);if(Math.abs(key==='aimYaw'?angleDelta(target,pose[key]):target-pose[key])<1e-5)pose[key]=target;}
         batch.setPose(unit.id,pose);
       }
       pose.hp=unit.hp;pose.maxHp=unit.maxHp;pose.shielded=unit.shielded;
@@ -162,18 +168,27 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
     }
     if(unit.shielded){position.addScaledVector(cameraRight,-pixel*(health?barWidth*.5+7:0));size.setScalar(pixel*(walkingWeight>.5?8:7));writeBillboard(layer.shield,position,camera.quaternion,size,SHIELD,inverse);}
   }
-  function update(dt,{simulation,events=[],camera,mapBlend=0,walkingWeight=0,viewportHeight=800,selectedIds=[],night=0,visible=true,zones,ownerId=world.gameplay?.ownerId}={}){
+  function update(dt,{simulation,events=[],camera,mapBlend=0,walkingWeight=0,viewportHeight=800,selectedIds=[],night=0,visible=true,zones,focus,reducedMotion=false,ownerId=world.gameplay?.ownerId}={}){
     if(disposed)return;
     const elapsed=Number.isFinite(dt)?Math.max(0,dt):0;clock+=elapsed;
     const units=syncUnits(simulation,elapsed);syncZones(zones??simulation?.spawnZones,ownerId);
     root.visible=visible&&mapBlend<.999;mapRoot.visible=visible&&mapBlend>.001;
     detailBarMaterial.depthTest=walkingWeight>.5;
     root.updateWorldMatrix(true,false);mapRoot.updateWorldMatrix(true,false);rootInverse.copy(root.matrixWorld).invert();mapInverse.copy(mapRoot.matrixWorld).invert();
+    // Chassis motion stays smooth, but a firing weapon must face the actual
+    // shot tangent that frame. Correct only its local aim for the smoothed body.
+    for(const event of events)if(event.type==='shot'&&finitePoint(event.forward)){
+      const pose=poses.get(event.unitId);if(!pose)continue;
+      const direction=getMilitaryLocalDirection(pose,event.forward);
+      pose.aimYaw=Math.atan2(direction.x,direction.z);pose.elevation=Math.atan2(direction.y,Math.hypot(direction.x,direction.z));
+      batch.setPose(event.unitId,{aimYaw:pose.aimYaw,elevation:pose.elevation});
+    }
     batch.update(clock,{camera,viewportHeight,forceDetail:walkingWeight>.8});
     for(const event of events){
       if(event.type==='shot'&&finitePoint(event.from)&&finitePoint(event.to)){
-        batch.attack(event.unitId);const from=batch.muzzleAt(event.unitId,muzzle)?.applyMatrix4(rootInverse)??event.from;
-        effects.fire({kind:event.projectile??MILITARY_ART[event.kind]?.projectile??'tracer',from,to:event.to,surface:event.surface??'grass'});
+        batch.attack(event.unitId);
+        effects.fire({kind:event.projectile??MILITARY_ART[event.kind]?.projectile??'tracer',from:event.from,to:event.to,duration:event.duration,arcHeight:event.arcHeight,
+          groundY:world.outline?worldSurface(world,event.to.x,event.to.z).height:0,surface:event.surface??'grass'});
       }else if(event.type==='destroyed'&&finitePoint(event.position))effects.burst({kind:event.kind,position:event.position,color:colorFor(event).body,surface:event.surface??'grass'});
     }
     if(camera&&clock>=contactAt){
@@ -183,7 +198,7 @@ export function createMilitaryWorldArt(parent,mapParent,world,{capacity=2048}={}
         effects.contact({kind:unit.kind==='helicopter'?'rotor':unit.kind==='soldier'?'footstep':'track',position:{x:unit.x,y:unit.groundY??unit.y-(unit.kind==='helicopter'?5:0),z:unit.z},heading:unit.heading,strength:unit.kind==='helicopter'?.25:unit.kind==='soldier'?.5:.8});
       }
     }
-    effects.update(elapsed);for(const{source,mesh}of effectAliases){mesh.count=source.count;mesh.visible=source.visible;}
+    effects.update(elapsed,{focus:focus??camera?.position,night,mapBlend,reducedMotion,camera});for(const{source,mesh}of effectAliases){mesh.count=source.count;mesh.visible=source.visible;}
     clearOverlays();drawn=healthCount=shieldCount=selectedCount=0;
     zoneRoots[0].visible=walkingWeight<.8;zoneRoots[1].visible=true;
     if(camera&&visible){

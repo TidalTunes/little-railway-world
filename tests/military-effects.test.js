@@ -79,7 +79,7 @@ test('all pools stay bounded during thousands of requests and recycle oldest sho
     assert.equal(f.effects.stats.projectiles,3);assert.equal(f.effects.stats.particles,9);assert.equal(f.effects.stats.marks,2);
     assert.equal(f.effects.stats.recycled.projectiles,1997);assert.ok(f.effects.stats.recycled.particles>0);assert.ok(f.effects.stats.recycled.marks>0);
     assert.equal(f.effects.stats.impacts,0);assert.equal(f.effects.stats.drawCalls,0);
-    f.effects.update(0);assert.ok(f.effects.stats.drawCalls<=5);
+    f.effects.update(0);assert.ok(f.effects.stats.drawCalls<=6);
     assert.deepEqual(f.root.children,meshes);assert.deepEqual(f.root.children.map(mesh=>mesh.geometry),geometries);assert.deepEqual(f.root.children.map(mesh=>mesh.material),materials);
     for(const mesh of meshes)assert.ok(mesh.count<=mesh.instanceMatrix.count);
     f.effects.update(.3);assert.equal(f.effects.stats.impacts,3,'only the three retained projectiles arrive');
@@ -176,7 +176,7 @@ test('invalid inputs and nonpositive or nonfinite dt cannot advance or corrupt a
 test('zero budgets disable optional layers, and unsafe capacities are rejected before attaching anything',()=>{
   const f=fixture({maxProjectiles:1,maxParticles:0,maxMarks:0});
   try{
-    assert.equal(f.effects.fire({kind:'arc',from,to}).ok,true);f.effects.update(0);assert.equal(f.effects.stats.drawCalls,1);
+    assert.equal(f.effects.fire({kind:'arc',from,to}).ok,true);f.effects.update(0);assert.equal(f.effects.stats.drawCalls,2);
     assert.equal(f.effects.stats.particles,0);f.effects.update(5);assert.equal(f.effects.stats.impacts,1);assert.equal(f.effects.stats.active,0);
   }finally{f.dispose();}
   const disabled=fixture({maxProjectiles:0,maxParticles:0,maxMarks:0});
@@ -191,12 +191,50 @@ test('materials compose per-instance fade with the shared scene styling',()=>{
   try{
     for(const mesh of f.root.children){
       assert.equal(mesh.isInstancedMesh,true);assert.ok(mesh.material.isMeshStandardMaterial||mesh.material.isMeshBasicMaterial);
-      assert.equal(mesh.material.userData.sceneStyle,'asset');assert.equal(mesh.material.depthWrite,false);
+      assert.equal(mesh.material.userData.sceneStyle,mesh.material.isMeshBasicMaterial?'lamp':'asset');assert.equal(mesh.material.depthWrite,false);
       const shader={uniforms:{},vertexShader:'#include <begin_vertex>\n#include <project_vertex>',fragmentShader:'#include <color_fragment>\n#include <opaque_fragment>'};
       mesh.material.onBeforeCompile(shader,null);
       assert.match(shader.vertexShader,/effectOpacity/);assert.match(shader.fragmentShader,/diffuseColor.a \*= vEffectOpacity/);
       assert.ok(shader.uniforms.worldNight);assert.ok(shader.uniforms.worldTime);
     }
+  }finally{f.dispose();}
+});
+
+test('authored ballistic timing and apex reach the same landing point without early impact',()=>{
+  const f=fixture();
+  try{
+    assert.equal(f.effects.fire({kind:'arc',from,to,duration:2.4,arcHeight:7}).duration,2.4);
+    f.effects.update(1.2);near(positionAt(f.root.getObjectByName('military-shells')).y,8);
+    f.effects.update(1);assert.equal(f.effects.stats.impacts,0);
+    f.effects.update(.2);assert.equal(f.effects.stats.impacts,1);assert.equal(f.effects.stats.lastImpact.time,2.4);
+    for(const input of [{duration:0},{duration:NaN},{arcHeight:-1},{arcHeight:Infinity}])assert.equal(f.effects.fire({kind:'arc',from,to,...input}).ok,false);
+  }finally{f.dispose();}
+});
+
+test('bright shots and explosions share four unshadowed lights that clear, cull and dispose',()=>{
+  const f=fixture({maxLights:4}),lights=f.parent.children.filter(node=>node.isPointLight);
+  try{
+    assert.equal(lights.length,4);assert.ok(lights.every(light=>!light.castShadow));
+    for(let i=0;i<30;i++)f.effects.fire({kind:'shell',from:{x:i,y:1,z:0},to:{x:i+10,y:0,z:0}});
+    f.effects.update(.02,{focus:{x:0,z:0}});assert.equal(f.effects.stats.activeLights,4);assert.ok(lights.some(light=>light.intensity>5));
+    const glow=f.root.getObjectByName('military-glows');assert.ok(glow.count>0);assert.equal(glow.material.toneMapped,false);
+    f.effects.update(.7,{focus:{x:20,z:0}});assert.ok(f.effects.stats.activeLights>0);assert.ok(f.root.getObjectByName('military-flashes').count>0,'landings create bright expanding fireballs');
+    f.effects.update(0,{focus:{x:1000,z:1000}});assert.equal(f.effects.stats.activeLights,0);
+    f.effects.update(0,{focus:{x:20,z:0},mapBlend:1});assert.equal(f.effects.stats.activeLights,0);
+    f.effects.update(0,{focus:{x:20,z:0},reducedMotion:true});assert.equal(f.effects.stats.activeLights,0);
+    f.effects.clear();assert.equal(f.effects.stats.activeLights,0);assert.deepEqual(f.parent.children.filter(node=>node.isPointLight),lights);
+  }finally{f.dispose();}
+  assert.equal(f.parent.children.length,0);
+});
+
+test('impact marks sit on terrain and airborne explosions leave no floating decal',()=>{
+  const f=fixture();
+  try{
+    f.effects.fire({kind:'shell',from,to:{x:10,y:.6,z:0},groundY:.1});f.effects.update(.7);
+    assert.equal(f.effects.stats.marks,1);near(positionAt(f.root.getObjectByName('military-marks')).y,.118);
+    f.effects.clear();f.effects.fire({kind:'rocket',from,to:{x:10,y:5,z:0},groundY:.1});f.effects.update(.8);
+    assert.equal(f.effects.stats.marks,0);assert.ok(f.effects.stats.particles>0);
+    assert.equal(f.effects.fire({kind:'shell',from,to,groundY:NaN}).ok,false);
   }finally{f.dispose();}
 });
 

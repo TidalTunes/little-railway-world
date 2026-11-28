@@ -22,6 +22,8 @@ In overview, **T** plans a railway from your level-two station or its connected 
 
 Recruit infantry, tanks, artillery and helicopters with **1–4** or the illustrated unit bar on the right. Infantry costs **1 Resource + 1 Food**; each vehicle costs **20 Resources**. Units appear at a random clear point between your city boundary and its outer spawn circle. Your units take half damage inside that spawn zone, indicated by shields. In overview, click or drag a box to select your units, hold **Shift** to add to the selection, and **right-click** ground to move or an enemy to attack. Units also fire automatically within range. Middle-button dragging controls the strategy camera; WASD still pans. Combat affects military units only. Rival armies recruit gradually, spend at most 55 Resources, and begin offensive orders after 45 seconds.
 
+Tanks turn slowly and aim their turrets independently, with a close-range blind spot. Artillery fires from elevated barrels along high arcs; helicopters bank in flight and aim their rocket pods before firing. Bright projectiles and explosions illuminate nearby ground. Original synthesized weapon and impact sounds follow distance and screen position; **M** or the speaker button mutes combat audio.
+
 This is a settlement, railway and combat prototype. Multiplayer and a world-editor UI are still to come; the local rivals currently stand in for other players.
 
 ## Run and verify
@@ -100,6 +102,7 @@ Controls use colored icons and keycaps, with names on hover or focus and short p
 | `src/military-simulation.js` / `src/military-navigation.js` | Fixed-step combat, atomic recruitment costs, spawn protection, spatial targeting, bounded terrain routing and rival armies. |
 | `src/military-controller.js` / `src/military-input.js` / `src/military-hud.js` | Owner-wallet integration, RTS selection and orders, unit hotkeys and the illustrated purchase rail. |
 | `src/military-batch.js` / `src/military-world-art.js` / `src/military-effects.js` | Shared animated unit batches, map silhouettes, health and shield overlays, and pooled projectiles. |
+| `src/military-kinematics.js` / `src/military-audio.js` | Shared weapon geometry and motion limits; original synthesized, spatial combat sounds. |
 | `src/loop-economy.js` / `src/directed-rail-network.js` | Finite owner and village stocks, conserved Gold payments, station transactions and directed physical routing. |
 | `src/resource-work.js` / `src/resource-work-art.js` | Productive NPC trips, ore sources, tree regrowth and bounded worker artwork. |
 | `src/biomes.js` | Broad seeded regions, authored sites, protected coastal bays, and complete-footprint lookup. |

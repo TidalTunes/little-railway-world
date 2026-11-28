@@ -5,6 +5,7 @@ import {createMilitaryWorldArt} from './military-world-art.js';
 import {createMilitaryHud} from './military-hud.js';
 import {createMilitaryPortraits} from './military-portraits.js';
 import {createMilitaryInput} from './military-input.js';
+import {createMilitaryAudio} from './military-audio.js';
 
 const KINDS=['soldier','tank','artillery','helicopter'];
 
@@ -29,6 +30,7 @@ export function createMilitaryController({canvas,world,parent,mapParent,settleme
   const simulation=createMilitarySimulation(world,{getCities,getPlacements,getAccount:id=>accounts.get(id),botOwners:session.bots.map(entry=>entry.game.ownerId)});
   const art=createMilitaryWorldArt(parent,mapParent,world,{capacity:MILITARY_RULES.maxUnits});
   const hud=createMilitaryHud({parent:canvas.parentElement,team,onBuy:buy});
+  const audio=createMilitaryAudio({canvas,controlsParent:hud.root});
   let rosterRevision=-1,own=[],counts={};
   const raycaster=new THREE.Raycaster(),ndc=new THREE.Vector2(),point=new THREE.Vector3(),inverse=new THREE.Matrix4();
   const input=createMilitaryInput(canvas,{getState:()=>({active:!disposed,walking,transitioning,blocked:settlement.railwayPlanning,ownerId,units:simulation.units,selectedIds}),
@@ -66,7 +68,7 @@ export function createMilitaryController({canvas,world,parent,mapParent,settleme
     else if(key==='escape'&&!walking&&!settlement.railwayPlanning&&selectedIds.size){event.preventDefault();event.stopImmediatePropagation();selectedIds.clear();}
   }
   document.addEventListener('keydown',keyDown,true);
-  return {simulation,art,hud,input,selectedIds,project,groundAt,buy,
+  return {simulation,art,audio,hud,input,selectedIds,project,groundAt,buy,
     get selecting(){return input.selecting;},
     prepare(){hud.setPortraits(createMilitaryPortraits(renderer,{team}));},
     update(dt,options){
@@ -78,12 +80,14 @@ export function createMilitaryController({canvas,world,parent,mapParent,settleme
         for(const unit of simulation.units){alive.add(unit.id);if(unit.ownerId===ownerId){own.push(unit);counts[unit.kind]=(counts[unit.kind]??0)+1;}}
         for(const id of selectedIds)if(!alive.has(id))selectedIds.delete(id);
       }
-      if(options.renderReady!==false)art.update(dt,{simulation,events:simulation.drainEvents(),...options,selectedIds,ownerId,reducedMotion:reducedMotion?.matches});
+      const events=options.renderReady===false?[]:simulation.drainEvents();
+      if(options.renderReady!==false)art.update(dt,{simulation,events,...options,selectedIds,ownerId,reducedMotion:reducedMotion?.matches});
+      audio.update(dt,{events,units:simulation.units,...options,root:parent,paused:dt<=0||options.renderReady===false});
       let shieldedCount=0;for(const unit of own)if(selectedIds.has(unit.id)&&unit.shielded)shieldedCount++;
       const stock=settlement.game.resourcesAt();hud.update({resources:stock.resources,food:stock.food,counts,available:!transitioning,disabledReason:'Changing view',walking,selectedCount:selectedIds.size,
         shieldedCount,feedback:simulation.elapsed<feedbackUntil?feedback:''});
       const stats=simulation.stats;Object.assign(canvas.dataset,{militaryUnits:String(simulation.units.length),militaryOwned:String(own.length),militarySelected:String(selectedIds.size),militaryShots:String(stats.shots),militaryKills:String(stats.kills)});
     },
-    dispose(){if(disposed)return;disposed=true;document.removeEventListener('keydown',keyDown,true);input.dispose();hud.dispose();art.dispose();simulation.dispose();selectedIds.clear();},
+    dispose(){if(disposed)return;disposed=true;document.removeEventListener('keydown',keyDown,true);input.dispose();audio.dispose();hud.dispose();art.dispose();simulation.dispose();selectedIds.clear();},
   };
 }

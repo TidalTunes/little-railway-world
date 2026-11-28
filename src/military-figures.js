@@ -114,7 +114,7 @@ function finGeometry(){
  * animate without shifting the fuselage above or below that flight plane. */
 export function createHelicopterArt(parent,{palette}={}){
   const f=figure(parent,'helicopter',palette),{root,p,group,mesh,block}=f;
-  const aim=group(root,'helicopter-aim'),body=group(aim,'helicopter-body');
+  const lean=group(root,'helicopter-body',0,.70,0),body=group(lean,'helicopter-shell',0,-.70,0),weapons=[];
   mesh(body,'helicopter-fuselage',f.own(fuselageGeometry()),[p.body,p.glass,p.dark]);
   const boomGeometry=f.own(new THREE.CylinderGeometry(.054,.127,1,6));
   f.beam(body,'helicopter-tail-boom',[0,.70,-.68],[0,.97,-2.12],1,p.body,boomGeometry);
@@ -127,11 +127,12 @@ export function createHelicopterArt(parent,{palette}={}){
     f.beam(body,'helicopter-skid-toe',[side*.44,.035,.72],[side*.44,.105,.90],.035,p.graphite,f.cylinder);
     for(const z of [-.43,.46])f.beam(body,'helicopter-skid-strut',[side*.25,.48,z],[side*.44,.07,z],.033,p.steel,f.cylinder);
     const wing=block(body,'helicopter-stub-wing',side*.57,.61,-.05,.66,.07,.34,p.body);wing.rotation.z=-side*.08;
-    const pod=mesh(body,'helicopter-rocket-pod',f.cylinder,p.dark,side*.82,.50,.09,.145,.68,.145);pod.rotation.x=Math.PI/2;
-    const rim=mesh(body,'rocket-pod-rim',f.cylinder,p.steel,side*.82,.50,.435,.147,.025,.147);rim.rotation.x=Math.PI/2;
-    const face=mesh(body,'rocket-pod-face',f.cylinder,p.graphite,side*.82,.50,.451,.119,.012,.119);face.rotation.x=Math.PI/2;
+    const aim=group(body,`helicopter-aim-${side<0?'left':'right'}`,side*.82,.50,.09),pitch=group(aim,`helicopter-elevation-${side<0?'left':'right'}`);weapons.push({aim,pitch});
+    const pod=mesh(pitch,'helicopter-rocket-pod',f.cylinder,p.dark,0,0,0,.145,.68,.145);pod.rotation.x=Math.PI/2;
+    const rim=mesh(pitch,'rocket-pod-rim',f.cylinder,p.steel,0,0,.345,.147,.025,.147);rim.rotation.x=Math.PI/2;
+    const face=mesh(pitch,'rocket-pod-face',f.cylinder,p.graphite,0,0,.361,.119,.012,.119);face.rotation.x=Math.PI/2;
     for(const [x,y]of [[-.047,-.027],[.047,-.027],[0,.054]]){
-      const tube=mesh(body,'rocket-tube',f.cylinder,p.rubber,side*.82+x,.50+y,.459,.031,.008,.031);tube.rotation.x=Math.PI/2;
+      const tube=mesh(pitch,'rocket-tube',f.cylinder,p.rubber,x,y,.369,.031,.008,.031);tube.rotation.x=Math.PI/2;
     }
   }
   mesh(body,'helicopter-rotor-mast',f.cylinder,p.steel,0,1.135,-.11,.055,.32,.055);
@@ -142,13 +143,13 @@ export function createHelicopterArt(parent,{palette}={}){
   const tailRotor=group(body,'helicopter-tail-rotor',-.10,1.04,-2.12);
   block(tailRotor,'tail-rotor-blade',0,0,0,.035,.61,.065,p.graphite);block(tailRotor,'tail-rotor-blade',-.007,0,0,.035,.065,.61,p.graphite);
   const tailHub=mesh(tailRotor,'tail-rotor-hub',f.cylinder,p.steel,0,0,0,.055,.12,.055);tailHub.rotation.z=Math.PI/2;
-  const muzzle=new THREE.Object3D();muzzle.name='helicopter-muzzle';muzzle.position.set(-.82,.554,.463);muzzle.userData.projectile='rocket';body.add(muzzle);
-  root.userData.animatedNodes=['helicopter-aim','helicopter-body','helicopter-main-rotor','helicopter-tail-rotor'];
-  function pose({time=0,moving=0,attack=0,aimYaw=0,elevation=0}={}){
+  const muzzle=new THREE.Object3D();muzzle.name='helicopter-muzzle';muzzle.position.set(0,.054,.373);muzzle.userData.projectile='rocket';weapons[0].pitch.add(muzzle);
+  root.userData.animatedNodes=['helicopter-aim-left','helicopter-aim-right','helicopter-elevation-left','helicopter-elevation-right','helicopter-body','helicopter-main-rotor','helicopter-tail-rotor'];
+  function pose({time=0,moving=0,attack=0,aimYaw=0,elevation=0,pitch=0,roll=0}={}){
     if(f.disposed)return;
     time=finite(time);moving=unit(moving);attack=unit(attack);const phase=(time%1)*TAU,kick=recoil(attack);
-    aim.rotation.y=finite(aimYaw)%TAU;body.position.y=0;body.position.z=-.018*kick;
-    body.rotation.set(-THREE.MathUtils.clamp(finite(elevation),-.5,.65)-moving*.035+.012*kick,0,0);
+    for(const weapon of weapons){weapon.aim.rotation.y=finite(aimYaw)%TAU;weapon.pitch.rotation.x=-THREE.MathUtils.clamp(finite(elevation),-1.3,.65);}
+    lean.position.z=-.018*kick;lean.rotation.set(THREE.MathUtils.clamp(finite(pitch),-.4,.4)+.012*kick,0,THREE.MathUtils.clamp(finite(roll),-.4,.4),'YXZ');
     rotor.rotation.y=(phase*4)%TAU;tailRotor.rotation.x=(phase*6)%TAU;
   }
   pose();return{root,muzzle,pose,dispose:f.dispose};

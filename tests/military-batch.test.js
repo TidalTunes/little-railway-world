@@ -146,3 +146,40 @@ test('purchasing another unit does not restart existing attack clips',t=>{
   const state=meshAt(batch).geometry.attributes.militaryState;
   assert.equal(state.getZ(0),4);assert.equal(state.getZ(1),-100);
 });
+
+test('independent aim matches visible muzzle geometry in both LODs and the shadow shader',t=>{
+  const {batch}=fixture(t),records=MILITARY_KINDS.map((kind,i)=>unit(kind,kind,{x:i*3,heading:.45,aimYaw:.7,elevation:kind==='artillery'?.9:.24,pitch:kind==='helicopter'?.21:0,roll:kind==='helicopter'?-.17:0,moving:0}));
+  batch.setUnits(records);batch.update(0);
+  for(const record of records){
+    const art=createMilitaryAsset(new THREE.Group(),{kind:record.kind});t.after(()=>art.dispose());
+    art.pose({attack:.18,aimYaw:record.aimYaw,elevation:record.elevation,pitch:record.pitch,roll:record.roll});art.root.position.copy(record);art.root.rotation.y=record.heading;art.root.updateMatrixWorld(true);
+    const expected=art.muzzle.getWorldPosition(new THREE.Vector3()),forward=new THREE.Vector3(0,0,1).transformDirection(art.muzzle.matrixWorld);
+    assert.ok(batch.muzzleAt(record.id).distanceTo(expected)<1e-7,`${record.kind} rendered barrel matches simulation origin`);
+    assert.ok(batch.forwardAt(record.id).distanceTo(forward)<1e-7,`${record.kind} projectile tangent follows actual aimed barrel`);
+    const near=meshAt(batch,record.kind),aim=near.geometry.attributes.militaryAim,matrix=new THREE.Matrix4();near.getMatrixAt(0,matrix);
+    closeArrays(Array.from(aim.array.subarray(0,4)),[record.aimYaw,record.elevation,record.pitch,record.roll]);
+    const expectedBody=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),record.heading),actualBody=new THREE.Quaternion().setFromRotationMatrix(matrix);
+    assert.ok(actualBody.angleTo(expectedBody)<.001,'turret and lean do not rotate the outer chassis transform');
+    for(const low of[false,true]){
+      const mesh=meshAt(batch,record.kind,low),shader=shaderFor(mesh.material),depth=shaderFor(mesh.customDepthMaterial,true);
+      const articulation=source=>source.slice(source.indexOf('vec3 militaryArticulate('),source.indexOf('vec3 militaryArticulateNormal('));
+      assert.equal(articulation(shader.vertexShader),articulation(depth.vertexShader),'shadows use the identical turret and body transforms');
+      assert.match(shader.vertexShader,/transformed=militaryArticulate/);assert.match(depth.vertexShader,/transformed=militaryArticulate/);
+      const masks=mesh.geometry.attributes.militaryJoints;
+      assert.ok(Array.from({length:masks.count},(_,i)=>masks.getX(i)).some(v=>v===1));
+      assert.ok(Array.from({length:masks.count},(_,i)=>masks.getX(i)).some(v=>v===0),'the hull stays outside the turret joint');
+      if(record.kind==='helicopter')assert.ok(Array.from({length:masks.count},(_,i)=>masks.getZ(i)).some(v=>Math.abs(v-1.64)<1e-6),'right pod pivots independently on its own mount');
+    }
+  }
+  for(const record of records)batch.setPose(record.id,{aimYaw:-.6,elevation:.6});batch.update(.1);
+  for(const record of records)assert.ok(Math.abs(meshAt(batch,record.kind).geometry.attributes.militaryAim.getX(0)+.6)<1e-6);
+});
+
+test('distant muzzle anchors and neutral clip baking agree with detailed weapons',t=>{
+  for(const kind of MILITARY_KINDS){
+    const a=compileMilitaryRig(kind),b=compileMilitaryRig(kind,{low:true});t.after(()=>{a.dispose();b.dispose();});
+    assert.ok(a.muzzle.distanceTo(b.muzzle)<1e-8,`${kind} changing LOD does not move the firing point`);
+    const art=createMilitaryAsset(new THREE.Group(),{kind});t.after(()=>art.dispose());art.pose({elevation:0,attack:.18});art.root.updateMatrixWorld(true);
+    assert.ok(a.muzzle.distanceTo(art.muzzle.getWorldPosition(new THREE.Vector3()))<1e-8,'rest elevation is applied once by the instance shader');
+  }
+});
