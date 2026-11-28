@@ -8,7 +8,7 @@ import {createMutableTrees} from '../src/mutable-trees.js';
 const home=(id,ownerId,x)=>({id,ownerId,kind:'house',x,y:0,z:0,rotation:0,scale:1,variant:0});
 function fixture(t,{tree,loaded=false,count=2,scenery=[],getInfrastructure}={}){
   const previous=globalThis.document;
-  globalThis.document={createElement:()=>({getContext:()=>({beginPath(){},arc(){},fill(){},moveTo(){},lineTo(){},closePath(){},save(){},restore(){},translate(){},fillText(){}})})};
+  globalThis.document={createElement:()=>({getContext:()=>({beginPath(){},arc(){},fill(){},moveTo(){},lineTo(){},closePath(){},save(){},restore(){},translate(){},fillText(){},strokeText(){}})})};
   const world={seed:'rendered-bots',players:[{id:'teal',color:{l:.62,c:.12,h:170}},{id:'coral',color:{l:.63,c:.14,h:22}},{id:'blue',color:{l:.63,c:.14,h:250}}],
     outline:[[-80,-80],[80,-80],[80,80],[-80,80]],mountains:[],cities:[],stations:[],placements:[],lines:[],
     river:{points:[],width:0,y:-1.2},rivers:[],gameplay:{ownerId:'teal',starterHouse:home('home-1','teal',-40),

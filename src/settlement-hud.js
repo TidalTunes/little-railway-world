@@ -22,7 +22,7 @@ export function settlementHudConstruction({economic=false,logs=0,resources,build
   const affordable=!missingWood&&(!toolsCost||missingTools===0);
   const costLabel=`${cost} ${wood}${toolsCost?` + ${toolsCost} tools`:''}`;
   const readiness=missing.length?`Need ${missing.join(' and ')}.`:toolsCost&&tools===null?`Timber ready; ${toolsCost} tools also required.`:toolsCost?'Timber and tools ready.':`Enough ${wood} gathered.`;
-  const shortage=missing.length?`Need ${missing.join(' and ')}`:toolsCost&&tools===null?`${toolsCost} tools required`:'';
+  const shortage=missing.length?missing.join(' + '):toolsCost&&tools===null?`${toolsCost} tools required`:'';
   return {cost,costLabel,wood,tools,affordable,readiness,shortage};
 }
 
@@ -43,14 +43,14 @@ export function settlementHudRailway(railway,{gold=0,ready=true}={}){
   const canBuild=Boolean(ready&&hasCity&&affordable&&showConfirm&&railway?.canBuild&&railway?.siteValid!==false);
   let status,statusKind='info';
   if(!ready)status='Preparing…';
-  else if(!hasCity)status=`${railway?.minHomes??3} homes to ${railway?.minHomes===6?'unlock a station':'start'}`;
+  else if(!hasCity)status=`${railway?.minHomes===6?'Station':'City'} at ${railway?.minHomes??3} homes`;
   else if(siteInvalid){status=reason||'Give the route more room';statusKind='error';}
-  else if(stage==='planning')status='Checking route…';
-  else if(stage==='destination'&&railway?.hovering&&railway?.siteValid)status='Route preview';
-  else if(!affordable&&showConfirm){status=`${missingGold} more gold needed`;statusKind='cost';}
-  else if(canBuild){status='Ready to build';statusKind='success';}
+  else if(stage==='planning')status='Checking…';
+  else if(stage==='destination'&&railway?.hovering&&railway?.siteValid)status='Preview';
+  else if(!affordable&&showConfirm){status=`${missingGold} gold short`;statusKind='cost';}
+  else if(canBuild){status='Ready';statusKind='success';}
   else if(reason&&code!=='ready'&&code!=='not-enough-gold')status=reason;
-  else if(showConfirm)status='Checking route…';
+  else if(showConfirm)status='Checking…';
   else status=stage==='source'?'':'Choose destination';
   return {canReverse:!!railway?.canReverse,reversed:!!railway?.reversed,minHomes:railway?.minHomes??3,stage,cost,hasCity,affordable,missingGold,showConfirm,canBuild,selection,status,statusKind};
 }
@@ -130,13 +130,13 @@ export function createSettlementHud({
       <div class="settlement-rail-actions" data-hud="rail-actions" role="group" aria-label="Railway placement" hidden>
         <span class="settlement-placement-note"><span class="settlement-cost">${symbols.coin}<strong data-hud="rail-cost">5</strong></span><span class="settlement-rail-selection" data-hud="rail-selection">Choose your city</span></span>
         <span class="settlement-rail-status" data-hud="rail-status"></span>
-        <div class="settlement-placement-keys">${keyAction('rail-build','Enter','Build line','aria-keyshortcuts="Enter" hidden')}${keyAction('rail-reverse','R','Reverse direction','aria-keyshortcuts="R" hidden')}${keyAction('rail-cancel','Esc','Cancel','aria-keyshortcuts="Escape"')}</div>
+        <div class="settlement-placement-keys">${keyAction('rail-build','Enter','Place','aria-keyshortcuts="Enter" hidden')}${keyAction('rail-reverse','R','Flip','aria-label="Reverse railway direction" aria-keyshortcuts="R" hidden')}${keyAction('rail-cancel','Esc','Cancel','aria-keyshortcuts="Escape"')}</div>
       </div>
       <div class="settlement-actions" role="group" aria-label="Tools and camera">
         ${keyAction('axe','E','Chop','class="settlement-tool" aria-pressed="true" aria-keyshortcuts="E" aria-label="Select axe. E or click to chop a nearby tree."')}
         ${keyAction('house','B','Build','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="B" aria-label="Place a house."')}
-        ${keyAction('rail','T','Railway','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="T" aria-label="Plan a railway. Start from your city or its connected network." hidden')}
-        ${keyAction('view','V','Overview','aria-keyshortcuts="V" aria-label="Switch to overview"')}
+        ${keyAction('rail','T','Rail','class="settlement-tool" aria-pressed="false" aria-keyshortcuts="T" aria-label="Plan a railway. Start from your city or its connected network." hidden')}
+        ${keyAction('view','V','Map','aria-keyshortcuts="V" aria-label="Switch to overview"')}
       </div>
       <div class="settlement-movement" data-hud="movement" aria-label="WASD moves, Shift runs, Space jumps"><span title="Move · WASD">${symbols.move}<kbd>WASD</kbd></span><span title="Run · Shift">${symbols.run}<kbd>Shift</kbd></span><span title="Jump · Space">${symbols.jump}<kbd>Space</kbd></span></div>
     </div>
@@ -203,12 +203,12 @@ export function createSettlementHud({
     buttons.rail.setAttribute('aria-label',`Plan a railway. Costs ${rail.cost} gold. ${rail.hasCity?'Click two cities, station ends or tracks, or drag between them.':`Grow to ${rail.minHomes} homes first.`}`);
     buttons.axe.setAttribute('aria-pressed',String(tool==='axe'));buttons.house.setAttribute('aria-pressed',String(building));buttons.rail.setAttribute('aria-pressed',String(railPlanning));
     buttons.house.setAttribute('aria-label',`Place a house. Costs ${costLabel}. ${construction.readiness}`);
-    buttons.house.title=`Build · B · ${costLabel}. ${construction.readiness}`;
+    buttons.house.title='Build · B';
     for(const key of ['axe','house','rail','view','cancel','rail-cancel'])buttons[key].disabled=!ready;
     buttons.axe.disabled=!ready||!walking;buttons.house.disabled=!ready||!walking;
     buttons.build.disabled=!ready||!canBuild||!building;
     buttons.build.setAttribute('aria-label',canBuild?`Build house. Spend ${costLabel}. ${connected?'Joins a city.':'Paths form at three nearby homes.'}`:`Cannot build here. ${invalidReason}`);
-    text(viewLabel,walking?'Overview':'Walk');buttons.view.title=`${walking?'Overview':'Walk'} · V`;buttons.view.setAttribute('aria-label',walking?'Switch to overview':'Return to your traveller');
+    text(viewLabel,walking?'Map':'Walk');buttons.view.title=`${walking?'Map':'Walk'} · V`;buttons.view.setAttribute('aria-label',walking?'Switch to overview':'Return to your traveller');
     const viewIcon=walking?'map':'walk';if(buttons.view.dataset.icon!==viewIcon){buttons.view.querySelector('[data-action-icon]').innerHTML=symbols[viewIcon];buttons.view.dataset.icon=viewIcon;}
     nodes.movement.hidden=true;
     const toolAnnouncement=railPlanning?`Railway selected. ${rail.cost} gold. ${rail.selection}. ${rail.status}. ${rail.showConfirm&&railway?.code!=='out-of-range'?'Drag route dots to adjust. ':''}${rail.canBuild?'Enter confirms the purchase. ':''}Escape cancels.`:building?'House placement selected. Aim at clear ground. Enter places; Escape cancels.':walking?'Axe selected. E or click chops a nearby tree.':'T plans a railway. V returns to your traveller to build houses.';

@@ -3,13 +3,19 @@ import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
 
 const RESOURCES=['wood','metal','food','gold'];
 const KINDS=new Set(['pickup','delivery','production','gold','gathered']);
-const CAPTIONS={pickup:'On board',delivery:'',production:'',gold:'',gathered:'Gathered'};
 const ICONS={
   wood:'<path fill="#a97145" d="m4 8 9-5 8 5v9l-9 5-8-5z"/><path fill="#dcac75" d="m4 8 8 5 9-5-8-5z"/><path fill="#ba8755" d="m12 13 9-5v9l-9 5z"/><path fill="none" stroke="#f5d4a5" stroke-width="1.4" d="m8 6 8 5v9"/>',
   metal:'<path fill="#8caeb7" d="m5 6 11-2 6 10-7 7-12-3z"/><path fill="#c3d7d8" d="m5 6 11-2-3 10-10 4z"/><path fill="#597d88" d="m13 14 9 0-7 7-12-3z"/>',
   food:'<path fill="none" stroke="#f3cc70" stroke-width="1.6" stroke-linecap="round" d="M12 21V5"/><path fill="#f3cc70" d="M12 8C7 8 6 5 7 3c4 0 5 2 5 5Zm0 5C7 13 5 10 6 8c4 0 6 2 6 5Zm0 5c-5 0-7-3-6-5 4 0 6 2 6 5Zm0-8c0-5 2-7 5-7 1 3-1 6-5 7Zm0 5c0-5 3-7 6-7 1 3-1 6-6 7Zm0 5c0-5 3-7 6-7 1 3-1 6-6 7Z"/>',
   gold:'<path fill="#c18c34" d="m8 2 9 1 5 7-2 9-8 4-9-5-1-9z"/><path fill="#f4cd67" d="m8 4 8 1 4 6-2 7-6 3-7-4-1-7z"/><path fill="none" stroke="#9c722e" stroke-width="2" stroke-linecap="round" d="M12 8v9"/>',
 };
+
+function quantityLabel(item,amount){return item.kind==='gathered'||amount===1?'':String(amount);}
+function receiptWidth(item){
+  let width=0,count=0;
+  for(const resource of RESOURCES)if(item.resources[resource]){const label=quantityLabel(item,item.resources[resource]);width+=20+(label?3+label.length*8:0);count++;}
+  return width+Math.max(0,count-1)*7;
+}
 
 /** Bounded, authoritative feedback. IDs are optional, but an event with an ID
  * cannot create a second gain while retained in the recent-event window. The
@@ -36,7 +42,7 @@ export function createResourceGainQueue({maxActive=24,duration=2.8,mergeWindow=.
     clear(){active.length=0;},dispose(){active.length=0;seen.clear();}};
 }
 
-/** Screen-sized enamel receipts anchored to the same planar/spherical surface
+/** Small resource symbols anchored to the same planar/spherical surface
  * as the world. One reusable DOM pool serves both strategy render layers;
  * third-person events keep aging and cannot replay when zooming back out. */
 export function createResourceGainEffects(world,{parent,document:doc=globalThis.document,...settings}={}){
@@ -45,9 +51,9 @@ export function createResourceGainEffects(world,{parent,document:doc=globalThis.
   if(root){root.className='resource-gains';root.setAttribute('aria-hidden','true');(parent??doc.body).appendChild(root);}
   function slot(index){
     if(pool[index])return pool[index];
-    const element=doc.createElement('div'),caption=doc.createElement('span'),row=doc.createElement('span');element.className='resource-gain';caption.className='resource-gain-caption';row.className='resource-gain-values';element.append(caption,row);root.appendChild(element);
+    const element=doc.createElement('div'),row=doc.createElement('span');element.className='resource-gain';row.className='resource-gain-values';element.appendChild(row);root.appendChild(element);
     const values={};for(const resource of RESOURCES){const value=doc.createElement('span'),icon=doc.createElement('span'),amount=doc.createElement('b');value.className='resource-gain-value';value.dataset.resource=resource;icon.className='resource-gain-icon';icon.innerHTML=`<svg viewBox="0 0 24 24" focusable="false">${ICONS[resource]}</svg>`;value.append(icon,amount);row.appendChild(value);values[resource]={value,amount};}
-    return pool[index]={element,caption,values,serial:null,version:null};
+    return pool[index]={element,values,serial:null,version:null,width:0};
   }
   return{
     emit(event){return disposed?null:queue.emit(event);},
@@ -62,14 +68,18 @@ export function createResourceGainEffects(world,{parent,document:doc=globalThis.
           point.project(camera);if(point.z< -1||point.z>1||Math.abs(point.x)>1||Math.abs(point.y)>1)continue;
           const entry=slot(visibleCount++),t=item.age/item.duration,rise=reducedMotion?0:24*(1-(1-t)**3);
           const x=(point.x+1)*bounds.width/2+(bounds.left??0);let y=(1-point.y)*bounds.height/2+(bounds.top??0)-18-rise;
-          // Simultaneous cargo and owner-gold receipts remain legible. A fixed
-          // bounded collision pass avoids DOM layout reads in the frame loop.
-          for(const previous of screenPositions)if(Math.abs(previous.x-x)<100&&Math.abs(previous.y-y)<34)y=previous.y-34;
-          screenPositions.push({x,y});
           if(entry.serial!==item.serial||entry.version!==item.version){
-            entry.serial=item.serial;entry.version=item.version;entry.element.dataset.kind=item.kind;entry.caption.textContent=CAPTIONS[item.kind];entry.caption.hidden=!CAPTIONS[item.kind];
-            for(const resource of RESOURCES){const amount=item.resources[resource]??0;entry.values[resource].value.hidden=!amount;if(amount)entry.values[resource].amount.textContent=`+${amount}`;}
+            entry.serial=item.serial;entry.version=item.version;entry.element.dataset.kind=item.kind;entry.width=receiptWidth(item);
+            for(const resource of RESOURCES){const amount=item.resources[resource]??0,label=quantityLabel(item,amount);entry.values[resource].value.hidden=!amount;entry.values[resource].amount.hidden=!label;entry.values[resource].amount.textContent=label;}
           }
+          // Reserve the complete icon row. Every upward move clears one prior
+          // row permanently; no DOM layout reads or new nodes are needed.
+          const left=x-entry.width/2,right=x+entry.width/2,height=20,gap=7;
+          for(let pass=0;pass<screenPositions.length;pass++){
+            const overlap=screenPositions.find(previous=>left<previous.right+gap&&right>previous.left-gap&&y-height<previous.bottom+gap&&y>previous.top-gap);
+            if(!overlap)break;y=overlap.top-gap;
+          }
+          screenPositions.push({left,right,top:y-height,bottom:y});
           entry.element.hidden=false;entry.element.style.transform=`translate3d(${x.toFixed(2)}px,${y.toFixed(2)}px,0) translate(-50%,-100%)`;
           entry.element.style.opacity=String(Math.max(0,Math.min(1,item.age/.1,(item.duration-item.age)/.65))*fade);
         }

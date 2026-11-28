@@ -49,8 +49,8 @@ test('sustained production stays bounded in both active receipts and duplicate h
 test('all resource icons and exact quantities share one projection in map and detailed strategy views',()=>{
   const{document,effects,options}=fixture();effects.emit(gain({kind:'pickup',resources:{wood:10,metal:20,food:30,gold:0}}));
   effects.update(.2,{...options,mapBlend:0});assert.equal(effects.visibleCount,1);
-  const popup=document.body.children[0].children[0],caption=popup.children[0],values=popup.children[1].children;
-  assert.equal(caption.textContent,'On board');assert.equal(values[0].children[1].textContent,'+10');assert.equal(values[1].children[1].textContent,'+20');assert.equal(values[2].children[1].textContent,'+30');assert.equal(values[3].hidden,true);
+  const popup=document.body.children[0].children[0],values=popup.children[0].children;
+  assert.equal(popup.children.length,1,'resource rows have no caption');assert.equal(values[0].children[1].textContent,'10');assert.equal(values[1].children[1].textContent,'20');assert.equal(values[2].children[1].textContent,'30');assert.equal(values[3].hidden,true);
   effects.update(.1,{...options,mapBlend:.5});assert.equal(effects.visibleCount,1,'a render-layer transition cannot double the receipt');
   effects.update(.1,{...options,mapBlend:1});assert.equal(effects.visibleCount,1);assert.match(popup.style.transform,/410\.00px/,'canvas left offset is included');
   effects.dispose();assert.equal(document.body.children.length,0);
@@ -64,10 +64,35 @@ test('third-person and off-screen gains stay hidden, age normally, and do not re
   assert.equal(effects.emit(gain()),null);effects.dispose();assert.equal(effects.emit(gain({id:'late'})),null);
 });
 
-test('gathering and delivery remain distinct, spatially separated receipts and DOM slots are reused',()=>{
+test('gathering uses a single unlabelled resource symbol and DOM slots are reused',()=>{
   const{document,effects,options}=fixture();effects.emit(gain({kind:'gathered'}));effects.emit(gain({kind:'production'}));effects.update(.2,options);
-  const slots=document.body.children[0].children;assert.equal(slots.length,2);assert.equal(slots[0].children[0].textContent,'Gathered');assert.equal(slots[1].children[0].textContent,'');assert.equal(slots[1].children[0].hidden,true);assert.notEqual(slots[0].style.transform,slots[1].style.transform);
+  const slots=document.body.children[0].children;assert.equal(slots.length,2);
+  for(const slot of slots){assert.equal(slot.children.length,1);assert.equal(slot.children[0].children.filter(value=>!value.hidden).length,1);assert.equal(slot.children[0].children[0].children[1].hidden,true);}
+  assert.notEqual(slots[0].style.transform,slots[1].style.transform);
   effects.update(3,options);effects.emit(gain({id:'new-work'}));effects.update(.2,options);assert.equal(effects.stats.allocated,2);assert.equal(effects.visibleCount,1);assert.equal(slots[1].hidden,true);effects.dispose();
+});
+
+test('merged NPC gathering remains icon-only while train counts stay exact without plus prefixes',()=>{
+  const{document,effects,options}=fixture();
+  effects.emit(gain({id:'gather-1',kind:'gathered'}));effects.emit(gain({id:'gather-2',kind:'gathered'}));
+  effects.emit(gain({id:'cargo',kind:'pickup',resources:{wood:10,metal:1,food:2.5,gold:3}}));effects.update(.2,options);
+  const slots=document.body.children[0].children,gathered=slots[0].children[0].children,cargo=slots[1].children[0].children;
+  assert.equal(gathered[0].children[1].hidden,true);assert.equal(gathered[0].children[1].textContent,'');
+  assert.equal(cargo[0].children[1].textContent,'10');assert.equal(cargo[1].children[1].hidden,true);assert.equal(cargo[2].children[1].textContent,'2.5');assert.equal(cargo[3].children[1].textContent,'3');
+  effects.dispose();
+});
+
+test('simultaneous train and gold rows keep a gap without displacing separate small symbols',()=>{
+  const{document,effects}=fixture(),camera=new OrthographicCamera(-50,50,50,-50,.1,1000);
+  camera.position.set(0,100,0);camera.up.set(0,0,-1);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);
+  const options={camera,viewportWidth:800,viewportHeight:800,reducedMotion:true};
+  effects.emit(gain({kind:'pickup',resources:{wood:10,metal:10,food:10,gold:3}}));effects.emit(gain({id:'gold',kind:'gold',resource:'gold',amount:3,x:10}));
+  effects.update(.2,options);
+  const ys=()=>document.body.children[0].children.filter(slot=>!slot.hidden).map(slot=>Number(slot.style.transform.match(/translate3d\([^,]+,([^p]+)px/)[1]));
+  const broad=ys();assert.ok(broad[0]-20-broad[1]>=7,'a broad train row keeps the nearby gold popup outside its bounds');
+  effects.update(3,options);effects.emit(gain({id:'single',kind:'gathered'}));effects.emit(gain({id:'apart',kind:'gathered',x:10}));effects.update(.2,options);
+  const separate=ys();assert.equal(separate[0],separate[1],'small separated resource symbols stay at their sources');
+  assert.equal(effects.stats.allocated,2);effects.dispose();
 });
 
 test('reduced-motion receipts stay anchored and support orthographic cameras',()=>{

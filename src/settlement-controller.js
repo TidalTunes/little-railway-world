@@ -5,6 +5,8 @@ import {createEconomicBots} from './economic-bots.js';
 import {createTradeTrains} from './trade-trains.js';
 import {createEconomyHud} from './economy-hud.js';
 import {createLoopHud} from './loop-hud.js';
+import './loop-hud.css';
+import {sampleLine} from './world-model.js';
 import {buildCircuitSelection,pickCircuitAt,nextCircuitId} from './railway-circuit-selection.js';
 import {createCircuitSelectionArt} from './circuit-selection-art.js';
 import {createResourceGainEffects} from './resource-gain-effects.js';
@@ -69,7 +71,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   const botRailPlanner=economy?createSettlementRailwayPlanner(world,railways,session,{getPlacements:railPlacements}):null;
   const economicBots=economy?createEconomicBots(world,{session,bots,railways,economy,onRailBuild:applyRailBuild,planRoute:(from,to,options)=>botRailPlanner.request(from,to,options)}):null;
   let inspectedCity=null,industryCity=null,economyView=null,economyViewKey='';
-  let selectedCircuit=null,hoverCircuit=null,circuitCandidates=[],circuitPick=buildCircuitSelection(),circuitKey='',circuitArtKey='',hoverTime=0;
+  let selectedCircuit=null,selectedCircuitAnchor=null,hoverCircuit=null,circuitCandidates=[],circuitPick=buildCircuitSelection(),circuitKey='',circuitArtKey='',hoverTime=0;
   const railPlanner=createSettlementRailwayPlanner(world,railways,session,{getPlacements:railPlacements});
   const railwayArt=createSettlementRailwayArt(parent,mapParent,world);
   const railPreviewFlow=createRailwayPreview(railways,railPlanner);
@@ -118,7 +120,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   }
   function buyTrain(cityId,loopId){
     const result=economy.buyTrain(cityId,loopId,game.ownerId);
-    notify(result.ok?`Train launched · −${result.cost} gold`:result.reason??'Complete a directed loop first');focusCanvas();
+    notify(result.ok?'Train added':result.reason??'Complete a directed loop first');focusCanvas();
   }
   function changeIndustry(cityId,type){const result=economy?.setIndustry(cityId,type,game.ownerId);notify(result?.ok?`${type==='lumber'?'Timber yard':type==='farm'?'Market gardens':'Tool workshop'} selected`:result?.reason??(result?.code==='industry-cooldown'?'Let the current workshop finish changing':'Select your own town'));focusCanvas();}
   function depositTimber(){
@@ -129,7 +131,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     else{const result=economy?.depositTimber(game.ownerId,position,amount);notify(result?.ok?`${result.amount} timber stored in your town`:result?.reason??'Move close to your town to store timber');}
     focusCanvas();
   }
-  const loopHud=loopMode?createLoopHud({parent:canvas.parentElement,ownerId:game.ownerId,onBuyTrain:buyTrain,onCycle:cycleCircuit,onClose:clearCircuit}):null;
+  const loopHud=loopMode?createLoopHud({parent:canvas.parentElement,world,ownerId:game.ownerId,onBuyTrain:buyTrain,onCycle:cycleCircuit,onClose:clearCircuit}):null;
   const economyHud=economy&&!loopMode?createEconomyHud({parent:canvas.parentElement,ownerId:game.ownerId,onIndustry:changeIndustry,onDeposit:depositTimber}):null;
   function listen(target,type,listener,options){target.addEventListener(type,listener,options);listeners.push(()=>target.removeEventListener(type,listener,options));}
   const eventPointer=event=>{const box=canvas.getBoundingClientRect();return {x:(event.clientX-box.left)/box.width*2-1,y:1-(event.clientY-box.top)/box.height*2};};
@@ -139,7 +141,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     if(hit.kind==='city')return hit;
     return railways.anchorAt(hit,{...hit,ownerId:game.ownerId});
   }
-  function clearCircuit(){selectedCircuit=hoverCircuit=null;circuitCandidates=[];inspectedCity=null;}
+  function clearCircuit(){selectedCircuit=hoverCircuit=null;selectedCircuitAnchor=null;circuitCandidates=[];inspectedCity=null;}
   function cycleCircuit(direction=1){
     if(!circuitCandidates.length)return;
     const index=circuitCandidates.indexOf(selectedCircuit);
@@ -233,7 +235,11 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       if(tool==='rail')railClick=eventPointer(event);
       else{
         const circuit=press.circuit&&circuitAt(eventPointer(event));
-        if(circuit){selectedCircuit=nextCircuitId(circuit.loops,selectedCircuit);circuitCandidates=circuit.loops.map(loop=>loop.id);inspectedCity=null;}
+        if(circuit){
+          selectedCircuit=nextCircuitId(circuit.loops,selectedCircuit);circuitCandidates=circuit.loops.map(loop=>loop.id);inspectedCity=null;
+          const line=railSnapshot.lines.find(line=>line.id===circuit.anchor.lineId);
+          selectedCircuitAnchor=line?sampleLine(line,circuit.anchor.distance):null;
+        }
         else{clearCircuit();inspectedCity=pickRailwayCity(world,railways.cities,camera,eventPointer(event),canvas.getBoundingClientRect())?.id??null;}
       }
     }
@@ -368,6 +374,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     keyDown(event){
       const key=event.key.toLowerCase();
       if(key==='escape'&&!walking&&tool==='axe'&&(selectedCircuit||inspectedCity)){clearCircuit();return true;}
+      if(loopMode&&key==='enter'&&!walking&&!transitioning&&tool==='axe'&&selectedCircuit){if(!event.repeat)loopHud.buySelected();return true;}
       if(economy&&!loopMode&&key==='g'){if(!event.repeat)depositTimber();return true;}
       if(economy&&!loopMode&&['1','2','3'].includes(key)){if(!event.repeat&&industryCity)changeIndustry(industryCity,['lumber','farm','workshop'][Number(key)-1]);return true;}
       if(tool==='rail'&&key==='r'){if(!event.repeat)reverseRail();return true;}
@@ -412,7 +419,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         if(walkingWeight<.5)incomeEffects.emit(event.houses);canvas.dataset.lastIncome=String(event.amount);
       }
       for(const event of economicEvents){
-        if(event.ownerId===game.ownerId&&['pickup','delivery','production'].includes(event.type))resourceGains?.emit(event);
+        if(event.ownerId===game.ownerId&&['pickup','delivery'].includes(event.type))resourceGains?.emit(event);
         if(event.type==='pickup'&&event.cityOwnerId===game.ownerId&&event.gold>0)resourceGains?.emit({...event,kind:'gold',ownerId:game.ownerId,resource:'gold',amount:event.gold,resources:{gold:event.gold}});
       }
       const income=game.settleIncome(dayState?.completedDays??0);
@@ -499,7 +506,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         const shownCircuit=selectedCircuit??hoverCircuit,artKey=`${railRevision}:${shownCircuit??''}`;
         if(artKey!==circuitArtKey){circuitArtKey=artKey;circuitArt?.sync(circuitPick.loops.find(loop=>loop.id===shownCircuit),railSnapshot.lines);}
         circuitArt?.update({camera,viewportHeight,mapBlend,walkingWeight,visible:tool==='axe'&&!transitioning,hover:!selectedCircuit});
-        loopHud?.update({city:!walking?economyView.cities.find(city=>city.id===inspectedCity):null,ownCity,cities:economyView.cities,selectedLoopId:selectedCircuit,candidateIds:circuitCandidates,trains:liveTrains,
+        loopHud?.update({camera,viewport:canvas.getBoundingClientRect(),anchor:selectedCircuitAnchor,transitioning,city:!walking?economyView.cities.find(city=>city.id===inspectedCity):null,ownCity,cities:economyView.cities,selectedLoopId:selectedCircuit,candidateIds:circuitCandidates,trains:liveTrains,
           houses:snapshot.houses.length,resources,walking,tool,night,feedback:messageTime>0?message:'',delivered:economyView.stats.laps});
         Object.assign(canvas.dataset,{selectedCircuit:selectedCircuit??'',hoverCircuit:hoverCircuit??'',circuitCandidates:String(circuitCandidates.length),resourcePopups:String(resourceGains?.visibleCount??0)});
         Object.assign(canvas.dataset,{wood:String(resources.wood??resources.timber),metal:String(resources.metal??0),food:String(resources.food??0),production:String(resourceWork?.stats.production??0),economyTime:String(Math.floor(economy.elapsed)),deliveries:String(economyView.stats.deliveries),

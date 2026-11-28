@@ -2,23 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {createCityLevelMarkers,cityMarkerPopulation} from '../src/city-level-markers.js';
+import {playerColors} from '../src/player-palette.js';
 
 function fixture(){
-  const previous=globalThis.document,labels=[];
-  globalThis.document={createElement:()=>({getContext:()=>({beginPath(){},arc(){},fill(){},moveTo(){},lineTo(){},closePath(){},save(){},restore(){},translate(){},fillText(label){labels.push(label);}})})};
+  const previous=globalThis.document,labels=[],glyphs=[],paints=[],strokes=[],stack=[];let x=0,y=0,path=[];
+  const context={beginPath(){path=[];},arc(cx,cy,r){path.push([cx-r,cy-r],[cx+r,cy+r]);},
+    fill(){paints.push({x,y,color:this.fillStyle,width:Math.max(...path.map(p=>p[0]))-Math.min(...path.map(p=>p[0]))});},
+    moveTo(a,b){path.push([a,b]);},lineTo(a,b){path.push([a,b]);},closePath(){},
+    save(){stack.push([x,y]);},restore(){[x,y]=stack.pop();},translate(a,b){x+=a;y+=b;},
+    fillText(label){labels.push(label);glyphs.push({label,x,y,color:this.fillStyle});},strokeText(label){strokes.push({label,x,y});}};
+  globalThis.document={createElement:()=>({getContext:()=>context})};
   const scene=new THREE.Group(),map=new THREE.Group(),world={players:[{id:'teal',color:{l:.62,c:.12,h:170}}],gameplay:{ownerId:'teal'}};
   const markers=createCityLevelMarkers(scene,map,world);
   if(previous===undefined)delete globalThis.document;else globalThis.document=previous;
   const camera=new THREE.PerspectiveCamera(50,1,.1,1000);camera.position.set(0,25,30);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);
-  return {scene,map,markers,camera,labels};
+  return {scene,map,markers,camera,labels,glyphs,paints,strokes,world};
 }
 const towns=Array.from({length:5},(_,i)=>({id:`city-${i}`,x:(i-2)*4,z:0,level:i+1}));
 
-test('one level-and-population plate per town serves both overview layers',()=>{
+test('level and population remain identical across detailed and unboxed map labels',()=>{
   const {scene,map,markers,camera,labels}=fixture();
   try{
     markers.sync(towns);markers.update({camera,mapBlend:.5,viewportHeight:800});
-    assert.deepEqual(labels,['1','3','2','6','3','9','4','12','5','15']);
+    assert.deepEqual(labels,['1','3','1','3','2','6','2','6','3','9','3','9','4','12','4','12','5','15','5','15']);
     assert.equal(scene.children[0].count,5);assert.equal(map.children[0].count,5);
     assert.deepEqual(Array.from(scene.children[0].geometry.attributes.cityLevel.array).slice(0,5),[1,2,3,4,5]);
     assert.equal(scene.children[0].geometry,map.children[0].geometry);
@@ -58,7 +64,7 @@ test('city population comes from homes and updates the cached plate only when st
   const {scene,markers,camera,labels}=fixture();
   try{
     markers.sync([{id:'home',x:0,z:0,level:2,houseCount:7},{id:'village',x:3,z:0,level:2,houseCount:6}]);
-    markers.update({camera});assert.deepEqual(labels,['2','7','2','6']);
+    markers.update({camera});assert.deepEqual(labels,['2','7','2','7','2','6','2','6']);
     assert.deepEqual(Array.from(scene.children[0].geometry.attributes.cityPopulation.array).slice(0,2),[7,6]);
     const atlas=scene.children[0].material.map,version=atlas.version,geometry=scene.children[0].geometry;
     for(let i=0;i<20;i++){camera.position.x=i/10;camera.updateMatrixWorld(true);markers.update({camera,mapBlend:i/20});}
@@ -66,6 +72,23 @@ test('city population comes from homes and updates the cached plate only when st
     assert.equal(atlas.version,version);assert.equal(scene.children[0].geometry,geometry);assert.equal(markers.stats.atlasUpdates,1);
     markers.sync([{id:'home',x:0,z:0,level:2,houseCount:8}]);assert.equal(markers.stats.atlasUpdates,2);assert.ok(atlas.version>version);
     assert.equal(cityMarkerPopulation({houseCount:6,population:100}),6);assert.equal(cityMarkerPopulation({houseIds:['a','b','c']}),3);
+  }finally{markers.dispose();}
+});
+
+test('map labels keep ownership and population without an enclosing painted panel',()=>{
+  const {scene,map,markers,camera,glyphs,paints,strokes,world}=fixture();
+  try{
+    markers.sync([{x:0,z:0,level:2,houseCount:6}]);markers.update({camera,mapBlend:1});
+    const detailed=scene.children[0].material,flat=map.children[0].material;
+    assert.equal(detailed.map,flat.map,'both styles share one cached texture allocation');
+    const shader=material=>{const s={uniforms:{},vertexShader:'#include <uv_vertex>'};material.onBeforeCompile(s);return s;};
+    assert.equal(shader(detailed).uniforms.cityMarkerStyle.value,0);assert.equal(shader(flat).uniforms.cityMarkerStyle.value,1);
+    const mapGlyphs=glyphs.filter(glyph=>glyph.x===160);
+    assert.deepEqual(mapGlyphs.map(glyph=>glyph.label),['2','6']);
+    assert.equal(mapGlyphs[0].color,playerColors(world.players[0]).body.getStyle());
+    assert.ok(strokes.some(stroke=>stroke.x===160&&stroke.label==='2'),'level keeps a crisp contrast outline');
+    assert.ok(paints.filter(paint=>paint.x===0).some(paint=>paint.width>100),'detailed view retains its existing plate');
+    assert.ok(paints.filter(paint=>paint.x===160).every(paint=>paint.width<32),'only the small resident icon is painted behind map glyphs');
   }finally{markers.dispose();}
 });
 
