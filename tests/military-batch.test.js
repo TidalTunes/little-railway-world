@@ -134,8 +134,15 @@ test('batch cleanup is idempotent and releases all textures, geometry and materi
   const stats=batch.stats;batch.update(1);batch.setUnits([unit('ignored')]);assert.equal(batch.setPose('a',{x:2}),false);assert.equal(batch.setColor('a','blue'),false);assert.equal(batch.attack('a'),null);assert.equal(batch.muzzleAt('a'),null);assert.deepEqual(batch.stats,stats);
 });
 
-test('military previews remain outside the live game entry point',async()=>{
+test('military preview sandbox remains outside the live game entry point',async()=>{
   const source=await readFile(new URL('../src/main.js',import.meta.url),'utf8');
   const imports=[...source.matchAll(/\b(?:import|export)\s+(?:[^;'"\n]*?\s+from\s*)?['"]([^'"]+)['"]/g)].map(match=>match[1]);
-  assert.ok(imports.length>10);assert.ok(imports.every(path=>!path.includes('military')));
+  assert.ok(imports.length>10);assert.ok(imports.every(path=>!path.includes('military-preview')));
+});
+
+test('purchasing another unit does not restart existing attack clips',t=>{
+  const{batch}=fixture(t);batch.setUnits([unit('a')]);batch.update(4);batch.attack('a');
+  batch.setUnits([unit('a'),unit('b')]);batch.update(4.1);
+  const state=meshAt(batch).geometry.attributes.militaryState;
+  assert.equal(state.getZ(0),4);assert.equal(state.getZ(1),-100);
 });

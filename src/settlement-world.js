@@ -5,7 +5,7 @@ import {FARM_VILLAGE_PLAYER} from './farm-villages.js';
 
 /** Start from one homestead on the larger frontier. The compact prototype is
  * retained explicitly, without inheriting either showcase's infrastructure. */
-export function createSettlementWorld({seed='first-settlement-v1',economy='loops',map='frontier'}={}){
+export function createSettlementWorld({seed='first-settlement-v1',economy='loops',map='frontier',military=true}={}){
   const compact=map==='compact',world=compact?createIslandWorld({seed,trainCount:0}):createFrontierIsland({seed});
   const starterHouse={id:'home-1',kind:'house',x:-82,y:0,z:-43,rotation:0,
     scale:1,variant:0,ownerId:'teal',radius:Math.hypot(2.2,2.2)/2};
@@ -24,6 +24,7 @@ export function createSettlementWorld({seed='first-settlement-v1',economy='loops
     players:[...DEFAULT_PLAYERS,FARM_VILLAGE_PLAYER].map(player=>structuredClone(player)),
     traffic:{trainCount:0,circuits:[]},
     gameplay:{version:economy==='loops'?3:2,economy,ownerId:'teal',starterHouse,spawn,guaranteedTrees,farmVillageCount:compact?3:6,playerBotCount:3,
+      ...(economy==='loops'&&military?{military:{enabled:true,startResources:100,startFood:100,startGold:100},startSeconds:300}:{}),
       // These clear only the footprint of the authored home, spawn and trees.
       // They do not erase the surrounding forest to make a rectangular lot.
       reservations:[{x:starterHouse.x,z:starterHouse.z,radius:starterHouse.radius+.65},

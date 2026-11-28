@@ -11,7 +11,7 @@ import {createEconomicBots} from '../src/economic-bots.js';
 import {LOOP_ECONOMY_RULES,loopTrainCost} from '../src/loop-economy-rules.js';
 
 test('island loop rivals buy complete directed railway circuits through real physical settlements',()=>{
-  const world=generateWorld(createSettlementWorld({economy:'loops'}),{detail:'network'});
+  const world=generateWorld(createSettlementWorld({economy:'loops',military:false}),{detail:'network'});
   preparePlayerBotScenery(world,generateWorldRegion);
   const bots=[];let infrastructure={revision:0,buildings:[],paths:[],corridors:[]};
   const session=createSettlementSession(world,{getActors:()=>bots.map(bot=>bot.position),getInfrastructure:()=>infrastructure});

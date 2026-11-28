@@ -1,0 +1,34 @@
+.military-hud{--military-team:#168a7c;position:absolute;z-index:13;right:max(18px,env(safe-area-inset-right));top:50%;transform:translateY(-50%);width:104px;pointer-events:none;color:var(--hud-ink,#f0f0dc);font:12px/1.25 'Avenir Next','Segoe UI',sans-serif;font-variant-numeric:tabular-nums;user-select:none;-webkit-font-smoothing:antialiased}
+.military-hud[hidden],.military-hud [hidden]{display:none!important}
+.military-unit-rail{overflow:hidden;border:1px solid var(--hud-edge,#c3a461);border-radius:5px;background:var(--hud-panel-deep,#102c30);box-shadow:0 3px 0 #071d2266;pointer-events:auto}
+.military-buy{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;width:100%;min-height:106px;padding:5px 6px 8px;border:0;border-bottom:1px solid #b8ccc22b;border-radius:0;background:transparent;color:inherit;font:inherit;cursor:pointer;touch-action:manipulation}
+.military-buy:last-child{border-bottom:0}
+.military-buy:hover:not(:disabled){background:var(--hud-active,#36786c)}
+.military-buy:active:not(:disabled){background:#285d53}
+.military-buy:focus-visible{outline:2px solid #f1cd74;outline-offset:-3px;background:#285d53}
+.military-buy:disabled{cursor:default;color:#a6b9b1}
+.military-buy:disabled .military-portrait{opacity:.48;filter:saturate(.35)}
+.military-buy kbd{position:absolute;top:7px;left:7px;display:grid;place-items:center;min-width:18px;height:20px;box-sizing:border-box;border:1px solid #86a79b6b;border-bottom-width:2px;border-radius:3px;background:#0c2427;color:#e6e9d7;font:700 12px/1 'Avenir Next','Segoe UI',sans-serif}
+.military-portrait{display:block;pointer-events:none;width:96px;height:66px;object-fit:contain;margin:0 -4px -2px}
+.military-unit-label{display:block;font-size:11px;font-weight:650;line-height:1.25}
+.military-unit-cost{display:flex;justify-content:center;align-items:center;gap:7px;min-height:21px;margin-top:2px;color:#ece3bc}
+.military-unit-cost>span{display:flex;align-items:center;gap:2px}
+.military-unit-cost svg{display:block;width:19px;height:19px}
+.military-unit-cost b{font-size:12px;font-weight:650}
+.military-buy:disabled .military-unit-cost{color:#b7c2ae}
+.military-unit-count{position:absolute;top:8px;right:7px;min-width:17px;height:17px;box-sizing:border-box;padding:1px 4px;border-radius:2px;background:color-mix(in srgb,var(--military-team) 45%,#102c30);color:#f2f1d9;text-align:center;font-size:10px;font-weight:700;line-height:15px}
+.military-zone{display:flex;flex-direction:column;align-items:center;gap:2px;margin:7px 0 0;color:#d4e6d6;font-size:10px;font-weight:600;text-shadow:0 1px 2px #071e25,0 0 4px #071e25;pointer-events:auto}
+.military-zone>span:last-child{display:flex;align-items:center;gap:3px;color:#b8e4bf;font-size:10px}
+.military-zone svg{width:13px;height:15px}
+.military-selection{display:flex;justify-content:center;align-items:center;gap:7px;margin:8px 0 0;padding:5px 4px;background:#102c30ed;border-radius:3px;pointer-events:auto}
+.military-selection strong{font-size:10px;font-weight:650;white-space:nowrap}
+.military-protected{display:flex;align-items:center;gap:2px;color:#a9dfc0;font-weight:700}
+.military-protected svg{display:block;width:15px;height:17px}
+.military-feedback{position:absolute;right:calc(100% + 10px);top:50%;transform:translateY(-50%);width:max-content;max-width:min(230px,calc(100vw - 145px));margin:0;padding:7px 10px;background:var(--hud-panel,#183c3e);border-radius:4px;color:#f1d89a;font-size:12px;line-height:1.4;text-align:right}
+.military-marquee{position:absolute;z-index:9;box-sizing:border-box;border:1px solid #f4df9a;background:#e8d89120;pointer-events:none}
+.military-marquee[hidden]{display:none!important}
+.military-command-label{position:absolute;z-index:11;transform:translate(-50%,-100%);padding:4px 7px;border-radius:3px;background:#102c30e8;color:#f1e2af;font:600 11px/1.3 'Avenir Next','Segoe UI',sans-serif;pointer-events:none;white-space:nowrap}
+@media(prefers-reduced-motion:no-preference){.military-buy{transition:background-color 120ms ease-out}.military-portrait{transition:opacity 120ms ease-out}}
+@media(max-width:700px){.military-hud{right:max(9px,env(safe-area-inset-right));width:86px}.military-buy{min-height:93px;padding:3px 4px 6px}.military-portrait{width:82px;height:55px}.military-buy kbd{top:5px;left:5px}.military-unit-count{right:5px;top:6px}.military-selection{gap:4px}.military-protected svg{width:13px}.military-selection strong{font-size:9px}}
+@media(max-height:620px){.military-hud{width:90px}.military-buy{min-height:84px;padding-top:1px;padding-bottom:5px}.military-portrait{height:49px;width:86px}.military-unit-label{font-size:10px}.military-unit-cost{min-height:18px;margin-top:0}.military-unit-cost svg{width:17px;height:17px}.military-buy kbd{top:5px;left:5px}.military-unit-count{top:5px;right:5px}}
+@media(max-height:440px){.military-hud{top:56%;width:84px}.military-buy{min-height:65px}.military-portrait{height:35px;width:77px;margin-top:-2px}.military-unit-cost{min-height:16px}.military-unit-cost svg{width:15px;height:15px}.military-buy kbd{height:17px;min-width:16px;font-size:10px}.military-selection{margin-top:4px;padding:3px 2px}}

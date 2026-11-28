@@ -211,6 +211,22 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     }
     return {ok:true,id};
   }
+  /** A bounded destruction burst shares the projectile pools. Infantry leave
+   * a small puff; vehicles scatter painted fragments, with no persistent wreck. */
+  function burst({position:origin,kind='tank',color:paint,surface='grass'}={}){
+    if(disposed)return {ok:false,code:'disposed'};
+    if(!pointValid(origin)||!SURFACES.has(surface)||!['soldier','tank','artillery','helicopter'].includes(kind)||!readColor(paint,C.metal))return reject('invalid-burst');
+    const tint=inputColor.clone(),id=++serial,small=kind==='soldier',amount=small?7:18;
+    for(let i=0;i<amount;i++){
+      const seed=id*19+i*13,angle=noise(seed)*TAU,chip=!small&&i%3===0,speed=(.4+noise(seed+1)*1.8)*(small?.45:1);
+      particle({x:origin.x,y:origin.y+(small?.22:.55),z:origin.z,life:chip?.8:.65+noise(seed+2)*.65,
+        vx:Math.sin(angle)*speed,vy:chip?1.8+noise(seed+3):.35+noise(seed+3)*.5,vz:Math.cos(angle)*speed,
+        gravity:chip?5:0,size:small?.075:chip?.1:.18,aspect:chip?.65:1,spin:chip?5:0,heading:angle,
+        tint:chip?tint:C.rockLight,alpha:chip?.95:.5,mode:chip?'chip':'smoke'});
+    }
+    if(!small)particle({x:origin.x,y:origin.y+.6,z:origin.z,life:.18,size:.7,aspect:.7,tint:C.gold,alpha:.85,mode:'flash'});
+    return {ok:true,id};
+  }
   function expire(){
     for(const target of transientPools)if(time>=target.nextExpiry){
       // Recycled records can leave an earlier lower bound, but never a late
@@ -279,7 +295,7 @@ export function createMilitaryEffects(parent,{maxProjectiles=48,maxParticles=256
     lastImpact=null;dirty=true;draw();
   }
   function count(target){return target.active;}
-  return {fire,contact,update,clear,
+  return {root,fire,contact,burst,update,clear,
     get stats(){
       const active={projectiles:count(projectiles),particles:count(particles),marks:count(marks)};let drawCalls=0;
       for(const target of batches)if(target.mesh.visible&&target.mesh.count)drawCalls++;

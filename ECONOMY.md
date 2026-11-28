@@ -1,10 +1,10 @@
 # Directed loops and working towns
 
-The default island uses the deliberately small `economy: 'loops'` ruleset. The earlier industry-and-depot prototype remains available in its isolated regression fixtures, but is no longer the launch game. There are no grain requirements, tools, warehouses, industry switches, unit prices, deposits, or automatic free trains in this mode.
+The default island uses the deliberately small `economy: 'loops'` ruleset. The earlier industry-and-depot prototype remains available in its isolated regression fixtures, but is no longer the launch game. There are no grain requirements, tools, warehouses, industry switches, market prices, deposits, or automatic free trains in this mode.
 
 ## Founding and resources
 
-Each human or rival settler starts with one home, **40 resources, 12 food and 50 gold**. An axe strike fells a tree for **one Resource**. Mining a persistent ore deposit also awards one Resource, with **1.2 seconds of work between rewards**. Its cooldown belongs to the player, so clicking faster or changing deposits cannot skip the interval. A home costs **eight resources and two food**, must join the existing settlement, and keeps the ordinary footprint, terrain, reach and connecting-path checks. Each owner has one city. Three homes establish level 1; six, nine, twelve and fifteen homes reach levels 2–5. New homes add residents. Level 5 caps the displayed city level, not its population or production.
+The current combat-testing launch starts at night with one home and **100 Resources, 100 Food and 100 Gold** for each human or rival settler. This is a launch configuration override: isolated economy benchmarks and `createSettlementWorld({military:false})` retain **40 Resources, 12 Food and 50 Gold** and a daylight start. An axe strike fells a tree for **one Resource**. Mining a persistent ore deposit also awards one Resource, with **1.2 seconds of work between rewards**. Its cooldown belongs to the player, so clicking faster or changing deposits cannot skip the interval. A home costs **eight resources and two food**, must join the existing settlement, and keeps the ordinary footprint, terrain, reach and connecting-path checks. Each owner has one city. Three homes establish level 1; six, nine, twelve and fifteen homes reach levels 2–5. New homes add residents. Level 5 caps the displayed city level, not its population or production.
 
 An owner's Resources, Food and Gold are global totals shown at the top of the screen. Gold circulates between buyers and suppliers; there is no ongoing train upkeep. Wood and metal share one **Resources** balance; neither has a separate inventory. Goods are not held at a particular house or station.
 
@@ -16,6 +16,8 @@ An owner's Resources, Food and Gold are global totals shown at the top of the sc
 Only gray villages produce food. The launch island gives each gray village six homes and a station. The three competing settlers begin in forest, desert and plains respectively, but all have the same resource production rules.
 
 Production pays in synchronized **one-minute daytime ticks**, one unit per current resident. The first day pays at 60, 120, 180, 240 and 300 seconds. Night lasts from 300 to 600 seconds; the next payout is at 660. There are exactly five production payouts per day, including sunset. A homestead qualifies before it becomes a city, and homes beyond fifteen keep increasing its payout. The population at each boundary determines that entire payout: there is no partial-minute accumulation. Gray villages use the same schedule to produce food. Each village has its own finite stock, starting empty until its first harvest; its available Food appears above the city tag. Player and rival city tags show their available Resources in the same enlarged stock line. Villages cannot borrow another village’s stock.
+
+The combat test initializes the calendar and economy at second 300 together; it does not pay the five daytime production ticks that preceded the opening night. Its first production is at second 660.
 
 The calendar is authoritative. Explicit strategy pause and a hidden browser tab freeze the default game calendar, trains and economy together; returning to the game does not replay unattended time. Sparse active updates process every crossed boundary once; rendering and frame rate cannot move a payout. The HUD countdown spans the night to the next actual production boundary and shows five remaining ticks at dawn. Its progress indicator pauses at night.
 
@@ -49,6 +51,25 @@ Resource rates are **estimates per minute**, not early credits. They combine day
 
 Overview feedback uses small resource and coin symbols at the actual pickup, delivery and payment locations. Settlement popups show daytime production. Workers’ gathering visuals remain cosmetic. None of these effects changes a wallet or awards a second copy.
 
+## Military recruitment and combat
+
+Military purchases consume the same owner-wide Resources and Food used by construction. There is no Gold charge, upkeep, loot or refund for destroyed units.
+
+| Unit / key | Cost | Health | Attack per hit | Attack interval | Range | Blast radius |
+| --- | --- | --- | --- | --- | --- | --- |
+| Infantry / 1 | 1 Resource + 1 Food | 6 | 1 | 0.9 s | 9 | None |
+| Tank / 2 | 20 Resources | 28 | 5 | 1.8 s | 14 | 1.6 |
+| Artillery / 3 | 20 Resources | 12 | 8 | 3.5 s | 24 | 3.8 |
+| Helicopter / 4 | 20 Resources | 18 | 2 | 0.45 s | 15 | 0.65 |
+
+Blast damage falls with distance and never hurts friendly units. Artillery has a three-unit minimum range. Ground-target accuracy is 76%, 97%, 82% and 90% respectively; against helicopters it is 20%, 72%, 8% and 90%. Projectiles resolve after their travel animation, so moving out of a blast can avoid damage. Helicopters hold a five-unit clearance above the terrain and can cross water.
+
+Recruitment checks affordability and a clear random spawn before spending. A failed purchase leaves both balances intact. The spawn band extends seven units beyond the city or outpost footprint. Friendly military units inside their own outer spawn boundary take half damage, including units inside the inner city circle. Combat has no effect on houses, population, production, railways, villagers or the traveller. Only military units are attack targets.
+
+In overview, left click or drag selects owned units, Shift adds to the selection, and right click gives a move or attack order. Automatic target acquisition works without an explicit attack order. Middle-button camera dragging and WASD panning remain available. Purchases also work through the illustrated right-hand unit bar.
+
+Rival armies begin buying during the first second, spread recruitment across successive updates, and spend at most 55 Resources in total. Their initial mix includes two vehicle types and infantry, leaving at least 45 of the opening Resources available for other purposes before construction and trading expenditure. Offensive orders begin after 45 seconds; before then the army stages around its city and can defend against nearby enemies. Gray farming villages do not recruit armies.
+
 ## Rival settlers
 
 Rivals use ordinary physical movement, tree chopping, house placement, track costs and train purchases. They grow to six homes first, choose a reachable useful partner, fund both directions and retain enough resources for a train. They prefer food-producing gray villages, then use distance to choose practical connections. Once a train runs, they grow toward fifteen homes. Browser route validation runs through the same asynchronous planner as player construction; one pending bot request is allowed at a time.
@@ -69,7 +90,9 @@ The benchmark compares a food loop, a resource loop, and a mixed three-city loop
 
 The benchmarks distinguish an empty completed lap from a delivery. An early train can reach a farm before its first harvest; its fare is refunded and it returns empty. Over fifteen minutes, dedicated food and materials routes specialize in those imports, while longer mixed loops bring both. Distance lowers throughput and increases track investment without changing the flat train price.
 
-Each result reconciles all owner wallets, village stocks, onboard cargo, reserved fares, purchases and production. Gold is conserved across wallets and escrow. Goods accounting includes population production, the explicit one-unit trade bonus per successful pickup, and construction purchases. Supplier withdrawals and minted bonuses are reported separately; loaded cargo equals their sum. Tests also cover an exhausted buyer’s Gold reserve, which destroys the unfunded train after delivering its cargo and clears the track for incoming trade.
+Each result reconciles all owner wallets, village stocks, onboard cargo, reserved fares, purchases and production. Gold is conserved across wallets and escrow. The economy-only benchmark accounts for population production, the explicit one-unit trade bonus per successful pickup, and construction purchases. Live combat adds military recruitment as another Resource and Food sink; it creates no income. Supplier withdrawals and minted bonuses are reported separately; loaded cargo equals their sum. Tests also cover an exhausted buyer’s Gold reserve, which destroys the unfunded train after delivering its cargo and clears the track for incoming trade.
+
+Military simulation tests independently check purchases and refunds, safe spawns on the actual island, navigation, formation separation, damage and shielding, timing, and bot spending.
 
 Focused tests check minute boundaries, sunset and dawn, frame-independent movement, uncapped population, construction costs, finite pickups, empty refunds, station-car alignment, one-second stops, full-consist spawn queues, shallow crossings, and actual payments. Real-island rival tests verify physical growth, paid directed circuits and transport. The earlier depot economy remains isolated in legacy fixtures and `scripts/simulate-legacy-economy.mjs`.
 

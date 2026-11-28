@@ -28,8 +28,8 @@ export function completedDayCount(elapsedSeconds){
 /** One shared calendar can suspend at a precise wall-clock boundary. Resuming
  * rebases that boundary, so hidden time never becomes a simulation backlog.
  * Legacy callers remain continuous unless they explicitly pause the clock. */
-export function createDayCalendar(){
-  let wall=0,anchorWall=0,anchorElapsed=0,paused=false;
+export function createDayCalendar({elapsedSeconds=0}={}){
+  let wall=0,anchorWall=0,anchorElapsed=Number.isFinite(elapsedSeconds)?Math.max(0,elapsedSeconds):0,paused=false;
   const state={};
   function read(wallSeconds=wall){
     if(Number.isFinite(wallSeconds))wall=Math.max(wall,wallSeconds);

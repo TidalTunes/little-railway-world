@@ -33,7 +33,7 @@ function silhouette(parent,kind,palette){
   const muzzle=new THREE.Object3D();muzzle.position.set(0,.5,1);body.add(muzzle);
   return {root,muzzle,pose({time=0,attack=0,moving=0}={}){
     body.position.z=attack>0?-.08*Math.sin(Math.PI*attack):0;
-    body.position.y=kind==='helicopter'?Math.sin(time*Math.PI*2)*.035:Math.abs(Math.sin(time*Math.PI*2))*.018*moving;
+    body.position.y=kind==='helicopter'?0:Math.abs(Math.sin(time*Math.PI*2))*.018*moving;
     if(rotor)rotor.rotation.y=time*Math.PI*6;
   },dispose(){geometries.forEach(g=>g.dispose());root.removeFromParent();}};
 }
@@ -147,8 +147,8 @@ export function createMilitaryBatch(parent,{capacity=2048}={}){
     if(disposed)return; if(!Array.isArray(values)||values.length>capacity)throw new RangeError('Military unit capacity exceeded');
     const ids=new Set();
     for(const unit of values){if(ids.has(unit.id)||unit.id==null||!MILITARY_KINDS.includes(unit.kind)||!finitePoint(unit)||!Number.isFinite(unit.heading??0)||!Number.isFinite(unit.scale??1)||(unit.scale??1)<=0)throw new TypeError('Invalid military unit');ids.add(unit.id);shades(unit.team);}
-    units.length=0;lookup.clear();
-    for(const unit of values){const record={...unit,heading:unit.heading??0,scale:unit.scale??1,moving:unit.moving?1:0,phase:Number.isFinite(unit.phase)?unit.phase:0,attackStart:-100,batch:null,slot:-1,colors:shades(unit.team)};units.push(record);lookup.set(record.id,record);}dirty=true;
+    const attacks=new Map(units.map(unit=>[unit.id,unit.attackStart]));units.length=0;lookup.clear();
+    for(const unit of values){const record={...unit,heading:unit.heading??0,scale:unit.scale??1,moving:unit.moving?1:0,phase:Number.isFinite(unit.phase)?unit.phase:0,attackStart:attacks.get(unit.id)??-100,batch:null,slot:-1,colors:shades(unit.team)};units.push(record);lookup.set(record.id,record);}dirty=true;
   }
   function setPose(id,pose){
     const unit=lookup.get(id);if(disposed||!unit)return false;

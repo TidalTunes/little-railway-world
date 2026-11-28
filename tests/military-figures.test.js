@@ -89,11 +89,11 @@ test('soldier has a planted foot throughout the stylized stride and both hands s
   }
 });
 
-test('helicopter rotors move while hover stays inside the caller-controlled altitude',t=>{
+test('helicopter rotors move while the fuselage keeps a fixed caller-controlled altitude',t=>{
   const{art}=fixture(t,createHelicopterArt),body=art.root.getObjectByName('helicopter-body'),rotor=art.root.getObjectByName('helicopter-main-rotor'),tail=art.root.getObjectByName('helicopter-tail-rotor');
   art.root.position.y=1.3;art.pose({time:.1});assert.notEqual(rotor.rotation.y,0);assert.notEqual(tail.rotation.x,0);
   for(let frame=0;frame<120;frame++){
-    art.pose({time:frame/30,moving:1,attack:frame/120});near(art.root.position.y,1.3);assert.ok(body.position.y>=0&&body.position.y<=.032);assert.ok(Math.abs(body.rotation.x)<.06);assert.ok(Math.abs(body.rotation.z)<.01);
+    art.pose({time:frame/30,moving:1,attack:frame/120});near(art.root.position.y,1.3);assert.equal(body.position.y,0);assert.ok(Math.abs(body.rotation.x)<.06);assert.equal(body.rotation.z,0);
   }
   const shell=art.root.getObjectByName('helicopter-fuselage');assert.ok(shell.material.length===3,'glass and paint share the same continuous shell');
 });

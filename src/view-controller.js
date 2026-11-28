@@ -18,7 +18,7 @@ const DETAIL_POLAR_ANGLE=Math.PI/4;
 const POLE_LIMIT=85*Math.PI/180;
 const wrappedLongitude=(value,radius)=>THREE.MathUtils.euclideanModulo(value+Math.PI*radius,2*Math.PI*radius)-Math.PI*radius;
 
-export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true,isPointerSelectionBlocked=()=>false}){
+export function createViewController({canvas,camera,scene,mapScene,reducedMotion,getTrains,getWorldRoot,getWorld=()=>null,onPause,onRegenerate,isDetailReady=()=>true,isPointerSelectionBlocked=()=>false,isRtsActive=()=>false}){
   // Navigation stores a ground focus and yaw at a fixed local inclination.
   // The overview can rise above that rig without changing its navigation pose.
   const navigation=camera.clone(),chartCamera=camera.clone(),coverageChart=camera.clone(),coverageView=camera.clone(),proposedChart=camera.clone(),proposedView=camera.clone(),presentation=camera.clone();
@@ -215,7 +215,8 @@ export function createViewController({canvas,camera,scene,mapScene,reducedMotion
     inputPlan=plan;
     controls.enabled=inputEnabled;
     controls.enableRotate=!plan;controls.enablePan=plan&&!selected;controls.screenSpacePanning=false;
-    controls.mouseButtons.LEFT=plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
+    controls.mouseButtons.LEFT=isRtsActive()?null:plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
+    controls.mouseButtons.MIDDLE=isRtsActive()?(plan?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE):THREE.MOUSE.DOLLY;
     controls.touches.ONE=plan?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
     controls.touches.TWO=plan?THREE.TOUCH.DOLLY_PAN:THREE.TOUCH.DOLLY_ROTATE;
   }

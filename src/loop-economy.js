@@ -21,7 +21,8 @@ export function createLoopEconomy(world,{session,railways,networkFactory=createD
   if(!session?.player||!railways?.snapshot)throw new TypeError('Economy requires a settlement session and railway authority');
   const accounts=new Map(),cities=new Map(),trains=new Map(),production=new Map(),villageStocks=new Map(),events=[],fleet=[];
   const stats={productionEvents:0,produced:empty(),withdrawn:empty(),minted:empty(),pickups:empty(),delivered:empty(),deliveries:0,laps:0,goldReserved:0,goldPaid:0,goldRefunded:0,emptyVisits:0,trainsBought:0,trainsLost:0,trainSpent:0,construction:empty()};
-  let fleetDirty=false,time=0,simulationTick=0,revision=0,spatialKey=null,railRevision=null,network=null,nextTrain=1,nextEvent=1,nextTick=LOOP_ECONOMY.productionSeconds;
+  const openingTime=Number.isFinite(world.gameplay?.startSeconds)?Math.max(0,world.gameplay.startSeconds):0;
+  let fleetDirty=false,time=openingTime,simulationTick=Math.floor(openingTime/STEP),revision=0,spatialKey=null,railRevision=null,network=null,nextTrain=1,nextEvent=1,nextTick=(Math.floor(openingTime/LOOP_ECONOMY.productionSeconds)+1)*LOOP_ECONOMY.productionSeconds;
   const traffic=trafficFactory({sample:(train,distance,out)=>train.network.sample(train.loop,train.origin+distance,out),spacing:TRAIN_CAR_SPACING,deceleration:LOOP_ECONOMY.deceleration});
   const games=()=>[session.player,...(session.bots??[]).map(entry=>entry.game)];
   function emit(event){events.push({id:`loop-event:${nextEvent++}`,...event,time});if(events.length>256)events.shift();}

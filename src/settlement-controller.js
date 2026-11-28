@@ -31,6 +31,7 @@ import {createRailwayPreview} from './settlement-railway-preview.js';
 import {pickRailwayCity,pickRailwayHandle,pickRailwayAnchor,railwayCityLabel,railwayDraftDirection} from './settlement-railway-input.js';
 import {surfaceDistance} from './world-surface.js';
 import {walkingBuildAim} from './walking-build-aim.js';
+import {createMilitaryCollisionSource} from './military-scenery.js';
 
 /** Session gameplay connects the existing movement, streamed scenery and shared
  * art. The rules stay independent of input, animation and the HUD. */
@@ -70,6 +71,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     spendConstruction:(point,cost)=>economy.spendConstruction(account.ownerId,point,cost),
     ...(loopMode&&{spendResources:amount=>economy.spendResources(account.ownerId,amount),creditResources:amount=>economy.creditResources(account.ownerId,amount)})});
   if(loopMode)resourceWork=createResourceWork(world,{session,getPlacements:()=>detail.placements});
+  const militaryCollisions=createMilitaryCollisionSource(world,{session,getExtraPlacements:resourcePlacements,getExtraRevision:()=>resourceWork?.placementRevision??0});
   const resourceWorkArt=resourceWork?createResourceWorkArt(parent,world,resourceWork):null;
   const tradeArt=economy?createTradeTrains(parent,mapParent,world):null;
   const trainExplosions=loopMode?createTrainExplosionEffects(parent,mapParent,world):null;
@@ -378,8 +380,9 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
     get placements(){synchronize();return scenery;},get placementRevision(){synchronize();return `${detailRevision}:${sessionRevision}:${resourceRevision}:${railRevision}`;},
     get cityStreets(){synchronize();return streets;},
     get railwayLines(){synchronize();return railLines;},
-    getCollisionPlacements(){synchronize();return collisions;},getTerrainMeshes(){synchronize();return meshes;},
+    getCollisionPlacements(){synchronize();return collisions;},getMilitaryCollisionPlacements(){synchronize();return militaryCollisions();},getTerrainMeshes(){synchronize();return meshes;},
     getCollisionTrains(){return collisionTrains;},
+    cancelPointerSelection(){releaseRailPress();pointer=null;clearCircuit();},
     keyDown(event){
       const key=event.key.toLowerCase();
       if(key==='escape'&&!walking&&tool==='axe'&&(selectedCircuit||inspectedCity)){clearCircuit();return true;}

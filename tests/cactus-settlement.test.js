@@ -7,9 +7,10 @@ import {createSettlementSession} from '../src/settlement-session.js';
 import {createPlayerBot} from '../src/player-bots.js';
 
 test('the default desert settler physically harvests cacti and builds its six-house station milestone',()=>{
-  const world=generateWorld(createSettlementWorld(),{detail:'network'});preparePlayerBotScenery(world,generateWorldRegion);
+  const world=generateWorld(createSettlementWorld({military:false}),{detail:'network'});preparePlayerBotScenery(world,generateWorldRegion);
   const session=createSettlementSession(world),entry=session.bots.find(candidate=>candidate.config.biome==='desert');
   assert.ok(entry,'the default map has a dryland competitor');
+  // Use normal founding funds, without the combat test's extra reserves.
   // Force one home's worth of harvesting. This fixture has no production or
   // regrowth, so its ten founding cacti must cover the entire resource deficit.
   const houseCost=entry.game.constructionCost.resources;

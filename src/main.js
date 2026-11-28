@@ -26,8 +26,10 @@ import {createCharacterTransition} from './character-transition.js';
 import {createCharacterMarker} from './character-marker.js';
 import {createClockHands} from './clock-hands.js';
 import {createSettlementController} from './settlement-controller.js';
+import {createMilitaryController} from './military-controller.js';
 import './style.css';
 import './settlement-hud.css';
+import './military-hud.css';
 
 const canvas=document.querySelector('#world'),scene=new THREE.Scene(),mapScene=new THREE.Scene();
 const artCanvasDescription=canvas.getAttribute('aria-label');
@@ -54,7 +56,7 @@ ground.rotation.x=-Math.PI/2;ground.position.y=-5.7;ground.receiveShadow=true;sc
 
 let model,worldRoot,detail,trains=[],railway,life,authoring,mapWorld,surfaceShell,detailBase,worker,pendingWorker;
 let walker,walkingDetail,characterMarker,clockHands,walkSpawn,entryFrame=false,walkingMode=false,walkingBuffersReady=false;
-let settlement,localLighting;
+let settlement,localLighting,military;
 function refreshCanvasCursor(){
   const mode=settlement?.building?'build':walkingMode&&canvas.dataset.pointerLocked!=='false'?'hidden':'overview';
   if(canvas.dataset.cursor!==mode)canvas.dataset.cursor=mode;
@@ -81,7 +83,8 @@ const geometryUploader=createGeometryUploader(renderer);
 const view=createViewController({canvas,camera,scene,mapScene,reducedMotion,
   getTrains:()=>settlement?[...trains,...settlement.tradeArt?.trains??[]]:trains,getWorldRoot:()=>worldRoot,getWorld:()=>model,
   isDetailReady:()=>!!detail?.ready&&shaderReady,
-  isPointerSelectionBlocked:()=>settlement?.railwayPlanning??false,
+  isPointerSelectionBlocked:()=>!!(settlement?.railwayPlanning||military?.selecting),
+  isRtsActive:()=>!!military&&!walkingMode&&!characterTransition.active&&!settlement?.railwayPlanning,
   onPause:()=>{
     if(loopGameplay()){gameplayPaused=!gameplayPaused;paused=gameplayPaused||reducedMotion.matches;calendarState();}
     else paused=!paused;
@@ -255,7 +258,7 @@ async function loadWorld(input={}){
     walkingMode=false;walkingInput.clear();view.setInputEnabled(true);
     characterTransition=createCharacterTransition({reducedMotion});transitionMapStart=renderedMapBlend=0;
     scene.fog.near=1e6;scene.fog.far=2e6;walkingSky.root.visible=false;
-    settlement?.dispose();settlement=null;refreshCanvasCursor();
+    military?.dispose();military=null;settlement?.dispose();settlement=null;refreshCanvasCursor();
     walker?.dispose();walkingDetail?.dispose();characterMarker?.dispose();clockHands?.dispose();localLighting?.dispose();
     disposeLife();detailBase?.dispose();surfaceShell?.dispose();detail?.dispose();railway?.dispose();worldRoot?.removeFromParent();mapWorld?.dispose();
     worker?.dispose();worker=nextWorker;pendingWorker=null;
@@ -273,16 +276,20 @@ async function loadWorld(input={}){
     characterMarker=createCharacterMarker(scene,mapScene,model);
     clockHands=createClockHands(root,model);
     localLighting=createLocalLighting(scene,model);
+    if(model.gameplay?.military?.enabled){
+      military=createMilitaryController({canvas,world:model,parent:root,mapParent:mapWorld.root,settlement,renderer,onClaimPointer:()=>view.claimPointer(),reducedMotion});
+      military.prepare();
+    }
     if(walkSpawn)walkingDetail.update(walkSpawn,{visible:false});
     canvas.dataset.cities=String(model.cities.length);canvas.dataset.trains=String(trains.length);
     canvas.dataset.surface=surfaceFor(model)?'sphere':'plane';
-    if(settlement)canvas.setAttribute('aria-label','Railway settlement. Explore on foot, build your town, and connect directed railway circuits. Select tracks in overview to inspect a circuit and add trains.');
+    if(settlement)canvas.setAttribute('aria-label','Railway settlement. Explore on foot, build your town, and connect directed railway circuits. Select tracks in overview to add trains. Recruit infantry, tanks, artillery and helicopters with 1–4. Drag to select units in overview, then right-click to move or attack. Middle-drag or WASD moves the strategy camera.');
     else canvas.setAttribute('aria-label',artCanvasDescription);
     if(document.activeElement===document.body)canvas.focus({preventScroll:true});
     if(loopGameplay()){
-      // A newly created economy starts at the same zero as its calendar, even
-      // when replacing another world after a long session or hidden load.
-      calendar=createDayCalendar();daylightStartedAt=performance.now();gameplayPaused=false;paused=reducedMotion.matches;
+      // Calendar and economy share their configured origin. Starting at night
+      // must never credit the production ticks from an unplayed daytime.
+      calendar=createDayCalendar({elapsedSeconds:model.gameplay?.startSeconds??0});daylightStartedAt=performance.now();gameplayPaused=false;paused=reducedMotion.matches;
       calendar.setPaused(document.hidden,0);
     }else if(daylightStartedAt===undefined)daylightStartedAt=performance.now();
     else calendarState();
@@ -378,6 +385,7 @@ function frame(now){
       coverageCameras:groundLayer?undefined:view.coverageCameras,retainVisible:groundLayer||view.blend<1});
     initializeCharacter();groundFocus=walker?.initialized?walker.position:walkSpawn;
     settlement?.update(simulationPaused?0:dt,{walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,zoom:navigation.zoom,dayState,night:daylight.night,uiDt:dt});
+    military?.update(simulationPaused?0:dt,{renderReady:shaderReady,walking:walkingMode,transitioning:characterTransition.active,camera:activeCamera,mapBlend:blend,walkingWeight,focus,viewportHeight:innerHeight,night:daylight.night});
     if(walker?.initialized)walker.root.visible=true;
     if(groundFocus)walkingDetail.update(groundFocus,{placements:settlement?.placements??detail.placements,revision:settlement?.placementRevision??detail.placementRevision,
       cityStreets:settlement?.cityStreets??detail.cityStreets,railLines:settlement?.railwayLines??model.lines,
@@ -394,8 +402,10 @@ function frame(now){
       const version=loadingVersion;
       renderer.shadowMap.enabled=true;
       if(!life)life=localAmbience(worldRoot,model);
+      const restoreMilitary=military?.art.prepare();
       shaderJob=compositor.prepare(scene,mapScene,camera)
         .then(()=>{if(version===loadingVersion)shaderReady=true;})
+        .finally(()=>restoreMilitary?.())
         .catch(error=>{if(version===loadingVersion){shaderJob=null;reportError(error);}});
     }
     detailCpu=performance.now()-stamp;stamp=performance.now();
@@ -455,6 +465,7 @@ window.railway=Object.freeze({
   loadWorld:input=>loadWorld(input).then(world=>structuredClone(world)),
   exportWorld:()=>structuredClone(authoring),inspectWorld:()=>structuredClone(model),
   inspectSettlement:()=>settlement?{player:settlement.game.snapshot(),bots:settlement.bots.snapshot(),railway:settlement.railways.snapshot(),economy:settlement.economy?.snapshot(),workers:settlement.resourceWork?.snapshot(),strategies:settlement.economicBots?.snapshot()}:null,
+  inspectMilitary:()=>military?{units:military.simulation.units.map(({path,...unit})=>({...unit})),zones:military.simulation.spawnZones,stats:military.simulation.stats}:null,
   generateWorld,validateWorld,createStressWorld,
 });
 const parameters=new URLSearchParams(location.search);

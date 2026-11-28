@@ -68,7 +68,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   const villageBuildings=[...villages.houses??[],...villages.buildings??[]],villagePaths=villages.paths??[];
   const economic=Boolean(world.gameplay?.economy),loopEconomy=world.gameplay?.economy==='loops';
   let cities=[],clusters=[],economy=null,establishedCity=false;
-  let logs=loopEconomy?LOOP.startResources:economic?12:0,food=loopEconomy?LOOP.startFood:0,gold=loopEconomy?LOOP.startGold:economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
+  const opening=world.gameplay?.military?.enabled?world.gameplay.military:LOOP;
+  let logs=loopEconomy?opening.startResources??LOOP.startResources:economic?12:0,food=loopEconomy?opening.startFood??LOOP.startFood:0,gold=loopEconomy?opening.startGold??LOOP.startGold:economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
   let miningCooldown=0;
 

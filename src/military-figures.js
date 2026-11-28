@@ -110,8 +110,8 @@ function finGeometry(){
   const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(points,3));geometry.setIndex(indices);geometry.computeVertexNormals();return geometry;
 }
 
-/** The caller sets the flight altitude on root. Only the inner body bobs; all
- * weapons, skids and rotors remain a single attached miniature. */
+/** The caller sets the fixed flight altitude on root. The rotor and recoil
+ * animate without shifting the fuselage above or below that flight plane. */
 export function createHelicopterArt(parent,{palette}={}){
   const f=figure(parent,'helicopter',palette),{root,p,group,mesh,block}=f;
   const aim=group(root,'helicopter-aim'),body=group(aim,'helicopter-body');
@@ -147,8 +147,8 @@ export function createHelicopterArt(parent,{palette}={}){
   function pose({time=0,moving=0,attack=0,aimYaw=0,elevation=0}={}){
     if(f.disposed)return;
     time=finite(time);moving=unit(moving);attack=unit(attack);const phase=(time%1)*TAU,kick=recoil(attack);
-    aim.rotation.y=finite(aimYaw)%TAU;body.position.y=.016*(1-Math.cos(phase));body.position.z=-.018*kick;
-    body.rotation.set(-THREE.MathUtils.clamp(finite(elevation),-.5,.65)-moving*.035+.006*Math.sin(phase)+.012*kick,0,.009*Math.sin(phase));
+    aim.rotation.y=finite(aimYaw)%TAU;body.position.y=0;body.position.z=-.018*kick;
+    body.rotation.set(-THREE.MathUtils.clamp(finite(elevation),-.5,.65)-moving*.035+.012*kick,0,0);
     rotor.rotation.y=(phase*4)%TAU;tailRotor.rotation.x=(phase*6)%TAU;
   }
   pose();return{root,muzzle,pose,dispose:f.dispose};
