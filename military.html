@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#183f3c" />
+    <title>Field study · Little Railway World</title>
+    <script type="module" crossorigin src="./assets/military-TZUThJBZ.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/three.core-CA5WbFkz.js">
+    <link rel="modulepreload" crossorigin href="./assets/palette-CQseZyQo.js">
+    <link rel="modulepreload" crossorigin href="./assets/player-palette-CQchlzim.js">
+    <link rel="stylesheet" crossorigin href="./assets/military-BhuISRoh.css">
+  </head>
+  <body>
+    <canvas id="world" tabindex="0" aria-label="Interactive military asset preview"></canvas>
+    <header class="heading"><span class="eyebrow">Little Railway World / Art workshop</span><h1>Field study</h1><p>Four silhouettes. One shared world.</p></header>
+    <nav class="unit-picker" aria-label="Asset selection">
+      <button data-kind="all" aria-pressed="true">Collection</button>
+      <button data-kind="soldier" aria-pressed="false">Infantry</button>
+      <button data-kind="tank" aria-pressed="false">Tank</button>
+      <button data-kind="artillery" aria-pressed="false">Artillery</button>
+      <button data-kind="helicopter" aria-pressed="false">Helicopter</button>
+    </nav>
+    <section class="workbench" aria-label="Art controls">
+      <div class="swatches" role="group" aria-label="Team color">
+        <button data-team="teal" aria-label="Teal team" aria-pressed="true"></button>
+        <button data-team="coral" aria-label="Coral team" aria-pressed="false"></button>
+        <button data-team="blue" aria-label="Blue team" aria-pressed="false"></button>
+        <button data-team="ochre" aria-label="Ochre team" aria-pressed="false"></button>
+        <label class="custom-color" title="Custom team color"><input id="team-color" type="color" value="#309d90" aria-label="Custom team color"/><span>+</span></label>
+      </div>
+      <div class="action-row"><button id="fire" class="primary">Fire <kbd>Space</kbd></button><button id="moving" aria-pressed="false">Motion</button><button id="exchange" aria-pressed="true">Exchange fire</button></div>
+      <div class="settings-row"><label>Units <select id="count"><option value="4">4 · collection</option><option value="128">128</option><option value="512">512</option><option value="2048">2,048</option></select></label><label>Ground <select id="surface"><option value="grass">Meadow</option><option value="sand">Sand</option><option value="stone">Stone</option><option value="water">Shallows</option></select></label><button id="pause" aria-pressed="false" aria-label="Pause animation">Pause</button></div>
+    </section>
+    <aside class="performance" aria-label="Rendering statistics"><strong id="visible-count">4 units</strong><span id="performance">Preparing shared animation clips…</span><small>Cosmetic exchanges only · separate from the game</small></aside>
+    <div id="status" role="status" aria-live="polite"></div>
+  </body>
+</html>
