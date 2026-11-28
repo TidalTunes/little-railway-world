@@ -131,7 +131,7 @@ export function createSettlementHud({
       <div class="settlement-inventory" role="group" aria-label="Resources">
         <div class="settlement-resource settlement-wood" data-hud="wood-stock" aria-label="Building materials"><span class="settlement-stock-symbol" data-hud="stock-symbol">${symbols.log}</span><span class="settlement-resource-copy"><span class="settlement-resource-caption" data-hud="timber-label">Logs</span><strong data-hud="logs">0</strong><span class="settlement-rate" data-hud="resources-rate" hidden></span></span></div>
         <div class="settlement-resource settlement-food" data-hud="food-stock" hidden>${symbols.food}<span class="settlement-resource-copy"><span class="settlement-resource-caption">Food</span><strong data-hud="food">0</strong><span class="settlement-rate" data-hud="food-rate" hidden></span></span></div>
-        <div class="settlement-resource settlement-gold" data-hud="gold-stock" aria-label="No gold">${symbols.coin}<span class="settlement-resource-copy"><span class="settlement-resource-caption">Gold</span><strong data-hud="gold">0</strong></span></div>
+        <div class="settlement-resource settlement-gold" data-hud="gold-stock" aria-label="No gold">${symbols.coin}<span class="settlement-resource-copy"><span class="settlement-resource-caption">Gold</span><strong data-hud="gold">0</strong><span class="settlement-rate" data-hud="gold-rate" hidden></span></span></div>
       </div>
     </div>
     <div class="settlement-day-control"><span class="settlement-phase-label"><span data-hud="phase-symbol" data-kind="sun">${symbols.sun}</span><span class="settlement-label" data-hud="day-phase">Daytime</span><span class="settlement-clock" data-hud="production-clock" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="settlement-clock-track" cx="12" cy="12" r="9"/><circle class="settlement-clock-progress" data-hud="clock-progress" cx="12" cy="12" r="9" pathLength="1"/><path d="M12 7v5l3 2"/></svg><span data-hud="clock-time">1:00</span></span></span></div>
@@ -180,8 +180,8 @@ export function createSettlementHud({
       ready=true,canBuild=false,connected=true,reason='',targetTree=false,targetOre=false,message='',visible=true,dayPhase='day',nightAmount,productionClock,railway=null,economic=false,resources,rates=resources?.rates??{},buildCost={timber:10,tools:0}}=current;
     const loopMode=economic==='loops',food=count(resources?.food);
     const logs=count(loopMode&&Number.isFinite(resources?.resources)?resources.resources:rawLogs),displayLogs=logs;
-    const gold=loopMode?0:count(rawGold),growth=settlementHudProgress(cityHouses),night=dayPhase==='night',clock=settlementHudProductionClock(productionClock,dayPhase);
-    const rateStates=Object.fromEntries(['resources','food'].map(name=>[name,settlementHudRate(rates[name])]));
+    const gold=count(loopMode?(resources?.gold??rawGold):rawGold),growth=settlementHudProgress(cityHouses),night=dayPhase==='night',clock=settlementHudProductionClock(productionClock,dayPhase);
+    const rateStates=Object.fromEntries(['resources','food','gold'].map(name=>[name,settlementHudRate(rates[name])]));
     const construction=settlementHudConstruction({economic,logs,resources,buildCost}),{cost,costLabel}=construction;
     const rail=settlementHudRailway(loopMode?{...railway,costResource:'resources'}:railway,{gold,resources:loopMode?resources:0,ready}),railPlanning=tool==='rail'&&!walking;
     const lowLight=Number.isFinite(nightAmount)?nightAmount>=.45:night;
@@ -198,14 +198,14 @@ export function createSettlementHud({
     text(nodes.logs,inventoryNumber(displayLogs));text(nodes.gold,inventoryNumber(gold));
     nodes['wood-stock'].title=`${number.format(displayLogs)} ${loopMode?'resources':economic?'available timber':'logs'}`;nodes['gold-stock'].title=`${number.format(gold)} gold`;
     nodes['wood-stock'].setAttribute('aria-label',`${displayLogs} ${loopMode?'resources':economic?'available timber':'logs'}. A house costs ${costLabel}.`);
-    nodes['gold-stock'].hidden=loopMode;nodes['gold-stock'].setAttribute('aria-hidden',String(loopMode));
-    nodes['gold-stock'].setAttribute('aria-label',loopMode?'':`${gold} gold. ${economic?'Fed homes earn income every twenty seconds. Trade transfers gold between towns.':'Your city homes earn one gold each at sunset.'}`);
+    nodes['gold-stock'].hidden=false;nodes['gold-stock'].setAttribute('aria-hidden','false');
+    nodes['gold-stock'].setAttribute('aria-label',loopMode?`${gold} gold. Used for train departures.`:`${gold} gold. ${economic?'Fed homes earn income every twenty seconds. Trade transfers gold between towns.':'Your city homes earn one gold each at sunset.'}`);
     nodes.income.setAttribute('aria-hidden',String(loopMode));
     if(loopMode&&!nodes.income.hidden){nodes.income.hidden=true;clearTimeout(incomeTimer);incomeAnimation?.cancel();incomeAnimation=null;incomeTimer=null;}
-    for(const name of ['resources','food']){
+    for(const name of ['resources','food','gold']){
       const node=nodes[`${name}-rate`],rate=rateStates[name],label=name[0].toUpperCase()+name.slice(1);
       node.hidden=!loopMode;text(node,rate.label);node.dataset.tone=rate.tone;
-      const description=`Estimated net ${label} per minute: ${rate.label}. Includes city production and asynchronous train income.`;
+      const description=`Estimated net ${label} per minute: ${rate.label}. Includes city production and estimated train transfers.`;
       node.title=description;node.setAttribute('aria-label',description);
     }
     text(nodes.level,String(growth.level));text(nodes['city-label'],growth.level?'Your city':'Outpost');
@@ -254,7 +254,7 @@ export function createSettlementHud({
     const viewIcon=walking?'map':'walk';if(buttons.view.dataset.icon!==viewIcon){buttons.view.querySelector('[data-action-icon]').innerHTML=symbols[viewIcon];buttons.view.dataset.icon=viewIcon;}
     nodes.movement.hidden=true;
     const toolAnnouncement=railPlanning?`Railway selected. ${rail.cost} ${rail.costResource}. ${rail.selection}. ${rail.status}. ${rail.showConfirm&&railway?.code!=='out-of-range'?'Drag route dots to adjust. ':''}${rail.canBuild?'Enter confirms the purchase. ':''}Escape cancels.`:building?'House placement selected. Aim at clear ground. Enter places; Escape cancels.':walking?targetOre?'Ore selected. E or click mines.':loopMode?'Chop trees or mine ore with E or click.':'Axe selected. E or click chops a nearby tree.':'T plans a railway. V returns to your traveller to build houses.';
-    const announcement=[ready?loopMode?`${displayLogs} resources. ${food} food.`:`${displayLogs} ${economic?'available timber':'logs'}. ${gold} gold.`:'Preparing your clearing.',development,toolAnnouncement,walking?'':'Overview.',message].filter(Boolean).join(' ');
+    const announcement=[ready?loopMode?`${displayLogs} resources. ${food} food. ${gold} gold.`:`${displayLogs} ${economic?'available timber':'logs'}. ${gold} gold.`:'Preparing your clearing.',development,toolAnnouncement,walking?'':'Overview.',message].filter(Boolean).join(' ');
     if(announcement!==announced){text(nodes.announcements,announcement);announced=announcement;}
   }
   function showIncome({amount,days=1}={}){

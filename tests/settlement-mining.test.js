@@ -44,7 +44,7 @@ test('a forest tree and desert ore feed the same balance while only player chopp
 });
 
 test('loop house payments spend both wallets and missing food never spends resources or reserves a site',()=>{
-  const game=fixture();assert.equal(game.gold,0);assert.equal(game.food,12);
+  const game=fixture();assert.equal(game.gold,50);assert.equal(game.food,12);
   game.spendFood(11);const before=game.snapshot();
   const rejected=game.build({x:5,z:0});assert.equal(rejected.code,'not-enough-food');assert.equal(rejected.siteValid,true);
   assert.deepEqual(game.snapshot(),before);
@@ -57,13 +57,19 @@ test('loop house payments spend both wallets and missing food never spends resou
 });
 
 
-test('loop wallets have only Resources and Food and cannot mint or spend coins',()=>{
+test('loop wallets retain finite Gold payments without passive house income or upkeep',()=>{
   const game=fixture(),before=game.snapshot();
-  assert.equal(game.creditGold(20).code,'currency-removed');
-  assert.equal(game.spendGold(0).code,'currency-removed');
+  assert.equal(game.gold,50);assert.equal(game.resourcesAt().gold,50);
   assert.equal(game.settleIncome(100),null);
   assert.deepEqual(game.snapshot(),before);
-  for(const key of ['gold','lastIncomeDay'])assert.equal(key in game.snapshot(),false);
-  for(const key of ['gold','resourceDebt','resourceNet','upkeep'])assert.equal(key in game.resourcesAt(),false);
-  assert.deepEqual(game.resourcesAt().rates,{resources:0,food:0});
+  assert.equal(game.spendGold(3).ok,true);assert.equal(game.gold,47);
+  assert.equal(game.creditGold(1).ok,true);assert.equal(game.resourcesAt().gold,48);
+  const paid=game.snapshot();
+  assert.equal(game.spendGold(49).code,'not-enough-gold');
+  assert.equal(game.spendGold(0).code,'invalid-cost');
+  assert.equal(game.creditGold(-1).code,'invalid-credit');
+  assert.deepEqual(game.snapshot(),paid);
+  assert.equal('lastIncomeDay' in game.snapshot(),false);
+  for(const key of ['resourceDebt','resourceNet','upkeep'])assert.equal(key in game.resourcesAt(),false);
+  assert.deepEqual(game.resourcesAt().rates,{resources:0,food:0,gold:0});
 });

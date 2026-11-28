@@ -56,14 +56,27 @@ export function createLoopBots(world,{session,bots,railways,economy,onRailBuild=
     stats.decisions++;const city=entry.game.cities[0];
     if(!city||city.level<2){entry.state='growing-station';entry.targetHouses=6;entry.bot.setPolicy({targetHouses:6,logReserve:0});return;}
     const cityState=economy.city(city.id),ownedTrains=economy.trains.filter(train=>train.ownerId===entry.game.ownerId);
+    entry.trains=ownedTrains.length;
     if(ownedTrains.length){
-      entry.trains=ownedTrains.length;entry.targetHouses=15;entry.state=entry.game.houses.length>=15?'trading':'growing';
+      entry.targetHouses=15;entry.state=entry.game.houses.length>=15?'trading':'growing';
       entry.bot.setPolicy({targetHouses:15,logReserve:0});return;
     }
-    entry.targetHouses=6;entry.bot.setPolicy({targetHouses:6,logReserve:0});
+    entry.targetHouses=Math.max(6,Math.min(15,entry.game.houses.length));entry.bot.setPolicy({targetHouses:entry.targetHouses,logReserve:0});
     const loops=cityState?.loops??[];
     if(loops.length){
-      const ranked=loops.slice().sort((a,b)=>a.cost-b.cost||a.length-b.length);
+      // A purchased engine is lost if its first departure cannot be funded.
+      // Wait for real trade income instead of repeatedly burning construction
+      // Resources; an affordable shorter circuit can still start trading.
+      const wallet=economy.resourcesAt?.(entry.game.ownerId)??entry.game.resourcesAt?.()??{};
+      const gold=wallet.gold??entry.game.gold??0;
+      const ranked=loops.filter(loop=>{
+        const fare=loop.departureGold??Math.max(0,(loop.cityIds?.length??2)-1)*LOOP_ECONOMY_RULES.pickupGold;
+        return Number.isSafeInteger(fare)&&fare>=0&&Number.isFinite(gold)&&gold>=fare;
+      }).sort((a,b)=>a.cost-b.cost||a.length-b.length);
+      if(!ranked.length){
+        entry.state='saving-fare';entry.targetHouses=15;
+        entry.bot.setPolicy({targetHouses:15,logReserve:loopTrainCost(2)});return;
+      }
       const purchased=economy.buyTrain(city.id,ranked[0].id,entry.game.ownerId);
       if(purchased.ok){entry.trains++;stats.trains++;entry.state='trading';}
       else entry.state='saving-train';return;

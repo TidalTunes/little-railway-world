@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import {createCityLevelMarkers,cityMarkerPopulation} from '../src/city-level-markers.js';
+import {createCityLevelMarkers,cityMarkerPopulation,cityMarkerFoodStock} from '../src/city-level-markers.js';
 import {playerColors} from '../src/player-palette.js';
 
 function fixture(){
@@ -104,5 +104,29 @@ test('full map city statistics are centered and both layers share the interpolat
       const pixels=(point.y-projected.y)*400,expected=24*(1-THREE.MathUtils.smoothstep(mapBlend,0,1));assert.ok(Math.abs(pixels-expected)<1e-4);
     }
     markers.sync([{x:0,z:0,level:0,houseCount:2}]);markers.update({camera});assert.equal(scene.children[0].count,0,'outposts do not appear as cities');
+  }finally{markers.dispose();}
+});
+
+
+test('village food stores appear above the unchanged centered plate and update only when stock changes',()=>{
+  const {scene,map,markers,camera,glyphs,strokes}=fixture();
+  const village={id:'farm',x:0,z:0,level:2,houseCount:6,neutral:true,resource:'food',stock:{food:12}};
+  try{
+    markers.sync([village]);markers.update({camera,mapBlend:1});
+    assert.deepEqual(glyphs.map(glyph=>glyph.label),['2','6','12']);assert.deepEqual(strokes.map(stroke=>stroke.label),['12']);
+    assert.ok(glyphs[2].y<glyphs[1].y,'Food is a separate line above level and population');
+    const geometry=scene.children[0].geometry,texture=scene.children[0].material.map,version=texture.version;
+    // The plate keeps its previous screen size/center despite extra atlas headroom.
+    const position=geometry.attributes.position;
+    assert.ok(Math.abs((position.getY(0)+position.getY(2))/2-.3)<1e-6);
+    for(let i=0;i<30;i++)markers.update({camera,mapBlend:i/30});
+    markers.sync([{...village}]);assert.equal(texture.version,version);
+    markers.sync([{...village,stock:{food:0}}]);assert.ok(texture.version>version);assert.equal(glyphs.at(-1).label,'0');
+    markers.update({camera,mapBlend:.5});assert.equal(scene.children[0].geometry,geometry);assert.equal(map.children[0].material.map,texture);
+    assert.equal(markers.stats.atlasUpdates,2);
+    assert.equal(cityMarkerFoodStock({...village,stock:{food:0},foodStock:99}),0);
+    assert.equal(cityMarkerFoodStock({...village,stock:undefined,foodStock:7}),7);
+    assert.equal(cityMarkerFoodStock({neutral:false,resource:'resources',stock:{food:7}}),null);
+    assert.equal(cityMarkerFoodStock({...village,stock:{food:NaN}}),null);
   }finally{markers.dispose();}
 });

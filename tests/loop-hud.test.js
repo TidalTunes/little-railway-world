@@ -77,7 +77,7 @@ test('purchase button and Enter action share explicit selection and affordabilit
     hud.update({...props,selectedLoopId:null});assert.equal(hud.root.hidden,false);assert.equal(nodes.route.hidden,true);assert.equal(nodes.city.hidden,false);assert.equal(hud.buySelected(),false);
     hud.update({...props,resources:{resources:19}});assert.equal(hud.selectedLoopId,loop.id);assert.equal(nodes.buy.disabled,true);assert.equal(nodes.shortfall.hidden,false);assert.equal(nodes.shortfall.textContent,'1 more resources');
     assert.equal(hud.buySelected(),false);nodes.buy.dispatch('click');assert.equal(buys.length,0);
-    hud.update(props);assert.equal(nodes.buy.disabled,false);assert.equal(nodes.shortfall.hidden,true);assert.equal(nodes.cost.textContent,'20');assert.equal(nodes.buy.getAttribute('aria-label'),'Add train · 20 resources. Picks up 2 Resources or Food per city. Player-owned stations earn 2 Resources per visit.');
+    hud.update(props);assert.equal(nodes.buy.disabled,false);assert.equal(nodes.shortfall.hidden,true);assert.equal(nodes.cost.textContent,'20');assert.equal(nodes.buy.getAttribute('aria-label'),'Add train · 20 resources. Picks up 1 available Resources or Food per destination and delivers it home. Reserves 1 Gold per lap at departure. Empty stops refund their fare. A train without enough Gold at departure is destroyed.');
     assert.equal(hud.buySelected(),true);nodes.buy.dispatch('click');assert.deepEqual(buys,[[city.id,loop.id],[city.id,loop.id]]);
     hud.update({...props,selectedLoopId:'removed'});assert.equal(hud.selectedLoopId,null);assert.equal(hud.buySelected(),false);
     const foreign={...city,ownerId:'coral'};hud.update({...props,city:foreign,ownCity:foreign});assert.equal(hud.buySelected(),false);assert.equal(nodes.buy.disabled,true);
@@ -120,14 +120,25 @@ test('circuit cycling, event containment and disposal release the action control
 });
 
 
-test('route details have only current resource prices and player stations alone show a visit bonus',()=>{
+test('route details show finite pickups, flat purchase price and reserved Gold without minted station bonuses',()=>{
   const {hud,nodes,props}=fixture();
   try{
-    hud.update(props);assert.doesNotMatch(nodes.buy.title,/gold|coin|upkeep|debt|dwell|wait/i);
-    assert.match(nodes.buy.title,/10 resources \+ 5 per cargo car/);assert.match(nodes.buy.title,/Picks up 2 Resources or Food per city/);
-    hud.update({...props,selectedLoopId:null});assert.match(nodes.city.textContent,/Resources.*\+2/);assert.match(nodes.city.innerHTML,/2 Resources to the city owner per train visit/);assert.doesNotMatch(nodes.city.innerHTML,/gold|coin|upkeep/i);
-    hud.update({...props,selectedLoopId:null,city:{...city,ownerId:'coral'}});assert.match(nodes.city.textContent,/\+2/);
-    hud.update({...props,selectedLoopId:null,city:{...city,neutral:true,resource:'food',ownerId:'gray'}});assert.equal(nodes.city.textContent.trim(),'Food');assert.doesNotMatch(nodes.city.innerHTML,/loop-station-bonus/);
-    hud.update({...props,selectedLoopId:null,city:{...city,hasStation:false}});assert.doesNotMatch(nodes.city.innerHTML,/loop-station-bonus/);
+    hud.update(props);assert.doesNotMatch(nodes.buy.title,/bonus|earn|upkeep|debt|per cargo car/i);
+    assert.match(nodes.buy.title,/20 resources/);assert.match(nodes.buy.title,/Picks up 1 available Resources or Food per destination/);
+    assert.match(nodes.fare.title,/Reserves 1 Gold per lap/);assert.equal(nodes.departure.textContent,'1 / lap');assert.equal(nodes.status.hidden,true);
+    hud.update({...props,selectedLoopId:null});assert.equal(nodes.operation.hidden,true);assert.equal(nodes.city.textContent.trim(),'Resources');
+    hud.update({...props,selectedLoopId:null,city:{...city,neutral:true,resource:'food',ownerId:'gray',stock:{food:13}}});assert.match(nodes.city.textContent,/Food.*13/);assert.match(nodes.city.innerHTML,/13 Food available/);
+    hud.update({...props,selectedLoopId:null,city:{...city,neutral:true,resource:'food',ownerId:'gray',stock:{food:0}}});assert.match(nodes.city.textContent,/Food.*0/);
+  }finally{hud.dispose();}
+});
+
+test('live route status updates independently from the price and permits buying before Gold is available',()=>{
+  const {hud,nodes,props}=fixture(),train={loopId:loop.id,homeCityId:city.id,state:'queued',active:false};
+  try{
+    hud.update({...props,resources:{resources:20,gold:0},trains:[train]});assert.equal(nodes.buy.disabled,false);assert.equal(nodes.status.hidden,false);assert.equal(nodes.status.textContent,'1 queued');
+    hud.update({...props,trains:[{...train,active:true,state:'moving',blocked:true,waitReason:'traffic'}]});assert.equal(nodes.status.textContent,'1 in traffic');
+    hud.update({...props,trains:[{...train,active:true,state:'dwell'}]});assert.equal(nodes.status.textContent,'1 loading');
+    hud.update({...props,trains:[{...train,active:true,state:'moving'}]});assert.equal(nodes.status.textContent,'1 running');
+    hud.update({...props,trains:[]});assert.equal(nodes.status.hidden,true);
   }finally{hud.dispose();}
 });

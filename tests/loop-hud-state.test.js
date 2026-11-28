@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loopHudState,loopCargo,loopResourceLabel} from '../src/loop-hud-state.js';
+import {loopHudState,loopCargo,loopResourceLabel,loopTrainStatus} from '../src/loop-hud-state.js';
 const loop={id:'round-trip',cityIds:['home','farm','mine'],cost:30,stops:[{cityId:'farm',resource:'food'},{cityId:'mine',resource:'resources'},{cityId:'home',resource:'resources'},{cityId:'farm',resource:'food'}]};
 const city={id:'home',ownerId:'teal',level:2,houseCount:6,resource:'resources',loops:[loop]};
 test('resource labels and historical wood or metal stops share one materials yield',()=>{
   assert.equal(loopResourceLabel('resources'),'Resources');assert.equal(loopResourceLabel('food'),'Food');
-  assert.deepEqual(loopCargo({stops:[{cityId:'forest',resource:'wood'},{cityId:'desert',resource:'metal'}]}),{resources:4,food:0});
+  assert.deepEqual(loopCargo({stops:[{cityId:'forest',resource:'wood'},{cityId:'desert',resource:'metal'}]}),{resources:2,food:0});
 });
-test('circuit yield counts each visited city once and includes the home pickup',()=>{assert.deepEqual(loopCargo(loop,city),{resources:4,food:2});assert.deepEqual(loopCargo({...loop,stops:[{cityId:'farm',resource:'gold'}]},{...city,resource:'gold'}),{resources:0,food:0});});
+test('maximum circuit yield counts each destination once and excludes the home pickup',()=>{assert.deepEqual(loopCargo(loop,city),{resources:1,food:1});assert.deepEqual(loopCargo({...loop,stops:[{cityId:'farm',resource:'gold'}]},{...city,resource:'gold'}),{resources:0,food:0});});
 test('having complete routes does not select or enable a train purchase until a route is clicked',()=>{
   const state=loopHudState({city,ownerId:'teal',resources:{resources:999},walking:false});
   assert.equal(state.selected,null);assert.equal(state.canBuy,false);assert.equal(state.showRoutes,false);
@@ -17,17 +17,17 @@ test('having complete routes does not select or enable a train purchase until a 
 
 test('purchase eligibility requires an explicitly selected owned circuit and enough resources',()=>{
   const props={city,ownerId:'teal',selectedLoopId:loop.id,walking:false};
-  const short=loopHudState({...props,resources:{resources:29}});
-  assert.equal(short.canBuy,false);assert.equal(short.shortfall,1);assert.equal(short.cost,30);
-  const ready=loopHudState({...props,resources:{resources:30}});
+  const short=loopHudState({...props,resources:{resources:19}});
+  assert.equal(short.canBuy,false);assert.equal(short.shortfall,1);assert.equal(short.cost,20);
+  const ready=loopHudState({...props,resources:{resources:20}});
   assert.equal(ready.canBuy,true);assert.equal(ready.showRoutes,true);assert.equal(ready.selected,loop);
-  assert.equal(ready.shortfall,0);assert.deepEqual(ready.cargo,{resources:4,food:2});
+  assert.equal(ready.shortfall,0);assert.deepEqual(ready.cargo,{resources:1,food:1});
   for(const stock of [NaN,Infinity,undefined])assert.equal(loopHudState({...props,resources:{resources:stock}}).canBuy,false);
   assert.equal(loopHudState({...props,city:{...city,loops:[]},resources:{resources:999}}).canBuy,false);
   assert.equal(loopHudState({...props,resources:{resources:0,resourceNet:999,gold:999}}).canBuy,false,'only spendable resources pay for a train');
 });
 
-test('train quotes without a cached cost use the shared engine and cargo-car price',()=>{
+test('train quotes use the flat shared engine price regardless of route length or stale cached quotes',()=>{
   const uncached={...loop,cost:undefined},state=loopHudState({city:{...city,loops:[uncached]},ownerId:'teal',selectedLoopId:loop.id,walking:false,resources:{resources:20}});
   assert.equal(state.cost,20);assert.equal(state.costResource,'resources');assert.equal(state.canBuy,true);
 });
@@ -47,11 +47,11 @@ test('walking is compact and cannot purchase even with a funded circuit selected
 
 test('selecting an owned circuit inspects its home city even after inspecting another city',()=>{
   const farm={id:'farm',ownerId:'gray',neutral:true,resource:'food',level:2,houseCount:6,loops:[]};
-  const state=loopHudState({city:farm,ownCity:city,ownerId:'teal',selectedLoopId:loop.id,walking:false,resources:{resources:30}});
+  const state=loopHudState({city:farm,ownCity:city,ownerId:'teal',selectedLoopId:loop.id,walking:false,resources:{resources:20}});
   assert.equal(state.city,city);assert.equal(state.owned,true);assert.equal(state.resource,'resources');
   assert.equal(state.selected,loop);assert.equal(state.canBuy,true);assert.equal(state.showRoutes,true);
-  assert.deepEqual(state.cargo,{resources:4,food:2});
-  const inspected=loopHudState({city:farm,ownCity:city,ownerId:'teal',walking:false,resources:{resources:30}});
+  assert.deepEqual(state.cargo,{resources:1,food:1});
+  const inspected=loopHudState({city:farm,ownCity:city,ownerId:'teal',walking:false,resources:{resources:20}});
   assert.equal(inspected.city,farm);assert.equal(inspected.owned,false);assert.equal(inspected.selected,null);assert.equal(inspected.canBuy,false);
 });
 
@@ -67,11 +67,29 @@ test('a foreign city or its circuit cannot become a purchase target',()=>{
 });
 
 
-test('only player-owned stations quote the per-visit Resources bonus',()=>{
+test('finite food stock and per-lap departure cost replace the old station bonus',()=>{
   const args={ownerId:'teal',walking:false};
-  assert.equal(loopHudState({...args,city}).stationBonus,2);
-  assert.equal(loopHudState({...args,city:{...city,ownerId:'coral'}}).stationBonus,2,'rival player stations earn the same reward');
-  assert.equal(loopHudState({...args,city:{...city,neutral:true}}).stationBonus,0);
-  assert.equal(loopHudState({...args,city:{...city,resource:'food',ownerId:'gray'}}).stationBonus,0);
-  assert.equal(loopHudState({...args,city:{...city,level:1}}).stationBonus,0);
+  const state=loopHudState({...args,city,selectedLoopId:loop.id,resources:{resources:20,gold:0}});
+  assert.equal(state.departureGold,2);assert.equal(state.canBuy,true,'a train may be purchased before its fare is available');
+  assert.equal(state.stationBonus,undefined);
+  const farm={...city,id:'farm',ownerId:'gray',neutral:true,resource:'food',stock:{food:17},foodStock:8};
+  assert.equal(loopHudState({...args,city:farm}).foodStock,17);
+  assert.equal(loopHudState({...args,city:{...farm,stock:{food:0}}}).foodStock,0);
+  assert.equal(loopHudState({...args,city:{...farm,stock:undefined}}).foodStock,8);
+});
+
+test('selected route status distinguishes queues, traffic and station loading',()=>{
+  const identity={loopId:loop.id,homeCityId:city.id};
+  const trains=[
+    {...identity,state:'queued',active:false,waitReason:'station-occupied'},
+    {...identity,state:'moving',blocked:true,waitReason:'traffic'},
+    {...identity,state:'dwell',dwellRemaining:.4},
+    {...identity,state:'moving',speed:5},
+    {...identity,state:'moving',homeCityId:'rival'},
+    {...identity,state:'queued',loopId:'other'},
+  ];
+  const state=loopHudState({city,ownerId:'teal',selectedLoopId:loop.id,trains,walking:false});
+  assert.equal(state.trainStatus.label,'1 queued · 1 in traffic · 1 loading · 1 running');
+  assert.deepEqual(state.trainStatus.counts,{queued:1,traffic:1,loading:1,moving:1});
+  assert.equal(loopTrainStatus(trains,'empty','home').label,'');
 });

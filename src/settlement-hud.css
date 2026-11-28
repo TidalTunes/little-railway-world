@@ -259,8 +259,6 @@
   .settlement-resource strong { font-size: 20px; }
   .settlement-resource-caption { font-size: 10px; }
   .settlement-day-control { top: max(91px, calc(env(safe-area-inset-top) + 81px)); right: max(10px, env(safe-area-inset-right)); min-height: 34px; padding: 0 9px; }
-  .settlement-hud[data-economy="loops"] .settlement-ledger { max-width: calc(100% - 126px); }
-  .settlement-hud[data-economy="loops"] .settlement-day-control { top: max(10px, env(safe-area-inset-top)); }
   .settlement-phase-label { gap: 5px; }
   .settlement-phase-label .settlement-symbol { width: 19px; height: 19px; }
   .settlement-phase-label .settlement-label { font-size: 11px; }

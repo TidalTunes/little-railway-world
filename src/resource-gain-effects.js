@@ -2,8 +2,8 @@ import {Vector3,MathUtils} from 'three';
 import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
 import {resourceIcon} from './resource-icons.js';
 
-const RESOURCES=['resources','food'];
-const KINDS=new Set(['pickup','delivery','production','station-bonus','gathered']);
+const RESOURCES=['resources','food','gold'];
+const KINDS=new Set(['pickup','delivery','production','station-payment','station-bonus','gathered']);
 function gainResources(event){
   const resources={};
   const valid=amount=>Number.isFinite(amount)&&amount>0?amount:0;
@@ -14,6 +14,7 @@ function gainResources(event){
     const materials=Object.hasOwn(stock,'resources')?valid(stock.resources):valid(stock.wood)+valid(stock.metal);
     if(materials)resources.resources=materials;
     if(valid(stock.food))resources.food=stock.food;
+    if(valid(stock.gold))resources.gold=stock.gold;
   }else{
     const name=event.resource==='wood'||event.resource==='metal'?'resources':event.resource;
     if(RESOURCES.includes(name)&&valid(event.amount))resources[name]=event.amount;

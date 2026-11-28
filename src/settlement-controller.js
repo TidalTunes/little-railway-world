@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {createSettlementEconomy} from './settlement-economy.js';
 import {createEconomicBots} from './economic-bots.js';
 import {createTradeTrains} from './trade-trains.js';
+import {createTrainExplosionEffects} from './train-explosion-effects.js';
 import {createEconomyHud} from './economy-hud.js';
 import {createLoopHud} from './loop-hud.js';
 import './loop-hud.css';
@@ -71,6 +72,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
   if(loopMode)resourceWork=createResourceWork(world,{session,getPlacements:()=>detail.placements});
   const resourceWorkArt=resourceWork?createResourceWorkArt(parent,world,resourceWork):null;
   const tradeArt=economy?createTradeTrains(parent,mapParent,world):null;
+  const trainExplosions=loopMode?createTrainExplosionEffects(parent,mapParent,world):null;
   const botRailPlanner=economy?createSettlementRailwayPlanner(world,railways,session,{getPlacements:railPlacements}):null;
   const economicBots=economy?createEconomicBots(world,{session,bots,railways,economy,onRailBuild:applyRailBuild,planRoute:(from,to,options)=>botRailPlanner.request(from,to,options)}):null;
   let inspectedCity=null,industryCity=null,economyView=null,economyViewKey='';
@@ -422,7 +424,11 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         if(walkingWeight<.5)incomeEffects?.emit(event.houses);canvas.dataset.lastIncome=String(event.amount);
       }
       for(const event of economicEvents){
-        if(event.ownerId===game.ownerId&&['pickup','delivery','production','station-bonus'].includes(event.type))resourceGains?.emit(event);
+        if(event.ownerId===game.ownerId&&['pickup','delivery','production','station-payment','station-bonus'].includes(event.type))resourceGains?.emit(event);
+        if(event.type==='train-destroyed'){
+          trainExplosions?.emit(event);
+          if(event.ownerId===game.ownerId)notify('Train lost · not enough Gold');
+        }
       }
       const income=game.settleIncome(dayState?.completedDays??0);
       if(income?.amount>0){
@@ -474,6 +480,7 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       railwayArt.update({mapBlend,camera,viewportHeight,walkingWeight,zoom});
       const liveTrains=economy?.trains??[];
       tradeArt?.update(liveTrains,{camera,mapBlend,walkingWeight,viewportHeight,zoom});
+      trainExplosions?.update(uiDt,{mapBlend,reducedMotion:reducedMotion?.matches,night});
       art.preview(placement,{visible:walking&&tool==='house'&&ready&&!transitioning,targetTree});art.update({mapBlend,dt:uiDt,reducedMotion:reducedMotion?.matches,night});
       const connectedHouses=snapshot.houses.filter(h=>h.connected).length;
       const target=placement?.house??player?.position??{x:0,z:0};
@@ -488,7 +495,6 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         unavailableHomes:new Set([...art.construction.activeIds,...bots.entries.flatMap(entry=>[...entry.art.construction.activeIds])])});
       villageArt?.update({mapBlend});
       if(!loopMode)villageResidents?.update(dt,{focus:focus??player.position,mapBlend,walkingWeight,visible:ready,reducedMotion:reducedMotion?.matches,night,dayPhase:dayState?.phase});
-      villageLevels?.update({camera,mapBlend,walkingWeight,viewportHeight});
       bots.update(dt,{camera,mapBlend,walkingWeight,focus:focus??player?.position,viewportHeight,night,dayPhase:dayState?.phase,uiDt});
       levels.update({camera,mapBlend,walkingWeight,viewportHeight});
       incomeEffects?.update(uiDt,{camera,mapBlend,walkingWeight,viewportHeight,reducedMotion:reducedMotion?.matches});
@@ -496,7 +502,10 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
       const resources=game.resourcesAt(placement?.house??player?.position);
       if(economy){
         const key=`${economy.revision}:${Math.floor(economy.elapsed)}`;
-        if(key!==economyViewKey){economyViewKey=key;economyView=economy.snapshot();}
+        if(key!==economyViewKey){
+          economyViewKey=key;economyView=economy.snapshot();
+          if(loopMode)villageLevels?.sync(economyView.cities.filter(city=>city.neutral));
+        }
         const cityId=railTarget??railHover??railSource??(!walking?inspectedCity:null)??nearest?.id;
         const city=economyView.cities.find(city=>city.id===cityId);industryCity=city?.ownerId===game.ownerId?city.id:null;
         economyHud?.update({city,houses:snapshot.houses.length,walking,tool,night,time:economyView.time,nextPulse:economyView.nextPulse,
@@ -518,11 +527,14 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         Object.assign(canvas.dataset,{selectedCircuit:selectedCircuit??'',hoverCircuit:hoverCircuit??'',circuitCandidates:String(circuitCandidates.length),resourcePopups:String(resourceGains?.visibleCount??0),
           productionCountdown:String(Math.ceil(economyView.clock?.secondsRemaining??0)),resourceRate:String(resources.rates?.resources??0),foodRate:String(resources.rates?.food??0)});
         Object.assign(canvas.dataset,{resources:String(resources.resources??resources.timber),food:String(resources.food??0),production:String(economyView.stats.produced?.resources??0),economyTime:String(Math.floor(economy.elapsed)),deliveries:String(economyView.stats.deliveries),
-          freightTrains:String(tradeArt.stats.active??0),localTools:String(resources.tools),localGrain:String(resources.grain),economyCity:city?.id??'',industry:city?.industry??''});
+          freightTrains:String(tradeArt.stats.active??0),queuedTrains:String(liveTrains.filter(train=>train.state==='queued').length),
+          trainExplosions:String(trainExplosions?.stats.bursts??0),lostTrains:String(economyView.stats.trainsLost??0),stoppedTrains:String(liveTrains.filter(train=>train.state==='dwell').length),trafficWaiting:String(liveTrains.filter(train=>train.waitReason==='traffic').length),
+          localTools:String(resources.tools),localGrain:String(resources.grain),economyCity:city?.id??'',industry:city?.industry??''});
       }
-      hud.update({logs:economy?resources.resources??resources.timber:snapshot.logs,economic:loopMode?'loops':!!economy,buildCost:game.constructionCost,resources,productionClock:economyView?.clock,...(!loopMode&&{gold:snapshot.gold}),nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
+      villageLevels?.update({camera,mapBlend,walkingWeight,viewportHeight});
+      hud.update({logs:economy?resources.resources??resources.timber:snapshot.logs,economic:loopMode?'loops':!!economy,buildCost:game.constructionCost,resources,productionClock:economyView?.clock,gold:loopMode?resources.gold:snapshot.gold,nightAmount:night,dayPhase:dayState?.phase??'day',houses:snapshot.houses.length,connectedHouses,cityHouses:nearest?.houseCount??1,cityLevel:nearest?.level??0,buildings:cityBuildings,pendingMilestones:cityPending,tool,walking,ready,
         canBuild:!!placement?.valid,connected:placement?.connected??true,reason:placement?.reason??'',targetTree:!!targetTree&&!isMineableOre(targetTree),targetOre:isMineableOre(targetTree),message,railway:railwayHud??{minHomes:loopMode?6:3,hasCity:game.cities.some(city=>!loopMode||city.level>=2),cost:loopMode?LOOP.trackResourcesPerUnit:economy?8:5,costResource:loopMode?'resources':'gold'}});
-      Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),...(!loopMode&&{gold:String(snapshot.gold),incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects?.visibleCount??0)}),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
+      Object.assign(canvas.dataset,{gameplay:'settlement',logs:String(snapshot.logs),gold:String(loopMode?resources.gold:snapshot.gold),...(!loopMode&&{incomeDay:String(snapshot.lastIncomeDay),incomeCoins:String(incomeEffects?.visibleCount??0)}),houses:String(snapshot.houses.length),connectedHouses:String(connectedHouses),
         paths:String(snapshot.paths?.length??0),choppedTrees:String(snapshot.removedTreeIds.length),construction:String(art.construction.count),constructionDust:String(art.construction.dustCount),residentsIndoors:String(residents.stats.indoors??0),buildMode:String(tool==='house'),buildValid:String(!!placement?.valid),buildReason:placement?.code??'',
         cities:String(snapshot.cities?.length??0),cityLevels:(snapshot.cities??[]).map(city=>city.level).join(','),residents:String(resourceWork?.stats.workers??residents.stats?.residents??residents.stats?.count??0),
         farmVillages:String(villages?.cities?.length??0),villageResidents:String(villageResidents?.stats.residents??0),villageResidentsIndoors:String(villageResidents?.stats.indoors??0),
@@ -533,6 +545,6 @@ export function createSettlementController({canvas,world,parent,mapParent,marker
         civicBuildings:String(snapshot.buildings?.length??0),buildingTypes:(snapshot.buildings??[]).map(item=>item.buildingType).join(','),pendingMilestones:(snapshot.pendingMilestones??[]).join(','),
         buildX:placement?.house?.x?.toFixed(2)??'',buildZ:placement?.house?.z?.toFixed(2)??'',buildRotation:placement?.house?.rotation?.toFixed(4)??'',targetTree:!isMineableOre(targetTree)?targetTree?.id??'':'',targetOre:isMineableOre(targetTree)?targetTree.id:''});
     },
-    dispose(){disposed=true;releaseRailDrag();releaseRailPress();railPreviewFlow.dispose();railPlanner.dispose();botRailPlanner?.dispose();for(const remove of listeners)remove();hud.dispose();economyHud?.dispose();loopHud?.dispose();resourceGains?.dispose();circuitArt?.dispose();resourceWorkArt?.dispose();resourceWork?.dispose();economicBots?.dispose();tradeArt?.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects?.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
+    dispose(){disposed=true;releaseRailDrag();releaseRailPress();railPreviewFlow.dispose();railPlanner.dispose();botRailPlanner?.dispose();for(const remove of listeners)remove();hud.dispose();economyHud?.dispose();loopHud?.dispose();resourceGains?.dispose();circuitArt?.dispose();resourceWorkArt?.dispose();resourceWork?.dispose();economicBots?.dispose();tradeArt?.dispose();trainExplosions?.dispose();art.dispose();residents.dispose();levels.dispose();incomeEffects?.dispose();villageArt?.dispose();villageResidents?.dispose();villageLevels?.dispose();bots.dispose();railwayArt.dispose();},
   };
 }

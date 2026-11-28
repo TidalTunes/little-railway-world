@@ -6,7 +6,6 @@ import {playerColors} from '../src/player-palette.js';
 import {M} from '../src/palette.js';
 import {buildSteamLocomotive} from '../src/steam-locomotive.js';
 import {createLoopEconomy} from '../src/loop-economy.js';
-import {TRAIN_CAR_SPACING} from '../src/train-consist.js';
 
 const world={players:[{id:'teal',color:{l:.60,c:.13,h:185}},{id:'coral',color:{l:.63,c:.14,h:24}}]};
 const train=(id=1,values={})=>({id:`freight-${id}`,ownerId:'teal',x:0,y:.42,z:0,angle:0,cargo:'timber',amount:6,active:true,...values});
@@ -147,15 +146,45 @@ test('larger strategy glyphs have an eight-and-a-half pixel body at distant over
   assert.ok(scale.x*1.2*2>=8.499);assert.ok(scale.z*4.65*2>=22.999);
 });
 
-test('the steam engine has a joined boiler, compact cab and raised chimney inside one car envelope',()=>{
+test('the industrial steam engine has flush bodywork and six grounded wheels inside the existing car envelope',t=>{
   const root=buildSteamLocomotive(),boiler=root.getObjectByName('boiler'),cab=root.getObjectByName('cab'),chimney=root.getObjectByName('chimney');
+  t.after(()=>{const geometries=new Set();root.traverse(node=>{if(node.geometry&&node.geometry.type!=='BoxGeometry')geometries.add(node.geometry);});for(const geometry of geometries)geometry.dispose();});
   assert.ok(boiler&&cab&&chimney);root.updateMatrixWorld(true);
-  const bodyBounds=new THREE.Box3().setFromObject(boiler),cabBounds=new THREE.Box3().setFromObject(cab),bounds=new THREE.Box3().setFromObject(root);
+  const boxFor=node=>new THREE.Box3().setFromObject(typeof node==='string'?root.getObjectByName(node):node,true);
+  const bodyBounds=boxFor(boiler),cabBounds=boxFor(cab),bounds=boxFor(root),deck=boxFor('running-board');
   assert.ok(bodyBounds.min.z<=cabBounds.max.z&&bodyBounds.max.z>cabBounds.max.z,'boiler connects flush into the front of the cab');
-  assert.ok(chimney.position.y>bodyBounds.max.y);assert.ok(bounds.max.y<1.8);
-  assert.ok(bounds.min.x>-.65&&bounds.max.x<.65);assert.ok(bounds.min.y>=-.000001);
-  const geometries=new Set();root.traverse(node=>{if(node.geometry?.type!=='BoxGeometry')geometries.add(node.geometry);});
-  for(const geometry of geometries)geometry?.dispose();
+  assert.ok(chimney.position.y>bodyBounds.max.y);assert.ok(boxFor(chimney).min.y<bodyBounds.max.y,'the stack is seated in the smokebox');
+  assert.equal(chimney.geometry.parameters.radiusTop,chimney.geometry.parameters.radiusBottom,'the chimney is a straight industrial pipe');
+  assert.ok(bounds.max.y<1.6);assert.ok(bounds.min.x>-.60&&bounds.max.x<.60);assert.ok(Math.abs(bounds.min.y)<1e-6);
+  assert.ok(bounds.min.z>=-1.580001&&bounds.max.z<=1.250001,'couplings preserve the 2.6-unit carriage spacing envelope');
+  assert.equal(TRADE_TRAIN_LIMITS.spacing,2.6);
+  assert.ok(Math.abs(boxFor('underframe').max.y-deck.min.y)<1e-8);
+  for(const name of['cab','water-tank-right','water-tank-left'])assert.ok(Math.abs(boxFor(name).min.y-deck.max.y)<1e-8,`${name} rests directly on the running board`);
+  assert.ok(boxFor('cab-roof').min.y<=cabBounds.max.y&&boxFor('cab-roof').max.y>cabBounds.max.y);
+  let wheels=0,triangles=0;root.traverse(node=>{
+    if(!node.isMesh)return;triangles+=(node.geometry.index?.count??node.geometry.attributes.position.count)/3;
+    assert.ok(node.geometry.attributes.position.array.every(Number.isFinite));assert.ok(node.geometry.attributes.normal.array.every(Number.isFinite));
+    if(node.name==='driving-wheel'){wheels++;assert.ok(Math.abs(boxFor(node).min.y)<1e-6,'every driving wheel touches the same rail datum');}
+  });
+  assert.equal(wheels,6);assert.ok(triangles<1300,'the added machinery stays inside the consolidated low-poly budget');
+});
+
+test('locomotive ownership is painted on tanks and cab while machinery stays restrained',t=>{
+  const body=new THREE.MeshStandardMaterial({color:0x307e78}),dark=new THREE.MeshStandardMaterial({color:0x123e39}),trim=new THREE.MeshStandardMaterial({color:0xfff2bd});
+  const root=buildSteamLocomotive({body,dark,trim}),used=new Set();
+  t.after(()=>{const geometries=new Set();root.traverse(node=>{if(node.geometry&&node.geometry.type!=='BoxGeometry')geometries.add(node.geometry);});for(const geometry of geometries)geometry.dispose();body.dispose();dark.dispose();trim.dispose();});
+  for(const name of['cab','water-tank-right','water-tank-left'])assert.equal(root.getObjectByName(name).material,body);
+  for(const name of['boiler','smokebox','chimney','cab-roof','steam-dome'])assert.equal(root.getObjectByName(name).material,M.metal);
+  root.traverse(node=>{if(node.isMesh)used.add(node.material);});assert.ok(!used.has(M.gold)&&!used.has(M.trim)&&!used.has(trim),'no gold dome or cream body bands');
+  const lamp=root.getObjectByName('front-lamp');assert.equal(lamp.material,M.lamp);assert.ok(lamp.scale.x<.08&&lamp.scale.y<.08,'small functional lamp preserves the smokebox silhouette');
+});
+
+test('stationary waiting trains and slow carriage poses remain visible without changing their geometry',t=>{
+  const{art}=fixture(t),carPoses=[{x:3,y:.42,z:4,angle:.4},{x:2,y:.42,z:1.6,angle:.35}],state=train(1,{state:'waiting',speed:0,carPoses});
+  art.update([state],{mapBlend:.5});const record=art.trains[0],loco=art.root.getObjectByName('trade-locomotive:teal'),geometry=loco.geometry,buffer=loco.instanceMatrix.array;
+  for(let frame=0;frame<4;frame++){art.update([state],{mapBlend:.5});assert.equal(art.stats.visible,1);assert.equal(art.stats.detailCars,2);assert.equal(art.stats.mapInstances,1);assert.deepEqual(record.parts[0].position.toArray(),[3,.42,4]);}
+  state.state='moving';state.speed=.2;carPoses[0].z+=.01;carPoses[1].z+=.01;art.update([state],{mapBlend:.5});
+  assert.equal(art.trains[0],record);assert.equal(record.parts[0].position.z,4.01);assert.equal(record.parts[1].position.z,1.61);assert.equal(loco.geometry,geometry);assert.equal(loco.instanceMatrix.array,buffer);
 });
 
 
@@ -172,29 +201,46 @@ test('unified Resources freight combines timber and ore in one reusable load',t=
   assert.equal(load.geometry,geometry);assert.equal(load.instanceMatrix.array,buffer);
 });
 
-test('newly purchased shared-loop trains render at home immediately and pass stations without a visual stop',t=>{
-  const {art}=fixture(t),length=Math.PI*20;
-  const home={id:'home',ownerId:'teal',level:2,houseCount:6,x:10,z:0},farm={id:'farm',ownerId:'gray',level:2,houseCount:6,x:-10,z:0};
+test('finite-economy trains enter the rendered fleet only after admission and hold their loaded carriage at stations',t=>{
+  const {art}=fixture(t),length=Math.PI*20,step=1/30;
+  const home={id:'home',ownerId:'teal',level:2,houseCount:6,x:10,z:0},farm={id:'farm',ownerId:'gray',level:2,houseCount:6,x:-10,z:0,stock:{food:10}};
   const circuit={id:'loop',length,cityIds:['home','farm'],stationIds:['home-platform','farm-platform'],
     stops:[{cityId:'home',stationId:'home-platform',distance:0},{cityId:'farm',stationId:'farm-platform',distance:length/2}],
     segments:[{lineId:'shared-track',start:0,end:length,offset:0,length}]};
-  const game={ownerId:'teal',logs:100,food:12,gold:0,cities:[home],
+  const game={ownerId:'teal',logs:100,food:12,gold:50,cities:[home],
     spendLogs(amount){if(this.logs<amount)return {ok:false};this.logs-=amount;return {ok:true};},
     addLogs(amount){this.logs+=amount;return {ok:true};},addFood(amount){this.food+=amount;return {ok:true};},
-    creditGold(){assert.fail('loop passage must not mint Gold');}};
+    spendGold(amount){if(this.gold<amount)return {ok:false};this.gold-=amount;return {ok:true};},creditGold(amount){this.gold+=amount;return {ok:true};}};
   const sample=distance=>{const angle=distance/10;return{x:Math.cos(angle)*10,y:.42,z:Math.sin(angle)*10,angle:-angle,tangent:{x:-Math.sin(angle),y:0,z:Math.cos(angle)}};};
   const economy=createLoopEconomy({gameplay:{economy:'loops',farmVillages:{ownerId:'gray',cities:[farm]}}},
     {session:{player:game,bots:[]},railways:{revision:0,snapshot:()=>({revision:0})},networkFactory:()=>({loops:()=>[circuit],sample:(_loop,distance)=>sample(distance)})});
+  function until(condition){
+    for(let i=0;i<1800;i++){
+      const states=economy.trains;if(condition(states)){art.update(states,{mapBlend:.5});return states;}
+      economy.update(step);
+    }
+    assert.fail('Expected train lifecycle state within one minute');
+  }
   for(let i=0;i<2;i++)assert.equal(economy.buyTrain('home','loop','teal').ok,true);
-  economy.update(0);art.update(economy.trains,{mapBlend:.5});
-  assert.equal(art.stats.active,2);assert.equal(art.stats.visible,2);assert.equal(art.stats.detailCars,4);assert.equal(art.stats.mapInstances,2);
-  assert.equal(art.root.getObjectByName('trade-locomotive:teal').count,2);assert.equal(art.root.getObjectByName('trade-wagon:teal').count,2);
-  for(const record of art.trains){assert.equal(record.state.state,'moving');assert.deepEqual(record.parts[0].position.toArray(),[10,.42,0]);}
-  const buffers=meshes(art.root).map(mesh=>[mesh,mesh.instanceMatrix.array]),records=[...art.trains];
-  economy.drainEvents();economy.update((length/2+TRAIN_CAR_SPACING)/10);art.update(economy.trains,{mapBlend:.5});
-  assert.equal(art.root.getObjectByName('trade-cargo:grain').count,2,'both trains load their farm car on the same passage');
-  for(const record of art.trains){assert.equal(record.state.state,'moving');assert.ok(Math.abs(record.parts[1].position.x+10)<1e-7);assert.ok(Math.abs(record.parts[1].position.z)<1e-7);}
-  economy.update(.1);art.update(economy.trains,{mapBlend:.5});const next=sample(length/2+1);
-  for(const record of art.trains){assert.ok(Math.abs(record.parts[1].position.x-next.x)<1e-7);assert.ok(Math.abs(record.parts[1].position.z-next.z)<1e-7);}
-  assert.deepEqual(art.trains,records);for(const [mesh,buffer]of buffers)assert.equal(mesh.instanceMatrix.array,buffer);
+  art.update(economy.trains,{mapBlend:.5});
+  assert.equal(art.stats.active,1);assert.equal(art.stats.visible,1);assert.equal(art.stats.detailCars,2);assert.equal(art.stats.mapInstances,1);
+  assert.equal(economy.trains[1].state,'queued');assert.equal(economy.trains[1].active,false);
+  assert.equal(art.root.getObjectByName('trade-locomotive:teal').count,1);assert.equal(art.root.getObjectByName('trade-wagon:teal').count,1);
+  const firstRecord=art.trains[0];assert.deepEqual(firstRecord.parts[0].position.toArray(),[10,.42,0]);
+  const buffers=meshes(art.root).map(mesh=>[mesh,mesh.instanceMatrix.array]);
+  until(states=>states[1].active);assert.equal(art.stats.visible,2);assert.equal(art.stats.detailCars,4);assert.equal(art.stats.mapInstances,2);assert.equal(art.trains[0],firstRecord);
+  const records=[...art.trains];economy.drainEvents();
+  const stopped=until(states=>states[0].state==='dwell'&&states[0].stopCityId==='farm')[0];
+  const pickups=economy.drainEvents().filter(event=>event.type==='pickup');assert.equal(pickups.length,1);assert.equal(pickups[0].amount,1);
+  assert.equal(stopped.cars[0].amount,0);assert.equal(stopped.cars[1].amount,1);assert.equal(stopped.speed,0);
+  assert.equal(art.root.getObjectByName('trade-cargo:grain').count,1);assert.equal(art.stats.visible,2,'an admitted train stays visible while loading');
+  assert.ok(Math.abs(firstRecord.parts[1].position.x+10)<1e-7);assert.ok(Math.abs(firstRecord.parts[1].position.z)<1e-7);
+  const parked=firstRecord.parts.map(part=>part.position.clone());economy.update(.5);art.update(economy.trains,{mapBlend:.5});
+  assert.equal(economy.trains[0].state,'dwell');firstRecord.parts.forEach((part,index)=>assert.deepEqual(part.position,parked[index]));
+  until(states=>states[0].state==='moving'&&states[0].distance>stopped.distance+.1);
+  assert.ok(firstRecord.parts[1].position.distanceTo(parked[1])>.05);assert.deepEqual(art.trains,records);
+  until(states=>states.every(state=>state.laps>=1));
+  const states=economy.trains;assert.equal(game.food+economy.resourcesAt('gray').food+states.reduce((sum,state)=>sum+state.cargo.food,0),22,'rendering never creates cargo');
+  assert.equal(game.gold+economy.resourcesAt('gray').gold+states.reduce((sum,state)=>sum+state.escrowGold,0),50,'Gold remains in wallets or held fares');
+  for(const [mesh,buffer]of buffers)assert.equal(mesh.instanceMatrix.array,buffer,'station stops reuse all existing GPU buffers');
 });
