@@ -5,7 +5,7 @@ const wrap=(distance,length)=>((distance%length)+length)%length;
 /** Each town owns one position in the train. A trailing car reaches a station
  * after the engine, including stations just before home across the loop seam.
  * Sort those physical alignments, rather than teleporting the train backwards
- * to the next city label. Simultaneous alignments share a loading pause. */
+ * to the next city label. Simultaneous alignments load together in motion. */
 export function createCircuitConsist(loop,homeCityId){
   const length=loop?.length;if(!Number.isFinite(length)||length<=0)return null;
   const home=loop.stops?.find(stop=>stop.cityId===homeCityId&&Number.isFinite(stop.distance));if(!home)return null;

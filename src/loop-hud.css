@@ -20,6 +20,6 @@
 .loop-shortfall{margin:6px 0 0;text-align:center;font-size:12px;font-weight:650;color:#775111;text-shadow:0 1px 2px #fff6d6,0 0 5px #fff6d6}
 .loop-city-facts{display:flex;align-items:center;gap:12px;transform:translateY(-35px);font-weight:650;text-shadow:0 1px 2px #fff6d6,0 0 5px #fff6d6}
 .loop-city-facts>span{display:flex;align-items:center;gap:4px}
-.loop-city-facts>span:last-child{color:#805b19}
+.loop-city-facts>.loop-station-bonus{color:#32654f}
 .loop-city-facts svg{width:18px;height:18px}
 @media(prefers-reduced-motion:no-preference){.loop-buy{transition:background .12s,border-color .12s}}

@@ -55,3 +55,15 @@ test('loop house payments spend both wallets and missing food never spends resou
   }
   assert.equal(game.spendFood(1).ok,false);assert.equal(game.food,0);
 });
+
+
+test('loop wallets have only Resources and Food and cannot mint or spend coins',()=>{
+  const game=fixture(),before=game.snapshot();
+  assert.equal(game.creditGold(20).code,'currency-removed');
+  assert.equal(game.spendGold(0).code,'currency-removed');
+  assert.equal(game.settleIncome(100),null);
+  assert.deepEqual(game.snapshot(),before);
+  for(const key of ['gold','lastIncomeDay'])assert.equal(key in game.snapshot(),false);
+  for(const key of ['gold','resourceDebt','resourceNet','upkeep'])assert.equal(key in game.resourcesAt(),false);
+  assert.deepEqual(game.resourcesAt().rates,{resources:0,food:0});
+});

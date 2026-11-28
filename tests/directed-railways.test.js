@@ -8,8 +8,8 @@ function fixture({surfaceAt=()=>({type:'ground',height:0})}={}){
   const cities=[{id:'a',x:0,z:0,ownerId:'teal',level:2,houseCount:6},{id:'b',x:65,z:20,ownerId:'gray',level:2,houseCount:6},{id:'c',x:45,z:-60,ownerId:'orange',level:2,houseCount:6}];
   const buildings=cities.flatMap(city=>[[0,0],[4,0],[0,4],[-4,0],[0,-4],[4,4]].map(([x,z],index)=>({id:`${city.id}:home:${index}`,kind:'house',cityId:city.id,ownerId:city.ownerId,x:city.x+x,z:city.z+z,rotation:0,width:2.2,depth:2.2})));
   for(const city of cities)city.houseIds=buildings.filter(h=>h.cityId===city.id).map(h=>h.id);
-  const makeAccount=city=>({ownerId:city.ownerId,cities:[city],gold:0,logs:40,debt:0,
-    resourcesAt(){return {resources:Math.max(0,this.logs-this.debt)};},
+  const makeAccount=city=>({ownerId:city.ownerId,cities:[city],gold:0,logs:40,
+    resourcesAt(){return {resources:this.logs};},
     spendResources(amount){if(this.resourcesAt().resources<amount)return {ok:false,code:'not-enough-resources'};this.logs-=amount;return {ok:true,totalResources:this.resourcesAt().resources};},
     spendGold(){assert.fail('loop railways must not spend Gold');}});
   const session={player:makeAccount(cities[0]),bots:cities.slice(1).map(city=>({game:makeAccount(city)})),buildings,shared:{removedTreeIds:new Set()}};
@@ -130,15 +130,15 @@ test('loop railway prices use straight city distance and spend Resources with ze
   assert.equal(built.totalResources,36);assert.equal(session.player.logs,36);assert.equal(session.player.gold,0);
 });
 
-test('loop affordability respects upkeep debt and refreshes cached or adopted geometry without terrain work',()=>{
+test('loop affordability refreshes after spending without rebuilding cached or adopted geometry',()=>{
   let probes=0;const {rail,session}=fixture({surfaceAt:()=>{probes++;return {type:'ground',height:0};}});rail.synchronizeStations();
   const plan=rail.evaluate('a','b'),key=rail.geometryKey('a','b'),checked=probes;
-  assert.equal(plan.valid,true);session.player.debt=37;session.player.gold=1000;
+  assert.equal(plan.valid,true);session.player.logs=3;session.player.gold=1000;
   const poor=rail.evaluate('a','b');assert.equal(poor.siteValid,true);assert.equal(poor.valid,false);
   assert.equal(poor.code,'not-enough-resources');assert.equal(poor.costResource,'resources');assert.equal(probes,checked);
   assert.equal(rail.adoptPreview('a','b',plan,key),true);
-  assert.equal(rail.build('a','b',{requireCached:true}).code,'not-enough-resources');assert.equal(probes,checked);assert.equal(session.player.logs,40);
-  session.player.debt=36;
+  assert.equal(rail.build('a','b',{requireCached:true}).code,'not-enough-resources');assert.equal(probes,checked);assert.equal(session.player.logs,3);
+  session.player.logs=4;
   const built=rail.build('a','b',{requireCached:true});assert.equal(built.ok,true,built.reason);assert.equal(built.totalResources,0);assert.equal(probes,checked);
   assert.equal(session.player.gold,1000,'Gold never pays for a resource-priced railway');
 });

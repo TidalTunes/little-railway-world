@@ -68,7 +68,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   const villageBuildings=[...villages.houses??[],...villages.buildings??[]],villagePaths=villages.paths??[];
   const economic=Boolean(world.gameplay?.economy),loopEconomy=world.gameplay?.economy==='loops';
   let cities=[],clusters=[],economy=null,establishedCity=false;
-  let logs=loopEconomy?LOOP.startResources:economic?12:0,food=loopEconomy?LOOP.startFood:0,gold=loopEconomy?LOOP.startGold:economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
+  let logs=loopEconomy?LOOP.startResources:economic?12:0,food=loopEconomy?LOOP.startFood:0,gold=loopEconomy?0:economic?12:0,lastIncomeDay=0,revision=0,spatialRevision=0,nextHouse=2,developmentSearching=false;
   const developmentSearch=new Map();
 
   // Dispersed early outposts must still be able to form their first depot.
@@ -79,10 +79,8 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     const valid=value=>Number.isSafeInteger(value)&&value>=0?value:0;
     if(loopEconomy){
       const total=valid(resources?.resources??resources?.timber);
-      return {resources:total,timber:total,food:valid(resources?.food??food),gold:valid(resources?.gold??gold),
-        resourceDebt:valid(resources?.resourceDebt),resourceNet:Number.isSafeInteger(resources?.resourceNet)?resources.resourceNet:total,
-        rates:resources?.rates??{resources:0,food:0,gold:0},ratesEstimated:!!resources?.ratesEstimated,
-        upkeep:resources?.upkeep??{due:0,paid:0,unpaid:0},
+      return {resources:total,timber:total,food:valid(resources?.food??food),
+        rates:resources?.rates??{resources:0,food:0},ratesEstimated:!!resources?.ratesEstimated,
         grain:0,tools:0,cityId:resources?.cityId??null};
     }
     return Object.fromEntries(['timber','grain','tools'].map(key=>[key,valid(resources?.[key])]));
@@ -330,6 +328,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
   // Other construction systems use the same authoritative wallet. Failed
   // plans never debit it, and repeated commands cannot overspend the account.
   function spendGold(amount){
+    if(loopEconomy)return {ok:false,code:'currency-removed'};
     if(!Number.isSafeInteger(amount)||amount<=0)return {ok:false,code:'invalid-cost'};
     if(gold<amount)return {ok:false,code:'not-enough-gold',cost:amount,totalGold:gold};
     gold-=amount;revision++;return {ok:true,cost:amount,totalGold:gold};
@@ -344,7 +343,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     if(!Number.isSafeInteger(amount)||amount<0||!Number.isSafeInteger(logs+amount))return {ok:false,code:'invalid-credit'};
     if(amount){logs+=amount;revision++;}return {ok:true,amount,totalLogs:logs};
   }
-  // The engine settles Resource debt before spending or accepting manual work.
+  // Construction and manual work share the same engine wallet.
   // Raw log methods remain the backing wallet to avoid adapter recursion.
   function spendResources(amount){return loopEconomy&&economy?.spendResources?economy.spendResources(amount):spendLogs(amount);}
   function creditResources(amount){return loopEconomy&&economy?.creditResources?economy.creditResources(amount):addLogs(amount);}
@@ -358,6 +357,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     if(amount){food+=amount;revision++;}return {ok:true,amount,totalFood:food};
   }
   function creditGold(amount){
+    if(loopEconomy)return {ok:false,code:'currency-removed'};
     if(!Number.isSafeInteger(amount)||amount<0||!Number.isSafeInteger(gold+amount))return {ok:false,code:'invalid-credit'};
     if(amount){gold+=amount;revision++;}return {ok:true,amount,totalGold:gold};
   }
@@ -369,7 +369,7 @@ export function createSettlementGame(world,{config=world.gameplay,surfaceAt=(x,z
     get houses(){return copy(homes);},get buildings(){return copy(buildings);},get cities(){return copy(cities);},get clusters(){return copy(clusters);},
     get pendingMilestones(){return pendingTypes();},get pendingDevelopments(){return copy(pendingDevelopments());},get paths(){return copy(paths);},get removedTreeIds(){return new Set(removed);},
     isTreeRemoved(tree){return removed.has(typeof tree==='string'?tree:settlementTreeId(tree));},
-    snapshot(){return {logs,food,gold,lastIncomeDay,revision,spatialRevision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
+    snapshot(){return {logs,food,...(!loopEconomy&&{gold,lastIncomeDay}),revision,spatialRevision,ownerId,developmentSearching,houses:copy(homes),buildings:copy(buildings),cities:copy(cities),clusters:copy(clusters),pendingMilestones:pendingTypes(),pendingDevelopments:copy(pendingDevelopments()),paths:copy(paths),removedTreeIds:[...removed]};},
     evaluateBuild,build,chop,mine,develop,settleIncome,spendGold,spendLogs,addLogs,spendResources,creditResources,spendFood,addFood,creditGold,setEconomy,resourcesAt,
   };
 }

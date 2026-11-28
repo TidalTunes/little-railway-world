@@ -88,7 +88,7 @@
 .settlement-resource-caption { color: var(--hud-muted); font-size: 11px; font-weight: 550; line-height: 1.3; }
 .settlement-rate { color: #a7b4af; font-size: 11px; line-height: 1.25; font-weight: 600; letter-spacing: .05px; white-space: nowrap; pointer-events: auto; }
 .settlement-rate[data-tone="positive"] { color: #a9dfac; }
-.settlement-rate[data-tone="negative"], .settlement-resource strong[data-negative="true"] { color: #f2a28e; }
+.settlement-rate[data-tone="negative"] { color: #f2a28e; }
 .settlement-symbol { display: block; width: 28px; height: 28px; flex: none; }
 .settlement-resource > .settlement-symbol, .settlement-stock-symbol > .settlement-symbol { width: 30px; height: 30px; filter: drop-shadow(0 2px 0 #081f2470); }
 .settlement-wood { color: #f0c394; }
@@ -259,6 +259,8 @@
   .settlement-resource strong { font-size: 20px; }
   .settlement-resource-caption { font-size: 10px; }
   .settlement-day-control { top: max(91px, calc(env(safe-area-inset-top) + 81px)); right: max(10px, env(safe-area-inset-right)); min-height: 34px; padding: 0 9px; }
+  .settlement-hud[data-economy="loops"] .settlement-ledger { max-width: calc(100% - 126px); }
+  .settlement-hud[data-economy="loops"] .settlement-day-control { top: max(10px, env(safe-area-inset-top)); }
   .settlement-phase-label { gap: 5px; }
   .settlement-phase-label .settlement-symbol { width: 19px; height: 19px; }
   .settlement-phase-label .settlement-label { font-size: 11px; }

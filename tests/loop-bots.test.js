@@ -5,7 +5,7 @@ import {loopBotRouteOptions} from '../src/loop-bots.js';
 
 function fixture({resources=40,houses=6,cost=4,planRoute}={}){
   const city={id:'own',ownerId:'blue',x:0,z:0,level:Math.floor(houses/3),houseCount:houses},farm={id:'farm',ownerId:'gray',x:65,z:0,level:2,houseCount:6};
-  const game={ownerId:'blue',gold:0,logs:resources,debt:0,cities:houses>=3?[city]:[],houses:Array(houses).fill({}),resourcesAt(){return {resources:Math.max(0,this.logs-this.debt)};},spendResources(amount){if(this.resourcesAt().resources<amount)return {ok:false};this.logs-=amount;return {ok:true};}};
+  const game={ownerId:'blue',gold:0,logs:resources,cities:houses>=3?[city]:[],houses:Array(houses).fill({}),resourcesAt(){return {resources:this.logs};},spendResources(amount){if(this.resourcesAt().resources<amount)return {ok:false};this.logs-=amount;return {ok:true};}};
   const policies=[],bot={game,config:{id:'blue-bot'},setPolicy:policy=>policies.push(policy)};
   const calls=[],connections=[],trains=[],callbacks=[];
   const railways={revision:0,maxConnectionDistance:140,snapshot:()=>({cities:[city,farm],connections}),
@@ -103,8 +103,8 @@ test('resource savings unlock a complete loop and train without any Gold income'
 test('worker completion checks current spendable Resources and preserves the return plus train reserve',async()=>{
   let resolve;const f=fixture({resources:23,planRoute:()=>new Promise(done=>resolve=done)});
   f.coordinator.update(1);assert.equal(f.coordinator.planning,true);
-  f.game.debt=1;resolve({result:{siteValid:true,valid:true,cost:4,costResource:'resources'}});await Promise.resolve();f.coordinator.update(.1);
-  assert.equal(f.connections.length,0,'an outstanding upkeep unit makes the full loop budget unaffordable');
-  assert.equal(f.game.logs,23);assert.equal(f.coordinator.snapshot()[0].state,'saving');
+  f.game.logs--;resolve({result:{siteValid:true,valid:true,cost:4,costResource:'resources'}});await Promise.resolve();f.coordinator.update(.1);
+  assert.equal(f.connections.length,0,'a separate purchase can consume the complete-loop reserve while geometry is being checked');
+  assert.equal(f.game.logs,22);assert.equal(f.coordinator.snapshot()[0].state,'saving');
   assert.deepEqual(f.calls,['preview','adopt']);
 });

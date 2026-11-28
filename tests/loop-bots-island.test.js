@@ -22,7 +22,7 @@ test('island loop rivals buy complete directed railway circuits through real phy
     return placements;
   }
   const railways=createSettlementRailways(world,{session,getPlacements}),economy=createSettlementEconomy(world,{session,railways});
-  const games=[session.player,...session.bots.map(entry=>entry.game)],initialGold=economy.snapshot().owners.reduce((sum,owner)=>sum+owner.gold,0);
+  const games=[session.player,...session.bots.map(entry=>entry.game)];
   for(const game of games)game.setEconomy({resourcesAt:point=>economy.resourcesAt(game.ownerId,point),
     spendConstruction:(point,cost)=>economy.spendConstruction(game.ownerId,point,cost),
     spendResources:amount=>economy.spendResources(game.ownerId,amount)});
@@ -48,10 +48,12 @@ test('island loop rivals buy complete directed railway circuits through real phy
   assert.ok(result.stats.trainsBought>0,'a valid physical circle supports a purchased train');
   assert.ok(result.stats.laps>0,'a purchased train completes the actual track loop');
   assert.ok(bots.some(bot=>bot.game.houses.length>6),'trade-delivered Food lets a rival resume construction beyond the station milestone');
-  for(const train of result.trains)assert.equal(train.backing,false);
-  assert.ok(railwayCost>0);assert.ok(result.stats.trainSpent>=loopTrainCost(2));assert.equal(initialGold,0,'every player begins without Gold');
-  assert.equal(result.owners.reduce((sum,owner)=>sum+owner.gold,0),initialGold+result.stats.currencyMinted,'railways and trains only debit Resources');
+  for(const train of result.trains){assert.equal(train.backing,false);assert.equal(train.active,true);assert.equal(train.state,'moving');}
+  assert.ok(railwayCost>0);assert.ok(result.stats.trainSpent>=loopTrainCost(2));
+  assert.ok(games.every(game=>game.gold===0),'loop trading never credits the legacy Gold wallet');
+  assert.ok(result.stats.stationResources>0,'passing trains reward player station owners with Resources');
+  for(const owner of result.owners){assert.equal('gold' in owner,false);assert.equal('resourceDebt' in owner,false);assert.equal('upkeep' in owner,false);}
   assert.equal(session.player.logs,LOOP_ECONOMY_RULES.startResources+10,'the starter earns ten daytime production ticks across fifteen minutes');
-  assert.equal(session.player.food,LOOP_ECONOMY_RULES.startFood);assert.equal(session.player.gold,0,'bots never spend or reward the human wallet');
+  assert.equal(session.player.food,LOOP_ECONOMY_RULES.startFood);
   coordinator.dispose();
 });

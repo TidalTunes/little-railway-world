@@ -38,16 +38,15 @@ test('nearby bursts merge without mixing owners, collected cargo, or credited re
   queue.update(3);assert.equal(queue.active.length,0);assert.equal(queue.emit(gain()),null,'expiry does not permit replaying the same authoritative event');
 });
 
-test('city production reports signed net changes and cancelling events do not leave empty popups',()=>{
+test('production reports current gains and ignores removed gold or debt events',()=>{
   const{document,effects,options}=fixture();
-  effects.emit(gain({kind:'production',resources:{resources:-5,food:2,gold:1}}));effects.update(.2,options);
+  effects.emit(gain({kind:'production',resources:{resources:5,food:2,gold:1}}));effects.update(.2,options);
   const values=document.body.children[0].children[0].children[0].children;
-  assert.equal(values[0].children[1].textContent,'−5');assert.equal(values[0].dataset.negative,'true');
-  assert.equal(values[1].children[1].textContent,'+2');assert.equal(values[2].children[1].textContent,'+1');
+  assert.equal(values.length,2);assert.equal(values[0].children[1].textContent,'+5');assert.equal(values[1].children[1].textContent,'+2');
   effects.dispose();
-  const queue=createResourceGainQueue();queue.emit(gain({amount:5}));queue.emit(gain({id:'upkeep',amount:-5}));assert.equal(queue.active.length,0);
-  assert.equal(queue.emit(gain({id:'bad-pickup',kind:'pickup',amount:-5})),null,'a negative pickup cannot invent expenditure');
-  assert.equal(queue.emit(gain({id:'zero',resources:{resources:0,food:0,gold:0}})),null);
+  const queue=createResourceGainQueue();
+  for(const patch of [{amount:-5},{resource:'gold',amount:3},{resources:{gold:9}},{kind:'pickup',amount:-5},{resources:{resources:0,food:0,gold:0}}])assert.equal(queue.emit(gain(patch)),null);
+  assert.equal(queue.active.length,0);
 });
 
 test('legacy timber and ore receipts combine once while canonical resources remain authoritative',()=>{
@@ -55,7 +54,7 @@ test('legacy timber and ore receipts combine once while canonical resources rema
   const old=queue.emit(gain({resources:{wood:2,metal:3,food:4},amount:99}));
   assert.deepEqual(old.resources,{resources:5,food:4},'the explicit receipt does not repeat its single-resource fallback');
   const canonical=queue.emit(gain({id:'new',x:10,resources:{resources:7,wood:2,metal:3,gold:1}}));
-  assert.deepEqual(canonical.resources,{resources:7,gold:1});
+  assert.deepEqual(canonical.resources,{resources:7});
   assert.equal(queue.emit(gain({id:'ore',x:20,resource:'metal',amount:2})).resources.resources,2);
 });
 
@@ -71,7 +70,7 @@ test('all resource icons and exact quantities share one projection in map and de
   const{document,effects,options}=fixture();effects.emit(gain({kind:'pickup',resources:{resources:30,food:30,gold:0}}));
   effects.update(.2,{...options,mapBlend:0});assert.equal(effects.visibleCount,1);
   const popup=document.body.children[0].children[0],values=popup.children[0].children;
-  assert.equal(popup.children.length,1,'resource rows have no caption');assert.equal(values.length,3);assert.equal(values[0].children[1].textContent,'30');assert.equal(values[1].children[1].textContent,'30');assert.equal(values[2].hidden,true);
+  assert.equal(popup.children.length,1,'resource rows have no caption');assert.equal(values.length,2);assert.equal(values[0].children[1].textContent,'30');assert.equal(values[1].children[1].textContent,'30');
   assert.match(values[0].children[0].innerHTML,/data-material="wood"/);assert.match(values[0].children[0].innerHTML,/data-material="ore"/);
   effects.update(.1,{...options,mapBlend:.5});assert.equal(effects.visibleCount,1,'a render-layer transition cannot double the receipt');
   effects.update(.1,{...options,mapBlend:1});assert.equal(effects.visibleCount,1);assert.match(popup.style.transform,/410\.00px/,'canvas left offset is included');
@@ -101,18 +100,18 @@ test('merged NPC gathering remains icon-only while train counts stay exact witho
   effects.emit(gain({id:'cargo',kind:'pickup',resources:{resources:11,food:2.5,gold:3}}));effects.update(.2,options);
   const slots=document.body.children[0].children,gathered=slots[0].children[0].children,cargo=slots[1].children[0].children;
   assert.equal(gathered[0].children[1].hidden,true);assert.equal(gathered[0].children[1].textContent,'');
-  assert.equal(cargo[0].children[1].textContent,'11');assert.equal(cargo[1].children[1].textContent,'2.5');assert.equal(cargo[2].children[1].textContent,'3');
+  assert.equal(cargo[0].children[1].textContent,'11');assert.equal(cargo[1].children[1].textContent,'2.5');assert.equal(cargo.length,2);
   effects.dispose();
 });
 
-test('simultaneous train and gold rows keep a gap without displacing separate small symbols',()=>{
+test('simultaneous train receipts and station bonuses keep a gap without displacing small symbols',()=>{
   const{document,effects}=fixture(),camera=new OrthographicCamera(-50,50,50,-50,.1,1000);
   camera.position.set(0,100,0);camera.up.set(0,0,-1);camera.lookAt(0,0,0);camera.updateMatrixWorld(true);
   const options={camera,viewportWidth:800,viewportHeight:800,reducedMotion:true};
-  effects.emit(gain({kind:'pickup',resources:{resources:20,food:10,gold:3}}));effects.emit(gain({id:'gold',kind:'gold',resource:'gold',amount:3,x:8}));
+  effects.emit(gain({kind:'pickup',resources:{resources:20,food:10,gold:3}}));effects.emit(gain({id:'bonus',kind:'station-bonus',resource:'resources',amount:2,x:5}));
   effects.update(.2,options);
   const ys=()=>document.body.children[0].children.filter(slot=>!slot.hidden).map(slot=>Number(slot.style.transform.match(/translate3d\([^,]+,([^p]+)px/)[1]));
-  const broad=ys();assert.ok(broad[0]-20-broad[1]>=7,'a broad train row keeps the nearby gold popup outside its bounds');
+  const broad=ys();assert.ok(broad[0]-20-broad[1]>=7,'a broad train row keeps the nearby station symbol outside its bounds');
   effects.update(3,options);effects.emit(gain({id:'single',kind:'gathered'}));effects.emit(gain({id:'apart',kind:'gathered',x:10}));effects.update(.2,options);
   const separate=ys();assert.equal(separate[0],separate[1],'small separated resource symbols stay at their sources');
   assert.equal(effects.stats.allocated,2);effects.dispose();
@@ -130,4 +129,15 @@ test('globe receipts use the curved surface and cannot show through the far hemi
   camera.position.set(0,200,0);camera.up.set(0,0,-1);camera.lookAt(0,-100,0);camera.updateMatrixWorld(true);
   effects.emit(gain({id:'near'}));effects.emit(gain({id:'far',x:Math.PI*radius}));effects.update(.2,{camera,viewportWidth:800,viewportHeight:800,mapBlend:1});
   assert.equal(effects.visibleCount,1);assert.equal(effects.stats.active,2);effects.dispose();
+});
+
+
+test('station bonuses merge and reuse a tiny icon without amounts or captions',()=>{
+  const {document,effects,options}=fixture();
+  effects.emit(gain({id:'visit-1',type:'station-bonus',kind:undefined,amount:2}));effects.emit(gain({id:'visit-2',kind:'station-bonus',amount:2}));
+  effects.update(.2,options);assert.equal(effects.visibleCount,1);
+  const popup=document.body.children[0].children[0],values=popup.children[0].children;
+  assert.equal(popup.dataset.kind,'station-bonus');assert.equal(popup.children.length,1);assert.equal(values.length,2);assert.equal(values[0].hidden,false);assert.equal(values[0].children[1].hidden,true);assert.equal(values[0].children[1].textContent,'');assert.equal(values[1].hidden,true);
+  assert.match(values[0].children[0].innerHTML,/data-material="ore"/);
+  effects.update(3,options);effects.emit(gain({id:'later',kind:'station-bonus',amount:2}));effects.update(.2,options);assert.equal(effects.stats.allocated,1);effects.dispose();
 });

@@ -2,18 +2,18 @@ import {Vector3,MathUtils} from 'three';
 import {surfaceFor,surfacePoint,surfaceNormal} from './world-surface.js';
 import {resourceIcon} from './resource-icons.js';
 
-const RESOURCES=['resources','food','gold'];
-const KINDS=new Set(['pickup','delivery','production','gold','gathered']);
-function gainResources(event,signed=false){
+const RESOURCES=['resources','food'];
+const KINDS=new Set(['pickup','delivery','production','station-bonus','gathered']);
+function gainResources(event){
   const resources={};
-  const valid=amount=>Number.isFinite(amount)&&(signed||amount>0)?amount:0;
+  const valid=amount=>Number.isFinite(amount)&&amount>0?amount:0;
   if(event.resources){
     // Historical receipts may still contain separate timber and ore amounts.
     // A canonical balance, when present, is authoritative rather than additive.
     const stock=event.resources;
     const materials=Object.hasOwn(stock,'resources')?valid(stock.resources):valid(stock.wood)+valid(stock.metal);
     if(materials)resources.resources=materials;
-    for(const name of ['food','gold'])if(valid(stock[name]))resources[name]=stock[name];
+    if(valid(stock.food))resources.food=stock.food;
   }else{
     const name=event.resource==='wood'||event.resource==='metal'?'resources':event.resource;
     if(RESOURCES.includes(name)&&valid(event.amount))resources[name]=event.amount;
@@ -21,7 +21,7 @@ function gainResources(event,signed=false){
   return resources;
 }
 
-function quantityLabel(item,amount){return item.kind==='production'?`${amount<0?'−':'+'}${Math.abs(amount)}`:item.kind==='gathered'||amount===1?'':String(amount);}
+function quantityLabel(item,amount){return item.kind==='station-bonus'||item.kind==='gathered'?'':item.kind==='production'?`+${amount}`:amount===1?'':String(amount);}
 function receiptWidth(item){
   let width=0,count=0;
   for(const resource of RESOURCES)if(item.resources[resource]){const label=quantityLabel(item,item.resources[resource]);width+=20+(label?3+label.length*8:0);count++;}
@@ -38,13 +38,13 @@ export function createResourceGainQueue({maxActive=24,duration=2.8,mergeWindow=.
   function emit(event){
     if(!event||!Number.isFinite(event.x)||!Number.isFinite(event.z)||event.y!==undefined&&!Number.isFinite(event.y))return null;
     const kind=KINDS.has(event.kind)?event.kind:KINDS.has(event.type)?event.type:'production';
-    const resources=gainResources(event,kind==='production');
+    const resources=gainResources(event);
     if(!Object.keys(resources).length)return null;
     const dedupe=event.id==null?null:`${event.ownerId??''}:${kind}:${event.id}`;
     if(dedupe&&seen.has(dedupe))return null;
     if(dedupe){seen.set(dedupe,clock);while(seen.size>maxRemembered)seen.delete(seen.keys().next().value);}
     let item=active.find(item=>item.kind===kind&&item.ownerId===event.ownerId&&clock-item.born<=mergeWindow&&Math.hypot(item.x-event.x,item.z-event.z)<=mergeDistance);
-    if(item){for(const resource of RESOURCES)if(resources[resource]){item.resources[resource]=(item.resources[resource]??0)+resources[resource];if(!item.resources[resource])delete item.resources[resource];}if(!Object.keys(item.resources).length){active.splice(active.indexOf(item),1);return null;}item.version++;return item;}
+    if(item){for(const resource of RESOURCES)if(resources[resource])item.resources[resource]=(item.resources[resource]??0)+resources[resource];item.version++;return item;}
     if(active.length>=maxActive)active.shift();
     item={serial:++serial,version:0,kind,ownerId:event.ownerId,x:event.x,y:event.y??0,z:event.z,resources,born:clock,age:0,duration};active.push(item);return item;
   }
@@ -81,7 +81,7 @@ export function createResourceGainEffects(world,{parent,document:doc=globalThis.
           const x=(point.x+1)*bounds.width/2+(bounds.left??0);let y=(1-point.y)*bounds.height/2+(bounds.top??0)-18-rise;
           if(entry.serial!==item.serial||entry.version!==item.version){
             entry.serial=item.serial;entry.version=item.version;entry.element.dataset.kind=item.kind;entry.width=receiptWidth(item);
-            for(const resource of RESOURCES){const amount=item.resources[resource]??0,label=quantityLabel(item,amount);entry.values[resource].value.hidden=!amount;entry.values[resource].value.dataset.negative=String(amount<0);entry.values[resource].amount.hidden=!label;entry.values[resource].amount.textContent=label;}
+            for(const resource of RESOURCES){const amount=item.resources[resource]??0,label=quantityLabel(item,amount);entry.values[resource].value.hidden=!amount;entry.values[resource].amount.hidden=!label;entry.values[resource].amount.textContent=label;}
           }
           // Reserve the complete icon row. Every upward move clears one prior
           // row permanently; no DOM layout reads or new nodes are needed.

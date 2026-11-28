@@ -5,6 +5,8 @@ import {createTradeTrains,TRADE_TRAIN_LIMITS} from '../src/trade-trains.js';
 import {playerColors} from '../src/player-palette.js';
 import {M} from '../src/palette.js';
 import {buildSteamLocomotive} from '../src/steam-locomotive.js';
+import {createLoopEconomy} from '../src/loop-economy.js';
+import {TRAIN_CAR_SPACING} from '../src/train-consist.js';
 
 const world={players:[{id:'teal',color:{l:.60,c:.13,h:185}},{id:'coral',color:{l:.63,c:.14,h:24}}]};
 const train=(id=1,values={})=>({id:`freight-${id}`,ownerId:'teal',x:0,y:.42,z:0,angle:0,cargo:'timber',amount:6,active:true,...values});
@@ -168,4 +170,31 @@ test('unified Resources freight combines timber and ore in one reusable load',t=
   const geometry=load.geometry,buffer=load.instanceMatrix.array;
   art.update([train(1,{resource:'resources',cargo:{resources:20},amount:20})]);
   assert.equal(load.geometry,geometry);assert.equal(load.instanceMatrix.array,buffer);
+});
+
+test('newly purchased shared-loop trains render at home immediately and pass stations without a visual stop',t=>{
+  const {art}=fixture(t),length=Math.PI*20;
+  const home={id:'home',ownerId:'teal',level:2,houseCount:6,x:10,z:0},farm={id:'farm',ownerId:'gray',level:2,houseCount:6,x:-10,z:0};
+  const circuit={id:'loop',length,cityIds:['home','farm'],stationIds:['home-platform','farm-platform'],
+    stops:[{cityId:'home',stationId:'home-platform',distance:0},{cityId:'farm',stationId:'farm-platform',distance:length/2}],
+    segments:[{lineId:'shared-track',start:0,end:length,offset:0,length}]};
+  const game={ownerId:'teal',logs:100,food:12,gold:0,cities:[home],
+    spendLogs(amount){if(this.logs<amount)return {ok:false};this.logs-=amount;return {ok:true};},
+    addLogs(amount){this.logs+=amount;return {ok:true};},addFood(amount){this.food+=amount;return {ok:true};},
+    creditGold(){assert.fail('loop passage must not mint Gold');}};
+  const sample=distance=>{const angle=distance/10;return{x:Math.cos(angle)*10,y:.42,z:Math.sin(angle)*10,angle:-angle,tangent:{x:-Math.sin(angle),y:0,z:Math.cos(angle)}};};
+  const economy=createLoopEconomy({gameplay:{economy:'loops',farmVillages:{ownerId:'gray',cities:[farm]}}},
+    {session:{player:game,bots:[]},railways:{revision:0,snapshot:()=>({revision:0})},networkFactory:()=>({loops:()=>[circuit],sample:(_loop,distance)=>sample(distance)})});
+  for(let i=0;i<2;i++)assert.equal(economy.buyTrain('home','loop','teal').ok,true);
+  economy.update(0);art.update(economy.trains,{mapBlend:.5});
+  assert.equal(art.stats.active,2);assert.equal(art.stats.visible,2);assert.equal(art.stats.detailCars,4);assert.equal(art.stats.mapInstances,2);
+  assert.equal(art.root.getObjectByName('trade-locomotive:teal').count,2);assert.equal(art.root.getObjectByName('trade-wagon:teal').count,2);
+  for(const record of art.trains){assert.equal(record.state.state,'moving');assert.deepEqual(record.parts[0].position.toArray(),[10,.42,0]);}
+  const buffers=meshes(art.root).map(mesh=>[mesh,mesh.instanceMatrix.array]),records=[...art.trains];
+  economy.drainEvents();economy.update((length/2+TRAIN_CAR_SPACING)/10);art.update(economy.trains,{mapBlend:.5});
+  assert.equal(art.root.getObjectByName('trade-cargo:grain').count,2,'both trains load their farm car on the same passage');
+  for(const record of art.trains){assert.equal(record.state.state,'moving');assert.ok(Math.abs(record.parts[1].position.x+10)<1e-7);assert.ok(Math.abs(record.parts[1].position.z)<1e-7);}
+  economy.update(.1);art.update(economy.trains,{mapBlend:.5});const next=sample(length/2+1);
+  for(const record of art.trains){assert.ok(Math.abs(record.parts[1].position.x-next.x)<1e-7);assert.ok(Math.abs(record.parts[1].position.z-next.z)<1e-7);}
+  assert.deepEqual(art.trains,records);for(const [mesh,buffer]of buffers)assert.equal(mesh.instanceMatrix.array,buffer);
 });

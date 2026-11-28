@@ -38,7 +38,7 @@ export function createLoopBots(world,{session,bots,railways,economy,onRailBuild=
   function commit(request,plan){
     const {entry,from,to,options,key}=request;
     if(!plan?.siteValid||plan.valid===false&&plan.code!=='not-enough-resources'){fail(entry,key,plan?.code??'route-blocked');return;}
-    // Recheck spendable resources after worker adoption: upkeep or a house
+    // Recheck spendable resources after worker adoption: a train or house
     // purchase may have consumed them while this geometry was being checked.
     if(!Number.isFinite(plan.cost)||availableResources(entry)-plan.cost<reserveFor(plan.cost,request.closing)){fail(entry,key,'not-enough-resources');return;}
     const result=railways.build(from,to,{...options,requireCached:true});

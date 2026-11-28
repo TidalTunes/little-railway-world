@@ -7,12 +7,14 @@ test('directed-loop benchmarks use constant population production and compare fo
   const results=runEconomyBenchmarks({seconds:120});assert.equal(results.length,6);
   for(const row of results){
     assert.ok(row.laps>=1,`${row.scenario} ${row.strategy} completes its physical loop`);
-    assert.deepEqual(row.populationProduction,{resources:12,food:0,gold:0},'six residents produce on both daytime minute ticks');
+    assert.equal(row.populationProduction.resources,12,'six residents produce on both daytime minute ticks');assert.equal(row.populationProduction.food,0);
     assert.equal(row.trainCost,loopTrainCost(row.cityCount));
-    assert.deepEqual(row.upkeep,{due:10,paid:10,unpaid:0});assert.equal(row.resourceDebt,0);
-    assert.equal(row.resources,LOOP_ECONOMY_RULES.startResources-row.playerRails-row.trainCost+row.populationProduction.resources+row.delivered.resources-row.upkeep.paid,'the resource wallet reconciles building, purchases, production, deliveries and upkeep');
+    assert.equal('upkeep' in row,false);assert.equal('resourceDebt' in row,false);assert.equal('gold' in row,false);
+    assert.equal(row.stationResources,row.laps*2,'each real passage of the player-owned home station rewards its owner');
+    assert.equal(row.resources,LOOP_ECONOMY_RULES.startResources-row.playerRails-row.trainCost+row.populationProduction.resources+row.delivered.resources+row.stationResources,'the Resource wallet reconciles purchases, production, cargo and station rewards with no upkeep');
     assert.equal(row.food,LOOP_ECONOMY_RULES.startFood+row.delivered.food);
-    assert.ok(row.gold>0,'trading earns Gold from a zero-Gold start');assert.ok(row.delivered.resources>=10);
+    assert.ok(row.stationResources>0);assert.ok(row.delivered.resources>=2);
+    assert.ok(Math.abs(row.firstDelivery-row.length/10)<.3,'the train completes its route at speed ten without station pauses');
   }
   const food=results.find(row=>row.scenario==='near'&&row.strategy==='food-loop');
   const mixed=results.find(row=>row.scenario==='near'&&row.strategy==='mixed-loop');

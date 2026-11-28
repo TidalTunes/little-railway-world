@@ -30,58 +30,57 @@ test('one city corresponds to one train car, including the engine, with duplicat
   assert.deepEqual(plan.cars.map(car=>car.offset),[0,TRAIN_CAR_SPACING,TRAIN_CAR_SPACING*2]);
   const {economy}=fixture(circuit);assert.equal(economy.buyTrain('city-0','loop','teal').ok,true);
   const train=economy.trains[0];assert.equal(train.carCount,3);assert.equal(train.carPoses.length,3);
-  assert.equal(train.cars[0].amount,10);assert.equal(train.cars[1].amount,0);assert.equal(train.cars[2].amount,0);
+  assert.equal(train.cars[0].amount,2);assert.equal(train.cars[1].amount,0);assert.equal(train.cars[2].amount,0);
 });
 
 test('the city-assigned trailing car aligns with the station and the popup, while the engine stays ahead',()=>{
   const circuit=loop(),{economy,sample}=fixture(circuit);economy.buyTrain('city-0','loop','teal');economy.drainEvents();
-  const arrival=1+(20+TRAIN_CAR_SPACING)/5;economy.update(arrival);
+  const arrival=(20+TRAIN_CAR_SPACING)/10;economy.update(arrival);
   const train=economy.trains[0],station=sample(circuit,20),event=economy.drainEvents().find(event=>event.type==='pickup');
-  assert.equal(train.state,'dwell');assert.deepEqual(train.stopCarIndices,[1]);assert.equal(train.stopCityId,'city-1');
+  assert.equal(train.state,'moving');assert.equal(event.cityId,'city-1');
   close(train.carPoses[1].x,station.x);close(train.carPoses[1].z,station.z);
   close(event.x,station.x);close(event.z,station.z);assert.equal(event.carIndex,1);
   assert.ok(Math.hypot(train.carPoses[0].x-station.x,train.carPoses[0].z-station.z)>2.5);
-  assert.equal(train.cars[1].amount,10);assert.equal(train.cars[2].amount,0);
-  economy.update(.75);assert.deepEqual(economy.trains[0].carPoses,train.carPoses);
-  close(economy.trains[0].dwellRemaining,.25);
+  assert.equal(train.cars[1].amount,2);assert.equal(train.cars[2].amount,0);
+  economy.update(.075);const departed=economy.trains[0];assert.equal(departed.state,'moving');
+  const next=sample(circuit,20+.75);close(departed.carPoses[1].x,next.x);close(departed.carPoses[1].z,next.z);
 });
 
 test('rear-car stops wrapping across home are served in physical forward order without teleporting',()=>{
   const circuit=loop([0,20,39],40),{economy,sample}=fixture(circuit);economy.buyTrain('city-0','loop','teal');
   const plan=createCircuitConsist(circuit,'city-0');close(plan.stops[0].distance,4.2);assert.deepEqual(plan.stops[0].carIndices,[2]);
-  economy.update(1+4.2/5);
-  const train=economy.trains[0],station=sample(circuit,39);assert.equal(train.stopCityId,'city-2');
+  economy.update(plan.stops[0].distance/10);
+  const train=economy.trains[0],station=sample(circuit,39);assert.equal(train.cars[2].amount,2);
   close(train.carPoses[2].x,station.x);close(train.carPoses[2].z,station.z);
-  economy.update(11-economy.elapsed);
-  assert.equal(economy.trains[0].laps,1);assert.equal(economy.resourcesAt('teal').food,20);
+  economy.update(4-economy.elapsed);
+  assert.equal(economy.trains[0].laps,1);assert.equal(economy.resourcesAt('teal').food,4);
   const pickups=economy.drainEvents().filter(event=>event.type==='pickup');
   assert.deepEqual(pickups.map(event=>event.cityId),['city-0','city-2','city-1','city-0']);
 });
 
-test('simultaneous station alignments share one pause and each car loads only once',()=>{
+test('simultaneous station alignments load once without pausing either carriage',()=>{
   const circuit=loop([0,37.4],40),{economy}=fixture(circuit);economy.buyTrain('city-0','loop','teal');
-  assert.deepEqual(economy.trains[0].stopCarIndices,[0,1]);assert.deepEqual(economy.trains[0].cargo,{resources:10,food:10});
-  economy.update(.75);assert.equal(economy.trains[0].state,'dwell');
-  economy.update(.25);assert.equal(economy.trains[0].state,'moving');
-  economy.update(8);assert.equal(economy.trains[0].laps,1);
+  assert.equal(economy.trains[0].state,'moving');assert.deepEqual(economy.trains[0].cargo,{resources:2,food:2});
+  economy.update(.75);assert.equal(economy.trains[0].state,'moving');
+  economy.update(3.25);assert.equal(economy.trains[0].laps,1);
   const events=economy.drainEvents();assert.equal(events.filter(event=>event.type==='pickup'&&event.time===0).length,2);
-  assert.equal(events.filter(event=>event.type==='delivery').length,1);assert.equal(economy.resourcesAt('teal').food,10);
+  assert.equal(events.filter(event=>event.type==='delivery').length,1);assert.equal(economy.resourcesAt('teal').food,2);
 });
 
-test('all car positions remain continuous across a station stop and home wrap',()=>{
+test('all car positions remain continuous across station passage and home wrap',()=>{
   const circuit=loop(),{economy}=fixture(circuit);economy.buyTrain('city-0','loop','teal');
   let previous=economy.trains[0].carPoses;
   for(let frame=0;frame<1550;frame++){
     economy.update(.01);const cars=economy.trains[0].carPoses;
-    for(let index=0;index<cars.length;index++)assert.ok(Math.hypot(cars[index].x-previous[index].x,cars[index].z-previous[index].z)<=.0500001,'a car never jumps further than its travel speed');
+    for(let index=0;index<cars.length;index++)assert.ok(Math.hypot(cars[index].x-previous[index].x,cars[index].z-previous[index].z)<=.1000001,'a car never jumps further than its travel speed');
     previous=cars;
   }
-  assert.equal(economy.trains[0].laps,1);
+  assert.equal(economy.trains[0].laps,2);
 });
 
 test('a one-city circuit has only an engine and undersized circuits are rejected before payment',()=>{
   const single=fixture(loop([0],10));assert.equal(single.economy.buyTrain('city-0','loop','teal').ok,true);
-  assert.equal(single.economy.trains[0].carPoses.length,1);single.economy.update(3);assert.equal(single.economy.trains[0].laps,1);
+  assert.equal(single.economy.trains[0].carPoses.length,1);single.economy.update(3);assert.equal(single.economy.trains[0].laps,3);
   const short=fixture(loop([0,2],4)),before=short.economy.snapshot();
   const result=short.economy.buyTrain('city-0','loop','teal');assert.equal(result.code,'circuit-too-short');assert.match(result.reason,/too short/);
   assert.deepEqual(short.economy.snapshot(),before);
@@ -97,9 +96,10 @@ test('existing trains keep captured geometry while new trains use revised circui
   test.economy.update(4);assert.ok(test.economy.trains[0].x<10);assert.ok(test.economy.trains[1].x>90);
 });
 
-test('car-specific stops preserve frame-independent rewards, loading amounts, and queueing',()=>{
+test('car-specific passages preserve frame-independent rewards with simultaneous trains',()=>{
   const a=fixture(),b=fixture();for(const item of[a,b]){item.economy.buyTrain('city-0','loop','teal');item.economy.buyTrain('city-0','loop','teal');}
-  assert.ok(a.economy.trains[1].cars.every(car=>car.amount===0));
+  assert.ok(a.economy.trains.every(train=>train.active&&train.state==='moving'));
+  assert.ok(a.economy.trains.every(train=>train.cars[0].amount===2),'each train departs immediately, without an exclusive loop queue');
   a.economy.update(75);for(let step=0;step<600;step++)b.economy.update(.125);
   assert.deepEqual(a.economy.snapshot(),b.economy.snapshot());assert.deepEqual(a.economy.drainEvents(),b.economy.drainEvents());
 });
